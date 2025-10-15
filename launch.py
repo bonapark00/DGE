@@ -5,6 +5,9 @@ import os
 import sys
 import wandb
 
+# Apply huggingface_hub compatibility patch
+import hf_hub_patch
+
 
 class ColoredFilter(logging.Filter):
     """

@@ -1,4 +1,5 @@
 python launch.py --config configs/dge.yaml --train --gpu 0 \
-    trainer.max_steps=1500 system.prompt_processor.prompt="Turn him into a spider man with Mask" \
-    data.source="/work/minghao/SegAnyGAussians/data/face/" \
-    system.gs_source="/work/minghao/SegAnyGAussians/output/face/point_cloud/iteration_30000/scene_point_cloud.ply"
+    trainer.max_steps=1500 \
+    system.prompt_processor.prompt="Turn him into a spider man with Mask" \
+    data.source="/working/style-transfer/VcEdit/gs_data/face/" \
+    system.gs_source="/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply"
