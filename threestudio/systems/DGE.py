@@ -25,6 +25,7 @@ from argparse import ArgumentParser
 from threestudio.utils.misc import get_device
 from threestudio.utils.perceptual import PerceptualLoss
 from threestudio.utils.sam import LangSAMTextSegmentor
+from threestudio.utils.latency import LatencyLogger
 
 @threestudio.register("dge-system")
 class DGE(BaseLift3DSystem):
@@ -526,13 +527,14 @@ class DGE(BaseLift3DSystem):
         
         self.edited_cams = []
         if update_camera:
-            self.trainer.datamodule.train_dataset.update_cameras(random_seed = global_step + 1)
-            self.view_list = self.trainer.datamodule.train_dataset.n2n_view_index
-            sorted_train_view_list = sorted(self.view_list)
-            selected_views = torch.linspace(
-                0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
-            )
-            self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
+            with self._latency_logger.timeit("edit_all_view.update_cameras"):
+                self.trainer.datamodule.train_dataset.update_cameras(random_seed = global_step + 1)
+                self.view_list = self.trainer.datamodule.train_dataset.n2n_view_index
+                sorted_train_view_list = sorted(self.view_list)
+                selected_views = torch.linspace(
+                    0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
+                )
+                self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
 
         self.edit_frames = {}
         cache_dir = os.path.join(self.cache_dir, cache_name)
@@ -545,9 +547,11 @@ class DGE(BaseLift3DSystem):
         t_max_step = self.cfg.added_noise_schedule
         self.guidance.max_step = t_max_step[min(len(t_max_step)-1, self.true_global_step//self.cfg.camera_update_per_step)]
         with torch.no_grad():
-            for id in self.view_list:
-                cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
-            sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+            with self._latency_logger.timeit("edit_all_view.collect_cameras"):
+                for id in self.view_list:
+                    cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
+            with self._latency_logger.timeit("edit_all_view.sort_cameras"):
+                sorted_cam_idx = self.sort_the_cameras_idx(cameras)
             view_sorted = [self.view_list[idx] for idx in sorted_cam_idx]
             cams_sorted = [cameras[idx] for idx in sorted_cam_idx]     
                    
@@ -561,29 +565,36 @@ class DGE(BaseLift3DSystem):
                     "height": self.trainer.datamodule.train_dataset.height,
                     "width": self.trainer.datamodule.train_dataset.width,
                 }
-                out_pkg = self(cur_batch)
+                with self._latency_logger.timeit("edit_all_view.render_single"):
+                    out_pkg = self(cur_batch)
                 out = out_pkg["comp_rgb"]
                 if self.cfg.use_masked_image:
-                    out = out * out_pkg["masks"].unsqueeze(-1)
+                    with self._latency_logger.timeit("edit_all_view.apply_mask"):
+                        out = out * out_pkg["masks"].unsqueeze(-1)
                 images.append(out)
                 assert os.path.exists(original_image_path)
-                cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
-                self.origin_frames[id] = torch.tensor(
-                    cached_image / 255, device="cuda", dtype=torch.float32
-                )[None]
+                with self._latency_logger.timeit("edit_all_view.load_original"):
+                    cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
+                    self.origin_frames[id] = torch.tensor(
+                        cached_image / 255, device="cuda", dtype=torch.float32
+                    )[None]
                 original_frames.append(self.origin_frames[id])
-            images = torch.cat(images, dim=0)
-            original_frames = torch.cat(original_frames, dim=0)
+            with self._latency_logger.timeit("edit_all_view.concat_batches"):
+                images = torch.cat(images, dim=0)
+                original_frames = torch.cat(original_frames, dim=0)
 
-            edited_images = self.guidance(
-                images,
-                original_frames,
-                self.prompt_processor(),
-                cams = cams_sorted
-            )
+            with self._latency_logger.timeit("edit_all_view.guidance_batch"):
+                edited_images = self.guidance(
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
+                    cams = cams_sorted,
+                    latency_logger = self._latency_logger
+                )
 
-            for view_index_tmp in range(len(self.view_list)):
-                self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
+            with self._latency_logger.timeit("edit_all_view.assign_outputs"):
+                for view_index_tmp in range(len(self.view_list)):
+                    self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
     
     def sort_the_cameras_idx(self, cams):
         foward_vectos = [cam.R[:, 2] for cam in cams]
@@ -601,22 +612,34 @@ class DGE(BaseLift3DSystem):
 
     def on_fit_start(self) -> None:
         super().on_fit_start()
-        self.render_all_view(cache_name="origin_render")
+        # latency logger under trial_dir/latency
+        latency_dir = os.path.join(self.get_save_dir(), "..", "latency")
+        latency_dir = os.path.abspath(latency_dir)
+        os.makedirs(latency_dir, exist_ok=True)
+        self._latency_logger = LatencyLogger(latency_dir)
+
+        with self._latency_logger.timeit("render_all_view"):
+            self.render_all_view(cache_name="origin_render")
 
         if len(self.cfg.seg_prompt) > 0:
-            self.update_mask()
+            with self._latency_logger.timeit("update_mask"):
+                self.update_mask()
 
         if len(self.cfg.prompt_processor) > 0:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
                 self.cfg.prompt_processor
             )
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds:
-            self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+            with self._latency_logger.timeit("guidance_init"):
+                self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+                # Set save_dir for guidance to save epipolar constraint images
+                self.guidance.save_dir = self.get_save_dir()
             
 
     def training_step(self, batch, batch_idx):
         if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
-            self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step) 
+            with self._latency_logger.timeit("edit_all_view"):
+                self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step) 
     
         self.gaussian.update_learning_rate(self.true_global_step)
         batch_index = batch["index"]
@@ -628,7 +651,8 @@ class DGE(BaseLift3DSystem):
                 if cur_index not in self.edit_frames:
                     batch_index[img_index] = self.view_list[img_index]
 
-        out = self(batch, local=self.cfg.local_edit)
+        with self._latency_logger.timeit("render_forward"):
+            out = self(batch, local=self.cfg.local_edit)
 
         images = out["comp_rgb"]
         mask = out["masks"].unsqueeze(-1)
@@ -648,11 +672,12 @@ class DGE(BaseLift3DSystem):
                         and self.global_step % self.cfg.per_editing_step == 0
                 )) and 'dge' not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
                     print(self.cfg.guidance_type)
-                    result = self.guidance(
-                        images[img_index][None],
-                        self.origin_frames[cur_index],
-                        prompt_utils,
-                    )
+                    with self._latency_logger.timeit("guidance_edit_single"):
+                        result = self.guidance(
+                            images[img_index][None],
+                            self.origin_frames[cur_index],
+                            prompt_utils,
+                        )
                  
                     self.edit_frames[cur_index] = result["edit_images"].detach().clone()
 
@@ -685,15 +710,22 @@ class DGE(BaseLift3DSystem):
         if self.cfg.loss.use_sds:
             prompt_utils = self.prompt_processor()
             self.guidance.cfg.use_sds = True
-            guidance_out = self.guidance(
-                out["comp_rgb"],
-                torch.concatenate(
-                    [self.origin_frames[idx] for idx in batch_index], dim=0
-                ),
-                prompt_utils)  
+            with self._latency_logger.timeit("guidance_sds"):
+                guidance_out = self.guidance(
+                    out["comp_rgb"],
+                    torch.concatenate(
+                        [self.origin_frames[idx] for idx in batch_index], dim=0
+                    ),
+                    prompt_utils)  
             loss += guidance_out["loss_sds"] * self.cfg.loss.lambda_sds 
 
         for name, value in self.cfg.loss.items():
             self.log(f"train_params/{name}", self.C(value))
     
         return {"loss": loss}
+
+    def on_train_end(self) -> None:
+        """Called when training ends. Write latency summary."""
+        if hasattr(self, '_latency_logger'):
+            self._latency_logger.write_summary()
+            threestudio.info(f"Latency summary written to {self._latency_logger.base_dir}/summary.txt")

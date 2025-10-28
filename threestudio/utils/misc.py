@@ -48,7 +48,13 @@ def get_rank():
 
 
 def get_device():
-    return torch.device(f"cuda:{get_rank()}")
+    # Prefer the process-local current device set by the launcher (e.g., Lightning)
+    if torch.cuda.is_available():
+        try:
+            return torch.device(f"cuda:{torch.cuda.current_device()}")
+        except Exception:
+            return torch.device("cuda:0")
+    return torch.device("cpu")
 
 
 def load_module_weights(

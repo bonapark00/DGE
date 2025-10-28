@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 
 import cv2
 import numpy as np
@@ -15,7 +16,7 @@ from threestudio.utils.misc import C, parse_version
 from threestudio.utils.typing import *
 
 
-from threestudio.utils.dge_utils import register_pivotal, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag
+from threestudio.utils.dge_utils import register_pivotal, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image
 
 @threestudio.register("dge-guidance")
 class DGEGuidance(BaseObject):
@@ -135,7 +136,9 @@ class DGEGuidance(BaseObject):
         encoder_hidden_states: Float[Tensor, "..."],
     ) -> Float[Tensor, "..."]:
         input_dtype = latents.dtype
-        return self.unet(
+
+
+        return self.unet( 
             latents.to(self.weights_dtype),
             t.to(self.weights_dtype),
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
@@ -185,6 +188,7 @@ class DGEGuidance(BaseObject):
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
         cams= None,
+        latency_logger=None,
     ) -> Float[Tensor, "B 4 DH DW"]:
         
         self.scheduler.config.num_train_timesteps = t.item() if len(t.shape) < 1 else t[0].item()
@@ -204,70 +208,107 @@ class DGEGuidance(BaseObject):
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
             split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
-            for t in self.scheduler.timesteps:
-                if t < 100:
-                    self.use_normal_unet()
-                else:
-                    register_normal_attn_flag(self.unet, False)
-                with torch.no_grad():
-                    # pred noise
-                    noise_pred_text = []
-                    noise_pred_image = []
-                    noise_pred_uncond = []
-                    pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) 
-                    register_pivotal(self.unet, True)
-                    
-                    key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
-                    latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
-                    pivot_text_embeddings = torch.cat([positive_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx]], dim=0)
-                    pivot_image_cond_latetns = torch.cat([split_image_cond_latents[pivotal_idx], split_image_cond_latents[pivotal_idx], zero_image_cond_latents[pivotal_idx]], dim=0)
-                    latent_model_input = torch.cat([latent_model_input, pivot_image_cond_latetns], dim=1)
-
-                    self.forward_unet(latent_model_input, t, encoder_hidden_states=pivot_text_embeddings)
-                    register_pivotal(self.unet, False)
-
-                    for i, b in enumerate(range(0, len(latents), camera_batch_size)):
-                        register_batch_idx(self.unet, i)
-                        register_cams(self.unet, cams[b:b + camera_batch_size], pivotal_idx[i] % camera_batch_size, key_cams) 
+            
+            with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop"):
+                for t in self.scheduler.timesteps:
+                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.timestep_setup"):
+                        if t < 100:
+                            self.use_normal_unet()
+                        else:
+                            register_normal_attn_flag(self.unet, False)
                         
-                        epipolar_constrains = {}
-                        for down_sample_factor in [1, 2, 4, 8]:
-                            H = current_H // down_sample_factor
-                            W = current_W // down_sample_factor
-                            epipolar_constrains[H * W] = []
-                            for cam in cams[b:b + camera_batch_size]:
-                                cam_epipolar_constrains = []
-                                for key_cam in key_cams:
-                                    cam_epipolar_constrains.append(compute_epipolar_constrains(key_cam, cam, current_H=H, current_W=W))
-                                epipolar_constrains[H * W].append(torch.stack(cam_epipolar_constrains, dim=0))
-                            epipolar_constrains[H * W] = torch.stack(epipolar_constrains[H * W], dim=0)
-                        register_epipolar_constrains(self.unet, epipolar_constrains)
+                    with torch.no_grad():
+                        # pred noise
+                        noise_pred_text = []
+                        noise_pred_image = []
+                        noise_pred_uncond = []
+                        
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.pivotal_setup"):
+                            pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) 
+                            register_pivotal(self.unet, True)
+                            
+                            key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
+                            latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
+                            pivot_text_embeddings = torch.cat([positive_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx]], dim=0)
+                            pivot_image_cond_latetns = torch.cat([split_image_cond_latents[pivotal_idx], split_image_cond_latents[pivotal_idx], zero_image_cond_latents[pivotal_idx]], dim=0)
+                            latent_model_input = torch.cat([latent_model_input, pivot_image_cond_latetns], dim=1)
 
-                        batch_model_input = torch.cat([latents[b:b + camera_batch_size]] * 3)
-                        batch_text_embeddings = torch.cat([positive_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size]], dim=0)
-                        batch_image_cond_latents = torch.cat([split_image_cond_latents[b:b + camera_batch_size], split_image_cond_latents[b:b + camera_batch_size], zero_image_cond_latents[b:b + camera_batch_size]], dim=0)
-                        batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.pivotal_forward"):
+                            self.forward_unet(latent_model_input, t, encoder_hidden_states=pivot_text_embeddings)
+                            register_pivotal(self.unet, False)
 
-                        batch_noise_pred = self.forward_unet(batch_model_input, t, encoder_hidden_states=batch_text_embeddings)
-                        batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
-                        noise_pred_text.append(batch_noise_pred_text)
-                        noise_pred_image.append(batch_noise_pred_image)
-                        noise_pred_uncond.append(batch_noise_pred_uncond)
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing"):
+                            for i, b in enumerate(range(0, len(latents), camera_batch_size)):
+                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops"):
+                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_batch_idx"):
+                                        register_batch_idx(self.unet, i)
+                                    
+                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_cams"):
+                                        register_cams(self.unet, cams[b:b+camera_batch_size], pivotal_idx[i] % camera_batch_size, key_cams) 
+                                    
+                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains"):
+                                        epipolar_constrains = {}
+                                        # Create directory for saving epipolar constraint images in save_dir
+                                        epipolar_images_dir = os.path.join(self.save_dir, "epipolar_constraints_images")
+                                        
+                                        for down_sample_factor in [1, 2, 4, 8]:
+                                            with latency_logger.timeit(f"edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}"):
+                                                H = current_H // down_sample_factor
+                                                W = current_W // down_sample_factor
+                                                epipolar_constrains[H * W] = []
+                                                for cam_idx, cam in enumerate(cams[b:b + camera_batch_size]):
+                                                    with latency_logger.timeit(f"edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}.cam_{cam_idx}"):
+                                                        cam_epipolar_constrains = []
+                                                        for key_cam_idx, key_cam in enumerate(key_cams):
+                                                            # Pass downsample_factor to the function
+                                                            epipolar_constraint = compute_epipolar_constrains(key_cam, cam, current_H=H, current_W=W, downsample_factor=down_sample_factor)
+                                                            cam_epipolar_constrains.append(epipolar_constraint)
+                                                            
+                                                            ## Save epipolar constraints as image for visualization
+                                                            # save_epipolar_constraints_image(
+                                                            #     epipolar_constraint, 
+                                                            #     H, W, 
+                                                            #     epipolar_images_dir,
+                                                            #     cam_idx, 
+                                                            #     key_cam_idx, 
+                                                            #     down_sample_factor
+                                                            # )
+                                                        epipolar_constrains[H * W].append(torch.stack(cam_epipolar_constrains, dim=0))
+                                                epipolar_constrains[H * W] = torch.stack(epipolar_constrains[H * W], dim=0)
+                                    
+                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_epipolar_constrains"):
+                                        register_epipolar_constrains(self.unet, epipolar_constrains)
 
-                    noise_pred_text = torch.cat(noise_pred_text, dim=0)
-                    noise_pred_image = torch.cat(noise_pred_image, dim=0)
-                    noise_pred_uncond = torch.cat(noise_pred_uncond, dim=0)
+                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.prepare_input"):
+                                    batch_model_input = torch.cat([latents[b:b + camera_batch_size]] * 3)
+                                    batch_text_embeddings = torch.cat([positive_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size]], dim=0)
+                                    batch_image_cond_latents = torch.cat([split_image_cond_latents[b:b + camera_batch_size], split_image_cond_latents[b:b + camera_batch_size], zero_image_cond_latents[b:b + camera_batch_size]], dim=0)
+                                    batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
 
-                    # perform classifier-free guidance
-                    noise_pred = (
-                        noise_pred_uncond
-                        + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
-                        + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
-                    )
+                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.unet_forward"):
+                                    batch_noise_pred = self.forward_unet(batch_model_input, t, encoder_hidden_states=batch_text_embeddings)
+                                    batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
+                                    noise_pred_text.append(batch_noise_pred_text)
+                                    noise_pred_image.append(batch_noise_pred_image)
+                                    noise_pred_uncond.append(batch_noise_pred_uncond)
 
-                    # get previous sample, continue loop
-                    latents = self.scheduler.step(noise_pred, t, latents).prev_sample
-                    
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.concat_outputs"):
+                            noise_pred_text = torch.cat(noise_pred_text, dim=0)
+                            noise_pred_image = torch.cat(noise_pred_image, dim=0)
+                            noise_pred_uncond = torch.cat(noise_pred_uncond, dim=0)
+
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.guidance_calc"):
+                            # perform classifier-free guidance
+                            noise_pred = (
+                                noise_pred_uncond
+                                + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                                + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+                            )
+
+                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.scheduler_step"):
+                            # get previous sample, continue loop
+                            latents = self.scheduler.step(noise_pred, t, latents).prev_sample
+                        
         print("Editing finished.")
         return latents
 
@@ -360,6 +401,7 @@ class DGEGuidance(BaseObject):
         render=None,
         pipe=None,
         background=None,
+        latency_logger=None,
         **kwargs,
     ):
         assert cams is not None, "cams is required for dge guidance"
@@ -376,7 +418,9 @@ class DGEGuidance(BaseObject):
         rgb_BCHW_HW8 = F.interpolate(
             rgb_BCHW, (RH, RW), mode="bilinear", align_corners=False
         )
-        latents = self.encode_images(rgb_BCHW_HW8)
+        
+        with latency_logger.timeit("edit_all_view.guidance_batch.encode_images"):
+            latents = self.encode_images(rgb_BCHW_HW8)
         
         cond_rgb_BCHW = cond_rgb.permute(0, 3, 1, 2)
         cond_rgb_BCHW_HW8 = F.interpolate(
@@ -385,10 +429,15 @@ class DGEGuidance(BaseObject):
             mode="bilinear",
             align_corners=False,
         )
-        cond_latents = self.encode_cond_images(cond_rgb_BCHW_HW8)
+        
+        with latency_logger.timeit("edit_all_view.guidance_batch.encode_cond_images"):
+            cond_latents = self.encode_cond_images(cond_rgb_BCHW_HW8)
 
         temp = torch.zeros(batch_size).to(rgb.device)
-        text_embeddings = prompt_utils.get_text_embeddings(temp, temp, temp, False)
+        
+        with latency_logger.timeit("edit_all_view.guidance_batch.text_embeddings"):
+            text_embeddings = prompt_utils.get_text_embeddings(temp, temp, temp, False)
+            
         positive_text_embeddings, negative_text_embeddings = text_embeddings.chunk(2)
         text_embeddings = torch.cat(
             [positive_text_embeddings, negative_text_embeddings, negative_text_embeddings], dim=0)  # [positive, negative, negative]
@@ -403,7 +452,8 @@ class DGEGuidance(BaseObject):
         ).repeat(batch_size)
 
         if self.cfg.use_sds:
-            grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
+            with latency_logger.timeit("edit_all_view.guidance_batch.compute_grad_sds"):
+                grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
             grad = torch.nan_to_num(grad)
             if self.grad_clip_val is not None:
                 grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
@@ -416,8 +466,10 @@ class DGEGuidance(BaseObject):
                 "max_step": self.max_step,
             }
         else:
-            edit_latents = self.edit_latents(text_embeddings, latents, cond_latents, t, cams)
-            edit_images = self.decode_latents(edit_latents)
+            with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents"):
+                edit_latents = self.edit_latents(text_embeddings, latents, cond_latents, t, cams, latency_logger)
+            with latency_logger.timeit("edit_all_view.guidance_batch.decode_latents"):
+                edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
 
             return {"edit_images": edit_images.permute(0, 2, 3, 1)}
