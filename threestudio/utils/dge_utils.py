@@ -158,11 +158,11 @@ def compute_epipolar_constrains(cam1, cam2, current_H=64, current_W=64, downsamp
     n_frames = 1
     sequence_length = current_W * current_H
     
-    return torch.zeros(sequence_length, sequence_length, dtype=torch.bool).cuda()
+    # return torch.zeros(sequence_length, sequence_length, dtype=torch.bool).cuda()
 
-    if downsample_factor != 8:
-        # Return zeros for scales 1, 2, 4
-        return torch.zeros(sequence_length, sequence_length, dtype=torch.bool).cuda()
+    # if downsample_factor != 8:
+    #     # Return zeros for scales 1, 2, 4
+    #     return torch.zeros(sequence_length, sequence_length, dtype=torch.bool).cuda()
     
     # Only compute epipolar constraints for scale 8
     fundamental_matrix_1 = []
@@ -484,6 +484,7 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                             idx2 = []
                             pivot_this_batch = self.pivot_this_batch
                             
+                            ## EPIPOLAR CONSTRAINT가 활용되는 부분
                             idx1_epipolar, idx2_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda().chunk(2, dim=1)
                             idx1_epipolar = idx1_epipolar.reshape(n_frames, sequence_length, sequence_length)
         

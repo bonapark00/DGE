@@ -393,9 +393,9 @@ class DGEGuidance(BaseObject):
 
     def __call__(
         self,
-        rgb: Float[Tensor, "B H W C"],
-        cond_rgb: Float[Tensor, "B H W C"],
-        prompt_utils: PromptProcessorOutput,
+        rgb: Float[Tensor, "B H W C"], # images
+        cond_rgb: Float[Tensor, "B H W C"], # original_frames
+        prompt_utils: PromptProcessorOutput, # prompt_processor(text prompts)
         gaussians = None,
         cams= None,
         render=None,

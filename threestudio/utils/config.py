@@ -89,11 +89,16 @@ class ExperimentConfig:
                         "Timestamp is disabled when using multiple GPUs, please make sure you have a unique tag."
                     )
                 else:
-                    self.timestamp = datetime.now().strftime("@%Y%m%d-%H%M%S")
+                    from pytz import timezone
+                    self.timestamp = datetime.now(timezone("Asia/Seoul")).strftime("@%Y%m%d-%H%M%S")
         self.trial_name += self.timestamp
-        self.exp_dir = os.path.join(self.exp_root_dir, self.name)
-        self.trial_dir = os.path.join(self.exp_dir, self.trial_name)
+        self.exp_dir = os.path.join(self.exp_root_dir, self.name) # /data/users/jaeyeonpark/DGE-outputs/dge
+        max_views = self.trainer.datamodule.cfg.max_view_num
+        view_dir = os.path.join(self.exp_dir, max_views)
+        os.makedirs(view_dir, exist_ok=True)
+        self.trial_dir = os.path.join(view_dir, self.trial_name)
         os.makedirs(self.trial_dir, exist_ok=True)
+
 
 
 def load_config(*yamls: str, cli_args: list = [], from_string=False, **kwargs) -> Any:
