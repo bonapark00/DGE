@@ -28,6 +28,14 @@ from threestudio.utils.perceptual import PerceptualLoss
 from threestudio.utils.sam import LangSAMTextSegmentor
 from threestudio.utils.latency import LatencyLogger
 
+
+from CLIP.utils.image_utils import img_normalize, clip_normalize
+from CLIP.scene.VGG import get_features
+import CLIP
+
+clip_model = CLIP.load_model()
+
+
 @threestudio.register("dge-system")
 class DGE(BaseLift3DSystem):
     @dataclass
@@ -59,7 +67,7 @@ class DGE(BaseLift3DSystem):
         target_prompt: str = ""
 
         # cache
-        cache_overwrite: bool = True
+        cache_overwrite: bool = False
         cache_dir: str = ""
 
 
@@ -113,7 +121,7 @@ class DGE(BaseLift3DSystem):
         if seg_object == self.cfg.target_prompt:
             # select 20 views not in self.view_list
             all_views = set(range(0, 60))
-            candidates = list(all_views - set(self.view_list))
+            candidates = list(all_views - set(self.edit_view_index))
             if len(candidates) < 20:
                 raise ValueError(f"Not enough views outside self.view_list to sample 20 views (got {len(candidates)}).")
             view_list = random.sample(candidates, 20)
@@ -180,7 +188,7 @@ class DGE(BaseLift3DSystem):
             torch.save(selected_mask, gs_mask_path)
         else:
             print("load cache")
-            for id in tqdm(self.view_list):
+            for id in tqdm(self.edit_view_index):
                 cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
                 cur_mask = cv2.imread(cur_path)
                 cur_mask = torch.tensor(
@@ -525,8 +533,8 @@ class DGE(BaseLift3DSystem):
 
     def configure_optimizers(self):
         self.parser = ArgumentParser(description="Training script parameters")
-        self.view_list = self.trainer.datamodule.train_dataset.n2n_view_index
-        self.view_num = len(self.view_list)
+        self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+        self.edit_view_num = len(self.edit_view_index)
         opt = OptimizationParams(self.parser, self.trainer.max_steps, self.cfg.gs_lr_scaler, self.cfg.gs_final_lr_scaler, self.cfg.color_lr_scaler,
                                  self.cfg.opacity_lr_scaler, self.cfg.scaling_lr_scaler, self.cfg.rotation_lr_scaler, )
         self.gaussian.load_ply(self.cfg.gs_source)
@@ -551,18 +559,18 @@ class DGE(BaseLift3DSystem):
         # if self.true_global_step >= self.cfg.camera_update_per_step * 2:
         #     self.guidance.use_normal_unet()
         
-        self.edited_cams = []
+        # self.edited_cams = []
         if update_camera: ## 60개 view 중에서 max_view_num개만 랜덤하게 선택됨.
-            with self._latency_logger.timeit("edit_all_view.update_cameras"):
-                self.trainer.datamodule.train_dataset.update_cameras(random_seed = global_step + 1)
-                self.view_list = self.trainer.datamodule.train_dataset.n2n_view_index
-                sorted_train_view_list = sorted(self.view_list)
+            with self._latency_logger.timeit("edit_all_view.update_editing_cameras"):
+                self.trainer.datamodule.train_dataset.update_editing_cameras(random_seed = global_step + 1)
+                self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+                sorted_train_view_list = sorted(self.edit_view_index)
                 selected_views = torch.linspace(
                     0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
                 )
                 self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
         
-        print(f"{self.true_global_step}th step, Camera view index: {self.view_list}")
+        print(f"{self.true_global_step}th step, Camera view index: {self.edit_view_index}")
 
         self.edit_frames = {}
         cache_dir = os.path.join(self.cache_dir, cache_name)
@@ -576,11 +584,11 @@ class DGE(BaseLift3DSystem):
         self.guidance.max_step = t_max_step[min(len(t_max_step)-1, self.true_global_step//self.cfg.camera_update_per_step)]
         with torch.no_grad():
             with self._latency_logger.timeit("edit_all_view.collect_cameras"):
-                for id in self.view_list:
+                for id in self.edit_view_index:
                     cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
             with self._latency_logger.timeit("edit_all_view.sort_cameras"):
                 sorted_cam_idx = self.sort_the_cameras_idx(cameras)
-            view_sorted = [self.view_list[idx] for idx in sorted_cam_idx]
+            view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
             cams_sorted = [cameras[idx] for idx in sorted_cam_idx]     
                    
             for id in view_sorted:
@@ -621,7 +629,7 @@ class DGE(BaseLift3DSystem):
                 )
 
             with self._latency_logger.timeit("edit_all_view.assign_outputs"):
-                for view_index_tmp in range(len(self.view_list)):
+                for view_index_tmp in range(len(self.edit_view_index)):
                     self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
     
     def sort_the_cameras_idx(self, cams):
@@ -663,6 +671,12 @@ class DGE(BaseLift3DSystem):
                 # Set save_dir for guidance to save epipolar constraint images
                 self.guidance.save_dir = self.get_save_dir()
             
+        self.style_direction = CLIP.get_style_embedding(
+            clip_model,
+            self.cfg.target_prompt,
+            None, # self.cfg.style_image,
+            self.cfg.seg_prompt # self.cfg.object_prompt
+        )
 
     def training_step(self, batch, batch_idx):
         if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
@@ -682,7 +696,7 @@ class DGE(BaseLift3DSystem):
         if self.cfg.guidance_type == 'dge-guidance': 
             for img_index, cur_index in enumerate(batch_index):
                 if cur_index not in self.edit_frames:
-                    batch_index[img_index] = self.view_list[img_index]
+                    batch_index[img_index] = self.trainer.datamodule.train_dataset.train_view_index[img_index]
 
         with self._latency_logger.timeit("render_forward"):
             out = self(batch, local=self.cfg.local_edit)
@@ -697,60 +711,91 @@ class DGE(BaseLift3DSystem):
             for img_index, cur_index in enumerate(batch_index):
                 # if cur_index not in self.edit_frames:
                 #     # cur_index = self.view_list[0]
-                if (cur_index not in self.edit_frames or (
-                        self.cfg.per_editing_step > 0
-                        and self.cfg.edit_begin_step
-                        < self.global_step
-                        < self.cfg.edit_until_step
-                        and self.global_step % self.cfg.per_editing_step == 0
-                )) and 'dge' not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
-                    print(self.cfg.guidance_type)
-                    with self._latency_logger.timeit("guidance_edit_single"):
-                        result = self.guidance(
-                            images[img_index][None],
-                            self.origin_frames[cur_index],
-                            prompt_utils,
-                        )
-                 
-                    self.edit_frames[cur_index] = result["edit_images"].detach().clone()
+                if cur_index in self.edit_frames:
+                    gt_images.append(self.edit_frames[cur_index])
 
-                gt_images.append(self.edit_frames[cur_index])
-            gt_images = torch.concatenate(gt_images, dim=0)
-            if self.cfg.use_masked_image:
-                print("use masked image")
-                guidance_out = {
-                "loss_l1": torch.nn.functional.l1_loss(images * mask, gt_images * mask),
-                "loss_p": self.perceptual_loss(
-                    (images * mask).permute(0, 3, 1, 2).contiguous(),
-                    (gt_images * mask ).permute(0, 3, 1, 2).contiguous(),
-                ).sum(),
-                }
-            else:
-                guidance_out = {
-                    "loss_l1": torch.nn.functional.l1_loss(images, gt_images),
+                else: # CLIP LOSS
+                    pass
+
+
+                # if (cur_index not in self.edit_frames or ( # 만약에 cur_index가 edit_frames에 없다면 그때 즉시 guidance 통과해서 이미지를 에디팅 해주는거임.
+                #     # edited_frames: dict{view_index: image} 형태로 저장됨.
+                #         self.cfg.per_editing_step > 0
+                #         and self.cfg.edit_begin_step
+                #         < self.global_step
+                #         < self.cfg.edit_until_step
+                #         and self.global_step % self.cfg.per_editing_step == 0
+                # )) and 'dge' not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
+                #     print(self.cfg.guidance_type)
+                #     with self._latency_logger.timeit("guidance_edit_single"): ## 여기 절대로 통과 안됨!
+                #         result = self.guidance(
+                #             images[img_index][None],
+                #             self.origin_frames[cur_index],
+                #             prompt_utils,
+                #         )
+                #     self.edit_frames[cur_index] = result["edit_images"].detach().clone()
+
+            if len(gt_images) > 0:
+                gt_images = torch.concatenate(gt_images, dim=0)
+
+                if self.cfg.use_masked_image:
+                    print("use masked image")
+                    loss_dict = {
+                    "loss_l1": torch.nn.functional.l1_loss(images * mask, gt_images * mask),
                     "loss_p": self.perceptual_loss(
-                        images.permute(0, 3, 1, 2).contiguous(),
-                        gt_images.permute(0, 3, 1, 2).contiguous(),
+                        (images * mask).permute(0, 3, 1, 2).contiguous(),
+                        (gt_images * mask ).permute(0, 3, 1, 2).contiguous(),
                     ).sum(),
-                }
-            for name, value in guidance_out.items():
+                    }
+                else:
+                    loss_dict = {
+                        "loss_l1": torch.nn.functional.l1_loss(images, gt_images),
+                        "loss_p": self.perceptual_loss(
+                            images.permute(0, 3, 1, 2).contiguous(),
+                            gt_images.permute(0, 3, 1, 2).contiguous(),
+                        ).sum(),
+                    }
+
+                
+            else:
+                # Direction CLIP loss
+                # images shape: (B, H, W, C) -> (B, C, H, W)로 변환 필요
+                images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                gt_images_clip = self.origin_frames[batch_index[0]].permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                render_features = clip_model.encode_image(
+                    clip_normalize(images_clip))
+                source_features = clip_model.encode_image(
+                    clip_normalize(gt_images_clip))
+                render_features /= (render_features.clone().norm(dim=-1, keepdim=True))
+
+                img_direction = (render_features-source_features)
+                img_direction /= img_direction.clone().norm(dim=-1, keepdim=True)
+
+                loss_d = (1 - torch.cosine_similarity(img_direction,
+                        self.style_direction.repeat(render_features.size(0), 1), dim=1)).mean()
+                
+                loss_dict = {"loss_d": loss_d}
+
+            for name, value in loss_dict.items():
                 self.log(f"train/{name}", value)
                 if name.startswith("loss_"):
                     loss += value * self.C(
                         self.cfg.loss[name.replace("loss_", "lambda_")]
                     )
+            
+
         # sds loss
         if self.cfg.loss.use_sds:
             prompt_utils = self.prompt_processor()
             self.guidance.cfg.use_sds = True
             with self._latency_logger.timeit("guidance_sds"):
-                guidance_out = self.guidance(
+                loss_dict = self.guidance(
                     out["comp_rgb"],
                     torch.concatenate(
                         [self.origin_frames[idx] for idx in batch_index], dim=0
                     ),
                     prompt_utils)  
-            loss += guidance_out["loss_sds"] * self.cfg.loss.lambda_sds 
+            loss += loss_dict["loss_sds"] * self.cfg.loss.lambda_sds 
 
         for name, value in self.cfg.loss.items():
             self.log(f"train_params/{name}", self.C(value))

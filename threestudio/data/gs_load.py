@@ -183,7 +183,10 @@ class GSLoadDataModuleConfig:
     eval_height: int = -1
     eval_width: int = -1
     eval_batch_size: int = 1
-    max_view_num: int = 20
+    max_view_num: int = 60
+
+    max_edit_view_num: int = 15
+
     n_val_views: int = 8
     n_test_views: int = 120
     elevation_range: Tuple[float, float] = (-10, 45)
@@ -216,12 +219,21 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         self.scene = scene
         self.total_view_num = len(self.scene.cameras)
         random.seed(0)  # make sure same views
-        self.n2n_view_index = random.sample(
+
+
+        self.train_view_index = random.sample(
             range(0, self.total_view_num),
             min(self.total_view_num, self.cfg.max_view_num),
         )
+        self.train_view_index_stack = self.train_view_index.copy()
+        
+        self.edit_view_index = random.sample(
+            self.train_view_index,
+            min(len(self.train_view_index), self.cfg.max_edit_view_num),
+        )
+        self.edit_view_index_stack = self.edit_view_index.copy()
 
-        self.view_index_stack = self.n2n_view_index.copy()
+
         self.heights: List[int] = (
             [self.cfg.height] if isinstance(self.cfg.height, int) else self.cfg.height
         )
@@ -229,7 +241,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
             [self.cfg.width] if isinstance(self.cfg.width, int) else self.cfg.width
         )
         self.batch_sizes: List[int] = (
-            [self.cfg.batch_size]
+            [self.cfg.batch_size] # 1
             if isinstance(self.cfg.batch_size, int)
             else self.cfg.batch_size
         )
@@ -257,16 +269,17 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         cam_list = []
         index_list = []
         for _ in range(self.batch_size):
-            if not self.view_index_stack:
-                self.view_index_stack = self.n2n_view_index.copy()
-            view_index = random.choice(self.view_index_stack)
-            self.view_index_stack.remove(view_index)
+            if not self.train_view_index_stack:
+                self.train_view_index_stack = self.train_view_index.copy()
+
+            view_index = random.choice(self.train_view_index_stack) # 하나의 뷰 인덱스 번호 선택
+            self.train_view_index_stack.remove(view_index)
             cam_list.append(self.scene.cameras[view_index])
             index_list.append(view_index)
 
         return {
-            "index": index_list,
-            "camera": cam_list,
+            "index": index_list, # 예시: [5, 12, 8] - 카메라 인덱스 번호들
+            "camera": cam_list, # 예시: [Camera(...), Camera(...), Camera(...)] - 실제 카메라 객체들
             "height": self.height,
             "width": self.width,
         }
@@ -283,13 +296,13 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
     #     # progressive view
     #     self.progressive_view(global_step)
 
-    def update_cameras(self, random_seed: int = 0):
+    def update_editing_cameras(self, random_seed: int = 0):
         random.seed(random_seed)
-        self.n2n_view_index = random.sample(
+        self.edit_view_index = random.sample(
             range(0, self.total_view_num),
             min(self.total_view_num, self.cfg.max_view_num),
         )
-        self.view_index_stack = self.n2n_view_index.copy()
+        self.edit_view_index_stack = self.edit_view_index.copy()
 
 
     def __iter__(self):
@@ -355,7 +368,7 @@ class GS_load(pl.LightningDataModule):
             self.cfg.height = self.cfg.eval_height
             self.cfg.width = self.cfg.eval_width
         
-        self.train_scene = CamScene(
+        self.train_scene = CamScene( # 전체 카메라를 로드
             self.cfg.source, h=self.cfg.height, w=self.cfg.width
         )
         self.eval_scene = CamScene(
@@ -365,9 +378,10 @@ class GS_load(pl.LightningDataModule):
     def setup(self, stage=None) -> None:
         if stage in [None, "fit"]:
             self.train_dataset = GSLoadIterableDataset(self.cfg, self.train_scene)
+
         if stage in [None, "fit", "validate"]:
             self.val_dataset = GSLoadDataset(
-                self.cfg, "val", self.eval_scene, self.train_dataset.n2n_view_index
+                self.cfg, "val", self.eval_scene, self.train_dataset.edit_view_index
             )
         if stage in [None, "test", "predict"]:
             self.test_dataset = GSLoadDataset(self.cfg, "test", self.eval_scene)

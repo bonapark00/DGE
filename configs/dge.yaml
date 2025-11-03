@@ -64,6 +64,8 @@ system:
     lambda_p: 10.
     use_sds: false
     lambda_sds: 0
+    
+    lambda_d: 10.
 
   optimizer:
     name: Adam

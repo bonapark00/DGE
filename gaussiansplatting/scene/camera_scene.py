@@ -25,6 +25,7 @@ class CamScene:
 
         if os.path.exists(os.path.join(source_path, "sparse")):
             if h == -1 or w == -1:
+                print(f"Colmap: Loading scene from {source_path} with height {h} and width {w}")
                 scene_info = sceneLoadTypeCallbacks["Colmap"](source_path, None, False)
                 h = scene_info.train_cameras[0].height
                 w = scene_info.train_cameras[0].width
@@ -33,6 +34,7 @@ class CamScene:
                     h /= scale
                     w /= scale
             else:
+                print(f"Colmap_hw: Loading scene from {source_path} with height {h} and width {w}")
                 scene_info = sceneLoadTypeCallbacks["Colmap_hw"](source_path, h, w, None, False)
 
         else:

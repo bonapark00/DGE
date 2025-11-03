@@ -8,6 +8,7 @@ data:
   batch_size: 1
   source: ???
   max_view_num: 20 #######
+  max_edit_view_num: 15
   eval_camera_distance: 4.0
   camera_distance_range: [1.5, 4.0]
   light_sample_strategy: "dreamfusion3dgs"
@@ -68,6 +69,8 @@ system:
     lambda_p: 10.
     use_sds: false
     lambda_sds: 0
+
+    lambda_d: 10.
 
   optimizer:
     name: Adam

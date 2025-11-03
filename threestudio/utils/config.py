@@ -93,8 +93,8 @@ class ExperimentConfig:
                     self.timestamp = datetime.now(timezone("Asia/Seoul")).strftime("@%Y%m%d-%H%M%S")
         self.trial_name += self.timestamp
         self.exp_dir = os.path.join(self.exp_root_dir, self.name) # /data/users/jaeyeonpark/DGE-outputs/dge
-        max_views = self.trainer.datamodule.cfg.max_view_num
-        view_dir = os.path.join(self.exp_dir, max_views)
+        max_views = self.data.get("max_view_num", 20)  # data에서 직접 가져오기
+        view_dir = os.path.join(self.exp_dir, str(max_views))
         os.makedirs(view_dir, exist_ok=True)
         self.trial_dir = os.path.join(view_dir, self.trial_name)
         os.makedirs(self.trial_dir, exist_ok=True)
