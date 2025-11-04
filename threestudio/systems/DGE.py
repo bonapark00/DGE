@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 import random
+from re import T
 
 from PIL import Image
 from tqdm import tqdm
@@ -67,7 +68,7 @@ class DGE(BaseLift3DSystem):
         target_prompt: str = ""
 
         # cache
-        cache_overwrite: bool = False
+        cache_overwrite: bool = True
         cache_dir: str = ""
 
 
@@ -131,6 +132,8 @@ class DGE(BaseLift3DSystem):
             # view_list = self.view_list
             view_list = random.sample(range(0, 60), 30)
 
+        # view_list = [_ for _ in range(0, 65)]
+
         print(f"View list: {view_list}")
 
         print(f"Segment with prompt: {seg_object}")
@@ -138,10 +141,9 @@ class DGE(BaseLift3DSystem):
             self.cache_dir, seg_object + f"_{save_name}_{len(view_list)}_view"
         )
         gs_mask_path = os.path.join(mask_cache_dir, "gs_mask.pt")
-        if not os.path.exists(gs_mask_path) or self.cfg.cache_overwrite:
-            if os.path.exists(mask_cache_dir):
-                shutil.rmtree(mask_cache_dir)
-            os.makedirs(mask_cache_dir)
+
+        if (seg_object == self.cfg.target_prompt) or not os.path.exists(gs_mask_path) or self.cfg.cache_overwrite:
+            os.makedirs(mask_cache_dir, exist_ok=True)
             weights = torch.zeros_like(self.gaussian._opacity)
             weights_cnt = torch.zeros_like(self.gaussian._opacity, dtype=torch.int32)
             threestudio.info(f"Segmentation with prompt: {seg_object}")
@@ -152,14 +154,35 @@ class DGE(BaseLift3DSystem):
                 cur_path_viz = os.path.join(
                     mask_cache_dir, "viz_{:0>4d}.png".format(id)
                 )
-
                 cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
 
-                mask = self.text_segmentor(self.origin_frames[id], seg_object)[
-                    0
-                ].to(get_device())
+                if seg_object == self.cfg.target_prompt:
+                    # image_to_segment = self.edit_frames[id]
 
-                mask_to_save = (
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index": id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width": self.trainer.datamodule.train_dataset.width,
+                    }
+                    out = self(cur_batch)["comp_rgb"]
+                    out_to_save = (
+                            out[0].cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                    ).astype(np.uint8)
+                    out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(cur_path, out_to_save)
+                    cached_image = cv2.cvtColor(cv2.imread(cur_path), cv2.COLOR_BGR2RGB)
+                    image_to_segment = torch.tensor(
+                        cached_image / 255, device="cuda", dtype=torch.float32
+                    )[None]
+
+                elif seg_object == self.cfg.seg_prompt:
+                    image_to_segment = self.origin_frames[id]
+
+                mask = self.text_segmentor(image_to_segment, seg_object)[0].to(get_device())
+
+                mask_to_save = ( # todo: target_prompt에 대한 마스크는 저장할 필요 없음.
                         mask[0]
                         .cpu()  
                         .detach()[..., None]
@@ -170,7 +193,7 @@ class DGE(BaseLift3DSystem):
                 ).astype(np.uint8)
                 cv2.imwrite(cur_path, mask_to_save)
 
-                masked_image = self.origin_frames[id].detach().clone()[0]
+                masked_image = image_to_segment.detach().clone()[0]
                 masked_image[mask[0].bool()] *= 0.3
                 masked_image_to_save = (
                         masked_image.cpu().detach().numpy().clip(0.0, 1.0) * 255.0
@@ -188,6 +211,9 @@ class DGE(BaseLift3DSystem):
             torch.save(selected_mask, gs_mask_path)
         else:
             print("load cache")
+            mask_cache_dir = os.path.join(
+                self.cache_dir, seg_object + f"_{save_name}_65_view"
+            )
             for id in tqdm(self.edit_view_index):
                 cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
                 cur_mask = cv2.imread(cur_path)
