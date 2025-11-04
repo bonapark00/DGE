@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-import random
 
 from PIL import Image
 from tqdm import tqdm
@@ -56,7 +55,6 @@ class DGE(BaseLift3DSystem):
         min_opacity: float = 0.005
 
         seg_prompt: str = ""
-        target_prompt: str = ""
 
         # cache
         cache_overwrite: bool = True
@@ -77,8 +75,6 @@ class DGE(BaseLift3DSystem):
         camera_update_per_step: int = 500
         added_noise_schedule: List[int] = field(default_factory=[999, 200, 200, 21])    
         
-        
-        mask_update_at_step: int = 500 ## BONA
 
     cfg: Config
 
@@ -99,35 +95,15 @@ class DGE(BaseLift3DSystem):
         self.text_segmentor = LangSAMTextSegmentor().to(get_device())
 
         if len(self.cfg.cache_dir) > 0:
-            print("Using cache directory: ", self.cfg.cache_dir)
-            self.cache_dir = os.path.join(self.cfg.cache_dir, "edit_cache")
-            os.makedirs(self.cache_dir, exist_ok=True)
+            self.cache_dir = os.path.join("edit_cache", self.cfg.cache_dir)
         else:
-            print("No cache directory provided")
-            self.cache_dir = os.path.join(self.cfg.cache_dir, "edit_cache", self.cfg.gs_source.replace("/", "-"))
-            os.makedirs(self.cache_dir, exist_ok=True)
+            self.cache_dir = os.path.join("edit_cache", self.cfg.gs_source.replace("/", "-"))
 
     @torch.no_grad()
-    def update_mask(self, seg_object=None, save_name="mask") -> None:
-        
-        if seg_object == self.cfg.target_prompt:
-            # select 20 views not in self.view_list
-            all_views = set(range(0, 60))
-            candidates = list(all_views - set(self.view_list))
-            if len(candidates) < 20:
-                raise ValueError(f"Not enough views outside self.view_list to sample 20 views (got {len(candidates)}).")
-            view_list = random.sample(candidates, 20)
-
-
-        elif seg_object == self.cfg.seg_prompt:
-            # view_list = self.view_list
-            view_list = random.sample(range(0, 60), 30)
-
-        print(f"View list: {view_list}")
-
-        print(f"Segment with prompt: {seg_object}")
+    def update_mask(self, save_name="mask") -> None:
+        print(f"Segment with prompt: {self.cfg.seg_prompt}")
         mask_cache_dir = os.path.join(
-            self.cache_dir, seg_object + f"_{save_name}_{len(view_list)}_view"
+            self.cache_dir, self.cfg.seg_prompt + f"_{save_name}_{self.view_num}_view"
         )
         gs_mask_path = os.path.join(mask_cache_dir, "gs_mask.pt")
         if not os.path.exists(gs_mask_path) or self.cfg.cache_overwrite:
@@ -136,10 +112,8 @@ class DGE(BaseLift3DSystem):
             os.makedirs(mask_cache_dir)
             weights = torch.zeros_like(self.gaussian._opacity)
             weights_cnt = torch.zeros_like(self.gaussian._opacity, dtype=torch.int32)
-            threestudio.info(f"Segmentation with prompt: {seg_object}")
-
-
-            for id in tqdm(view_list):
+            threestudio.info(f"Segmentation with prompt: {self.cfg.seg_prompt}")
+            for id in tqdm(self.view_list):
                 cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
                 cur_path_viz = os.path.join(
                     mask_cache_dir, "viz_{:0>4d}.png".format(id)
@@ -147,13 +121,13 @@ class DGE(BaseLift3DSystem):
 
                 cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
 
-                mask = self.text_segmentor(self.origin_frames[id], seg_object)[
+                mask = self.text_segmentor(self.origin_frames[id], self.cfg.seg_prompt)[
                     0
                 ].to(get_device())
 
                 mask_to_save = (
                         mask[0]
-                        .cpu()  
+                        .cpu()
                         .detach()[..., None]
                         .repeat(1, 1, 3)
                         .numpy()
@@ -552,7 +526,7 @@ class DGE(BaseLift3DSystem):
         #     self.guidance.use_normal_unet()
         
         self.edited_cams = []
-        if update_camera: ## 60개 view 중에서 max_view_num개만 랜덤하게 선택됨.
+        if update_camera:
             with self._latency_logger.timeit("edit_all_view.update_cameras"):
                 self.trainer.datamodule.train_dataset.update_cameras(random_seed = global_step + 1)
                 self.view_list = self.trainer.datamodule.train_dataset.n2n_view_index
@@ -561,8 +535,6 @@ class DGE(BaseLift3DSystem):
                     0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
                 )
                 self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
-        
-        print(f"{self.true_global_step}th step, Camera view index: {self.view_list}")
 
         self.edit_frames = {}
         cache_dir = os.path.join(self.cache_dir, cache_name)
@@ -595,7 +567,7 @@ class DGE(BaseLift3DSystem):
                 }
                 with self._latency_logger.timeit("edit_all_view.render_single"):
                     out_pkg = self(cur_batch)
-                out = out_pkg["comp_rgb"] ## 이게 forward해서 렌더링 결과 얻는 부분임!
+                out = out_pkg["comp_rgb"]
                 if self.cfg.use_masked_image:
                     with self._latency_logger.timeit("edit_all_view.apply_mask"):
                         out = out * out_pkg["masks"].unsqueeze(-1)
@@ -608,14 +580,14 @@ class DGE(BaseLift3DSystem):
                     )[None]
                 original_frames.append(self.origin_frames[id])
             with self._latency_logger.timeit("edit_all_view.concat_batches"):
-                images = torch.cat(images, dim=0) ## view들을 concat하여 배치로 만듦
+                images = torch.cat(images, dim=0)
                 original_frames = torch.cat(original_frames, dim=0)
 
             with self._latency_logger.timeit("edit_all_view.guidance_batch"):
-                edited_images = self.guidance( ## DGEGuidance.__call__ 함수 호출
-                    images, ## 편집대상(latents): training 되고 있는 3dgs에서 렌더한 이미지. 
-                    original_frames, ## 이미지 조건(latents): 원본 이미지(Edit 전의 GT)
-                    self.prompt_processor(), ## 텍스트 조건(text_embeddings): 편집 프롬프트
+                edited_images = self.guidance(
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
                     cams = cams_sorted,
                     latency_logger = self._latency_logger
                 )
@@ -651,7 +623,7 @@ class DGE(BaseLift3DSystem):
 
         if len(self.cfg.seg_prompt) > 0:
             with self._latency_logger.timeit("update_mask"):
-                self.update_mask(self.cfg.seg_prompt)
+                self.update_mask()
 
         if len(self.cfg.prompt_processor) > 0:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
@@ -668,12 +640,7 @@ class DGE(BaseLift3DSystem):
         if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("edit_all_view"):
                 self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step) 
-        
-        if self.true_global_step == self.cfg.mask_update_at_step and len(self.cfg.target_prompt) > 0:
-            with self._latency_logger.timeit(f"update_mask at step {self.true_global_step}"):
-                print(f"Update mask with prompt: {self.cfg.target_prompt}")
-                self.update_mask(self.cfg.target_prompt)
-
+    
         self.gaussian.update_learning_rate(self.true_global_step)
         batch_index = batch["index"]
 
