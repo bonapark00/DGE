@@ -8,4 +8,4 @@ python launch.py \
     system.gs_source="/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply" \
     system.seg_prompt="man" \
     system.mask_thres=0.6 \
-    data.max_view_num=7
+    data.max_view_num=8
