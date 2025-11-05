@@ -4,5 +4,5 @@
 /.threestudio_cache
 __pycache__/
 
-/script
-/configs
+# /script
+# /configs
