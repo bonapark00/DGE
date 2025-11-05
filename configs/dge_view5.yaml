@@ -1,4 +1,4 @@
-name: "clip-loss" # original: dge
+name: "dge" # original: dge
 tag: "${rmspace:${system.prompt_processor.prompt},_}"
 exp_root_dir: "/data/users/jaeyeonpark/DGE-outputs"
 seed: 0
