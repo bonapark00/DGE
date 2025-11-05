@@ -33,9 +33,9 @@ system:
   prompt_processor:
     pretrained_model_name_or_path: "runwayml/stable-diffusion-v1-5"
     prompt: 'a bicycle parked next to a bench in a park, all covered with snow, winter'
-  camera_update_per_step: 1500 ## 원래 500
+  camera_update_per_step: 500 ## 원래 500
 
-  mask_update_at_step: 400
+  # mask_update_at_step: 400
   cache_dir: "/data/users/jaeyeonpark/DGE-outputs"
 
   added_noise_schedule: [999, 300, 300, 21]
