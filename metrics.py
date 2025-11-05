@@ -266,11 +266,49 @@ if __name__ == "__main__":
                             style_prompt=args.style_prompt,
                             style_image=args.style_image,
                             device=args.device)
-    print(
-        f"CLIP directional consistency: {clip_consistency(args.gt, args.render, k=args.interval)}")
-    print(
-        f"CLIP_F (scaled): {clip_f(args.gt, args.render)}")
-    print(
-        f"CLIP Score: {clip_score(args.render)}")
-    print(
-        f"CLIP directional similarity: {clip_similarity(args.gt, args.render)}")
+    
+    # Calculate metrics
+    clip_dir_consistency = clip_consistency(args.gt, args.render, k=args.interval)
+    clip_f_scaled = clip_f(args.gt, args.render)
+    clip_score_value = clip_score(args.render)
+    clip_dir_similarity = clip_similarity(args.gt, args.render)
+    
+    # Print to console
+    print(f"CLIP directional consistency: {clip_dir_consistency}")
+    print(f"CLIP_F (scaled): {clip_f_scaled}")
+    print(f"CLIP Score: {clip_score_value}")
+    print(f"CLIP directional similarity: {clip_dir_similarity}")
+    
+    # Save to eval_clip.txt (in the same directory structure as cmd.txt)
+    # args.render is typically: {trial_dir}/save/it{max_steps}-test/
+    # trial_dir is two levels up from args.render
+    render_path = os.path.abspath(args.render)
+    # Navigate to trial_dir: args.render -> save -> trial_dir
+    if os.path.basename(os.path.dirname(render_path)) == "save":
+        trial_dir = os.path.dirname(os.path.dirname(render_path))
+        eval_clip_path = os.path.join(trial_dir, "eval_clip.txt")
+    else:
+        # Fallback: save in render directory's parent
+        eval_clip_path = os.path.join(os.path.dirname(render_path), "eval_clip.txt")
+    
+    # Write metrics to file
+    with open(eval_clip_path, "w") as f:
+        f.write("CLIP Evaluation Metrics\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"GT Directory: {args.gt}\n")
+        f.write(f"Render Directory: {args.render}\n")
+        if args.style_prompt:
+            f.write(f"Style Prompt: {args.style_prompt}\n")
+        if args.style_image:
+            f.write(f"Style Image: {args.style_image}\n")
+        f.write(f"Interval: {args.interval}\n")
+        f.write("\n")
+        f.write("-" * 50 + "\n")
+        f.write("Results:\n")
+        f.write("-" * 50 + "\n")
+        f.write(f"CLIP directional consistency: {clip_dir_consistency}\n")
+        f.write(f"CLIP_F (scaled): {clip_f_scaled}\n")
+        f.write(f"CLIP Score: {clip_score_value}\n")
+        f.write(f"CLIP directional similarity: {clip_dir_similarity}\n")
+    
+    print(f"\nMetrics saved to: {eval_clip_path}")
