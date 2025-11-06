@@ -10,11 +10,13 @@ export CUDA_VISIBLE_DEVICES=3
 
 # Required: set these paths
 GT_DIR="/data/users/jaeyeonpark/DGE-outputs/edit_cache/origin_render/"            # e.g., /working/style-transfer/DGE/outputs/.../save/render_it1500-val
-RENDER_DIR="/data/users/jaeyeonpark/DGE-outputs/dge/Turn_the_man_into_a_clown@20251029-190325/save/it1500-test/"    # e.g., /working/style-transfer/DGE/outputs/.../save/render_it1500-val
+RENDER_DIR="/data/users/jaeyeonpark/DGE-outputs/clip-loss/w-MaskUpdate/iter3/lambda_d0.0/20/Turn_the_man_into_a_clown@20251106-104227/save/it1500-test/"    # e.g., /working/style-transfer/DGE/outputs/.../save/render_it1500-val
 
 # Optional: choose ONE of the following for style condition
-STYLE_PROMPT="a clown"        # leave empty "" to disable
+STYLE_PROMPT="clown"        # leave empty "" to disable
 STYLE_IMAGE=""                # set to an image path to use style image instead of text
+# Object prompt for CLIP direction similarity
+OBJECT_PROMPT="man"      # default: "a Photo"
 
 # Misc
 INTERVAL=1                     # temporal interval k for consistency metrics
@@ -39,7 +41,7 @@ if [[ -n "$STYLE_PROMPT" && -n "$STYLE_IMAGE" ]]; then
   STYLE_PROMPT=""
 fi
 
-CMD=(python metrics.py --gt "$GT_DIR" --render "$RENDER_DIR" --device "$DEVICE" --interval "$INTERVAL")
+CMD=(python metrics.py --gt "$GT_DIR" --render "$RENDER_DIR" --device "$DEVICE" --interval "$INTERVAL" --object_prompt "$OBJECT_PROMPT")
 
 if [[ -n "$STYLE_IMAGE" ]]; then
   CMD+=(--style_image "$STYLE_IMAGE")

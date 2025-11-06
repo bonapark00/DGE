@@ -8,5 +8,9 @@ python launch.py \
     system.gs_source="/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply" \
     system.seg_prompt="man" \
     system.target_prompt="clown" \
-    system.mask_thres=0.5 \
-    system.loss.lambda_d=0.0
+    system.mask_thres=0.6 \
+    system.loss.lambda_d=0.0 \
+    data.max_view_num=20 \
+    system.camera_update_per_step=500 \
+    system.mask_update_at_step=-1 \
+    name="clip-loss/wo-MaskUpdate/iter3/lambda_d0.0"

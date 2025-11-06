@@ -22,15 +22,15 @@ GUIDANCE_SCALE=12.5
 MAX_STEPS=1500
 
 
-CAMERA_UPDATE_PER_STEP=500
-MASK_UPDATE_AT_STEP=300 # -1 or 300
+CAMERA_UPDATE_PER_STEP=1500 # 1500(iter1), 500(iter3)
+MASK_UPDATE_AT_STEP=-1 # -1(wo-MaskUpdate) or 300(w-MaskUpdate)
 
 # Lambdas to iterate through (will run sequentially)
 # LAMBDA_LIST=(0.0 5.0 10.0)
-LAMBDA_LIST=(15.0 20.0 25.0)
+LAMBDA_LIST=(10.0 15.0 20.0 25.0)
 
 # Base name prefix for experiment outputs (NAME will be set per-lambda once)
-NAME_PREFIX="clip-loss/w-MaskUpdate"
+NAME_PREFIX="clip-loss/wo-MaskUpdate"
 
 
 declare -a ALL_JOBS=()

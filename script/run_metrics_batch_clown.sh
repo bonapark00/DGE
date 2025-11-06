@@ -7,7 +7,7 @@ set -euo pipefail
 # ==========================
 
 # Base directory base (lambda and max_view_num will be appended)
-BASE_DIR_BASE="/data/users/jaeyeonpark/DGE-outputs/clip-loss/w-MaskUpdate/iter1/"
+BASE_DIR_BASE="/data/users/jaeyeonpark/DGE-outputs/clip-loss/w-MaskUpdate/iter3/"
 
 # List of max_view_num values to process
 MAX_VIEW_NUMS=(5 10 15 20)
@@ -16,6 +16,7 @@ MAX_VIEW_NUMS=(5 10 15 20)
 
 # GPUs to use (mapped per max_view_num, round-robin if needed)
 GPUS=(0 1 2 3 6 7)
+GPUS=(6 7)
 
 
 # Lambda values to iterate sequentially
