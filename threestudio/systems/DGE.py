@@ -722,7 +722,7 @@ class DGE(BaseLift3DSystem):
         if self.cfg.guidance_type == 'dge-guidance': 
             for img_index, cur_index in enumerate(batch_index):
                 if cur_index not in self.edit_frames:
-                    batch_index[img_index] = self.trainer.datamodule.train_dataset.train_view_index[img_index]
+                    batch_index[img_index] = self.trainer.datamodule.train_dataset.train_view_index[img_index] # 전체 train view
 
         with self._latency_logger.timeit("render_forward"):
             out = self(batch, local=self.cfg.local_edit)
