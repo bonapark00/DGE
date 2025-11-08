@@ -2,26 +2,29 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "DGE: Man2Elf Training",
+            "name": "DGE: Man2Clown Training",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/launch.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "args": [
-                "--config",
-                "configs/dge_view5.yaml",
-                "--train",
-                "--gpu",
-                "2",
+                "--config", "configs/dge_clip-loss.yaml",
+                "--train", "--gpu", "0",
                 "trainer.max_steps=1500",
-                "system.prompt_processor.prompt=Turn the man into an elf",
+                "system.prompt_processor.prompt=Turn the man into a clown",
                 "data.source=/working/style-transfer/VcEdit/gs_data/face/",
                 "system.guidance.guidance_scale=12.5",
                 "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
                 "system.seg_prompt=man",
-                "system.target_prompt=an elf",
-                "system.mask_thres=0.3"
+                "system.target_prompt=clown",
+                "system.mask_thres=0.6",
+                "system.loss.lambda_d=100.0",
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+                "system.camera_update_per_step=1500",
+                "system.mask_update_at_step=-1",
+                "name=clip-loss/wo-MaskUpdate/iter1/lambda_d100.0"
             ],
             "env": {
                 "CUDA_VISIBLE_DEVICES": "2"

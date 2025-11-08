@@ -298,9 +298,16 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
 
     def update_editing_cameras(self, random_seed: int = 0):
         random.seed(random_seed)
-        self.edit_view_index = random.sample(
+
+        self.train_view_index = random.sample(
             range(0, self.total_view_num),
             min(self.total_view_num, self.cfg.max_view_num),
+        )
+        self.train_view_index_stack = self.train_view_index.copy()
+
+        self.edit_view_index = random.sample(
+            self.train_view_index,
+            min(len(self.train_view_index), self.cfg.max_edit_view_num),
         )
         self.edit_view_index_stack = self.edit_view_index.copy()
 
