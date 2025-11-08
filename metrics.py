@@ -274,10 +274,10 @@ if __name__ == "__main__":
     clip_dir_similarity = clip_similarity(args.gt, args.render)
     
     # Print to console
-    # print(f"CLIP directional consistency: {clip_dir_consistency}")
-    # print(f"CLIP_F (scaled): {clip_f_scaled}")
-    # print(f"CLIP Score: {clip_score_value}")
-    # print(f"CLIP directional similarity: {clip_dir_similarity}")
+    print(f"CLIP directional consistency: {clip_dir_consistency}")
+    print(f"CLIP_F (scaled): {clip_f_scaled}")
+    print(f"CLIP Score: {clip_score_value}")
+    print(f"CLIP directional similarity: {clip_dir_similarity}")
     
     # Save to eval_clip.txt (in the same directory structure as cmd.txt)
     # args.render is typically: {trial_dir}/save/it{max_steps}-test/
