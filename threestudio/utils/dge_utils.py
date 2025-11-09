@@ -171,7 +171,7 @@ def compute_epipolar_constrains(cam1, cam2, current_H=64, current_W=64):
     x = x.reshape(-1)
     y = y.reshape(-1)
     
-    # Homogeneous 좌표로 변환 [x, y, 1]
+    # Homogeneous 좌표로 변환 [x, y, 1(그냥 모든 픽셀에 대해 1)]
     heto_cam2 = torch.stack([x, y, torch.ones(size=(len(x),))], dim=1).view(-1, 3).cuda()
     heto_cam1 = torch.stack([x, y, torch.ones(size=(len(x),))], dim=1).view(-1, 3).cuda()
     
@@ -184,7 +184,7 @@ def compute_epipolar_constrains(cam1, cam2, current_H=64, current_W=64):
     # 거리가 1보다 큰 경우 = epipolar constraint를 위반하는 픽셀 쌍
     idx1_epipolar = distance1 > 1  # shape: (sequence_length, sequence_length)
 
-    return idx1_epipolar
+    return idx1_epipolar # shape: current_W * current_H, current_H * current_W
 
 def seed_everything(seed):
     torch.manual_seed(seed)
