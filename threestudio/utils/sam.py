@@ -23,15 +23,44 @@ class LangSAMTextSegmentor(torch.nn.Module):
         images = rearrange(images, "b h w c -> b c h w")
         masks = []
         for image in images:
-            # breakpoint()
-            image = self.to_pil_image(image.clamp(0.0, 1.0))
-            mask, _, _, _ = self.model.predict(image, prompt)
-            # breakpoint()
-            if mask.ndim == 3:
-                masks.append(mask[0:1].to(torch.float32))
-            else:
-                print(f"None {prompt} Detected")
-                masks.append(torch.zeros_like(images[0, 0:1]))
+            try:
+                # breakpoint()
+                image = self.to_pil_image(image.clamp(0.0, 1.0))
+                # Add explicit error handling for lang_sam predict
+                results = self.model.predict([image], [prompt])
+                if results is None or len(results) == 0:
+                    print(f"Invalid result from lang_sam for prompt '{prompt}'")
+                    print(f"Using full mask as fallback")
+                    masks.append(torch.ones_like(images[0, 0:1]))
+                    continue
+                # handle list of dicts as per installed lang_sam
+                first = results[0]
+                mask = first.get("masks", None)
+                # breakpoint()
+                if mask is None:
+                    print(f"No masks returned, using full mask")
+                    masks.append(torch.ones_like(images[0, 0:1]))
+                elif getattr(mask, "ndim", 0) == 3:
+                    # mask may be numpy array [K, H, W]
+                    if isinstance(mask, torch.Tensor):
+                        m = mask[0:1].to(torch.float32)
+                    else:
+                        import numpy as np  # local import to avoid global dep if unnecessary
+                        m = torch.from_numpy(mask[0:1]).to(torch.float32)
+                    m = m.to(images.device)
+                    masks.append(m)
+                else:
+                    print(f"None {prompt} Detected (ndim={getattr(mask, 'ndim', None)}), using full mask")
+                    masks.append(torch.ones_like(images[0, 0:1]))
+            except RuntimeError as e:
+                error_msg = str(e)
+                print(f"RuntimeError in segmentation with prompt '{prompt}': {error_msg}")
+                print(f"Using full mask as fallback (entire image will be edited)")
+                masks.append(torch.ones_like(images[0, 0:1]))
+            except Exception as e:
+                print(f"Error in segmentation with prompt '{prompt}': {e}")
+                print(f"Using full mask as fallback (entire image will be edited)")
+                masks.append(torch.ones_like(images[0, 0:1]))
 
         return torch.stack(masks, dim=0)
 
