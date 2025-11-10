@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 import random
 from re import T
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 import cv2
 import numpy as np
@@ -104,6 +104,7 @@ class DGE(BaseLift3DSystem):
         )
         self.edit_frames = {}
         self.origin_frames = {}
+        self.edit_frames_order = []  # view_sorted 순서를 저장
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
         self.text_segmentor = LangSAMTextSegmentor().to(get_device())
 
@@ -509,6 +510,92 @@ class DGE(BaseLift3DSystem):
                 step=self.true_global_step,
             )
 
+    def _add_index_to_image(self, img, index):
+        """이미지 상단에 인덱스 번호를 추가하는 헬퍼 메서드 (OpenCV 사용)"""
+        try:
+            # 원본 형식 저장 (나중에 복원하기 위해)
+            original_is_tensor = isinstance(img, torch.Tensor)
+            
+            # 이미지가 torch tensor인 경우 numpy로 변환
+            if isinstance(img, torch.Tensor):
+                img_np = img.detach().cpu().numpy()
+            else:
+                img_np = img.copy()
+            
+            # 배치 차원이 있으면 제거
+            if len(img_np.shape) == 4:
+                img_np = img_np[0]
+            
+            # CHW 형식이면 HWC로 변환
+            if len(img_np.shape) == 3 and img_np.shape[0] == 3:
+                img_np = img_np.transpose(1, 2, 0)
+            
+            # 원본 값 범위 저장
+            if img_np.dtype != np.uint8:
+                if img_np.max() <= 1.0:
+                    # 0-1 범위의 float
+                    img_for_cv = (img_np * 255.0).astype(np.uint8)
+                    value_range = (0.0, 1.0)
+                else:
+                    # 0-255 범위의 float
+                    img_for_cv = np.clip(img_np, 0, 255).astype(np.uint8)
+                    value_range = (0.0, 255.0)
+            else:
+                img_for_cv = img_np.copy()
+                value_range = (0.0, 255.0)
+            
+            # HWC 형식 확인 및 RGB로 변환
+            if len(img_for_cv.shape) == 3 and img_for_cv.shape[2] == 3:
+                # RGB를 BGR로 변환 (OpenCV는 BGR 사용)
+                img_bgr = cv2.cvtColor(img_for_cv, cv2.COLOR_RGB2BGR)
+                
+                # 텍스트 설정
+                text = str(index)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = max(0.7, min(img_bgr.shape[:2]) / 400.0)  # 이미지 크기에 비례
+                thickness = max(1, int(font_scale * 2))
+                
+                # 텍스트 크기 계산
+                (text_width, text_height), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+                
+                # 텍스트 위치 (상단 중앙)
+                x = (img_bgr.shape[1] - text_width) // 2
+                y = text_height + 10
+                
+                # 텍스트 테두리 그리기 (흰색)
+                for dx in [-2, -1, 0, 1, 2]:
+                    for dy in [-2, -1, 0, 1, 2]:
+                        if dx != 0 or dy != 0:
+                            cv2.putText(img_bgr, text, (x + dx, y + dy), font, font_scale, (255, 255, 255), thickness + 1, cv2.LINE_AA)
+                
+                # 텍스트 그리기 (검은색)
+                cv2.putText(img_bgr, text, (x, y), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+                
+                # BGR를 RGB로 다시 변환
+                img_with_text = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32)
+                
+                # 원본 값 범위로 복원
+                if value_range == (0.0, 1.0):
+                    img_with_text = img_with_text / 255.0
+                elif value_range == (0.0, 255.0) and img_np.dtype == np.uint8:
+                    img_with_text = img_with_text.astype(np.uint8)
+                
+                # 원본이 tensor였으면 tensor로 변환
+                if original_is_tensor:
+                    img_with_text = torch.from_numpy(img_with_text).to(img.device if hasattr(img, 'device') else 'cpu')
+                
+                return img_with_text
+            else:
+                # 형식이 맞지 않으면 원본 반환
+                print(f"Warning: Image shape {img_np.shape} is not supported, returning original")
+                return img
+        except Exception as e:
+            import traceback
+            print(f"Error in _add_index_to_image: {e}")
+            print(f"Traceback: {traceback.format_exc()}")
+            print(f"Image type: {type(img)}, shape: {img.shape if hasattr(img, 'shape') else 'N/A'}")
+            return img
+
     def on_test_epoch_end(self):
         self.save_img_sequence(
             f"it{self.true_global_step}-test",
@@ -520,14 +607,32 @@ class DGE(BaseLift3DSystem):
             step=self.true_global_step,
         )
         save_list = []
-        for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
-            save_list.append(
-                {
-                    "type": "rgb",
-                    "img": image[0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            )
+        # view_sorted 순서대로 저장 (순서가 저장되어 있으면 사용, 없으면 view index 오름차순)
+        if len(self.edit_frames_order) > 0:
+            # view_sorted 순서대로 저장
+            for index in self.edit_frames_order:
+                if index in self.edit_frames:
+                    # 이미지에 인덱스 번호 추가
+                    img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+                    save_list.append(
+                        {
+                            "type": "rgb",
+                            "img": img_with_index,
+                            "kwargs": {"data_format": "HWC"},
+                        },
+                    )
+        else:
+            # 순서 정보가 없으면 view index 오름차순으로 정렬
+            for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
+                # 이미지에 인덱스 번호 추가
+                img_with_index = self._add_index_to_image(image[0], index)
+                save_list.append(
+                    {
+                        "type": "rgb",
+                        "img": img_with_index,
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                )
         if len(save_list) > 0:
             self.save_image_grid(
                 f"edited_images.png",
@@ -535,23 +640,6 @@ class DGE(BaseLift3DSystem):
                 name="edited_images",
                 step=self.true_global_step,
             )
-        save_list = []
-        for index, image in sorted(
-                self.origin_frames.items(), key=lambda item: item[0]
-        ):
-            save_list.append(
-                {
-                    "type": "rgb",
-                    "img": image[0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            )
-        self.save_image_grid(
-            f"origin_images.png",
-            save_list,
-            name="origin",
-            step=self.true_global_step,
-        )
 
         save_path = self.get_save_path(f"last.ply")
         print("save_path", save_path)
@@ -599,6 +687,7 @@ class DGE(BaseLift3DSystem):
         print(f"{self.true_global_step}th step, Camera view index: {self.edit_view_index}")
 
         self.edit_frames = {}
+        self.edit_frames_order = []  # view_sorted 순서 초기화
         cache_dir = os.path.join(self.cache_dir, cache_name)
         original_render_cache_dir = os.path.join(self.cache_dir, original_render_name)
         os.makedirs(cache_dir, exist_ok=True)
@@ -613,7 +702,7 @@ class DGE(BaseLift3DSystem):
                 for id in self.edit_view_index:
                     cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
             with self._latency_logger.timeit("edit_all_view.sort_cameras"):
-                sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+                sorted_cam_idx = self.sort_the_cameras_idx(cameras) # [19, 7, 16, 0, 1, 3, 11, 5, 17, 13, 8, 10, 15, 12, 18, 4, 14, 2, 6, 9] 인덱스랑은 상관이 없네
             view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
             cams_sorted = [cameras[idx] for idx in sorted_cam_idx]     
                    
@@ -655,6 +744,8 @@ class DGE(BaseLift3DSystem):
                 )
 
             with self._latency_logger.timeit("edit_all_view.assign_outputs"):
+                # view_sorted 순서를 저장 (나중에 이 순서대로 저장하기 위해)
+                self.edit_frames_order = view_sorted.copy()
                 for view_index_tmp in range(len(self.edit_view_index)):
                     self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
     
@@ -682,6 +773,27 @@ class DGE(BaseLift3DSystem):
 
         with self._latency_logger.timeit("render_all_view"):
             self.render_all_view(cache_name="origin_render")
+        
+        # 원본이미지 저장
+        save_list = []
+        for index, image in sorted(
+                self.origin_frames.items(), key=lambda item: item[0]
+        ):
+            # 이미지에 인덱스 번호 추가
+            img_with_index = self._add_index_to_image(image[0], index)
+            save_list.append(
+                {
+                    "type": "rgb",
+                    "img": img_with_index,
+                    "kwargs": {"data_format": "HWC"},
+                },
+            )
+        self.save_image_grid(
+            f"origin_images.png",
+            save_list,
+            name="origin",
+            step=self.true_global_step,
+        )
 
         if len(self.cfg.seg_prompt) > 0:
             with self._latency_logger.timeit("update_mask"):
