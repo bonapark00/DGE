@@ -184,9 +184,10 @@ class GSLoadDataModuleConfig:
     eval_width: int = -1
     eval_batch_size: int = 1
     max_view_num: int = 60
-
     max_edit_view_num: int = 15
+    edit_view_selection_strategy: str = "quadrant"
 
+    
     n_val_views: int = 8
     n_test_views: int = 120
     elevation_range: Tuple[float, float] = (-10, 45)
@@ -221,17 +222,38 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         random.seed(0)  # make sure same views
 
 
-        self.train_view_index = random.sample(
-            range(0, self.total_view_num),
-            min(self.total_view_num, self.cfg.max_view_num),
-        )
-        self.train_view_index_stack = self.train_view_index.copy()
+        # self.train_view_index = random.sample(
+        #     range(0, self.total_view_num),
+        #     min(self.total_view_num, self.cfg.max_view_num),
+        # )
+        # self.train_view_index_stack = self.train_view_index.copy()
         
-        self.edit_view_index = random.sample(
-            self.train_view_index,
-            min(len(self.train_view_index), self.cfg.max_edit_view_num),
-        )
+        # self.edit_view_index = random.sample(
+        #     self.train_view_index,
+        #     min(len(self.train_view_index), self.cfg.max_edit_view_num),
+        # )
+        # self.edit_view_index_stack = self.edit_view_index.copy()
+
+
+        if self.cfg.edit_view_selection_strategy == "quadrant":
+            self.edit_view_index = self._select_cameras_by_quadrants(
+                range(0, self.total_view_num),
+                self.cfg.max_edit_view_num
+            )
+        elif self.cfg.edit_view_selection_strategy == "row":
+            self.edit_view_index = self._select_cameras_by_rows(
+                range(0, self.total_view_num),
+                self.cfg.max_edit_view_num
+            )
+        else:
+            raise ValueError(f"Invalid edit view selection strategy: {self.cfg.edit_view_selection_strategy}")
         self.edit_view_index_stack = self.edit_view_index.copy()
+
+        # train_view_index는 edit_view_index를 포함하고 max_view_num - max_edit_view_num 만큼을 샘플해가지고 합치는거 하고 싶어
+        add_n = self.cfg.max_view_num - self.cfg.max_edit_view_num
+        rest = list(set(range(self.total_view_num)) - set(self.edit_view_index))
+        self.train_view_index = self.edit_view_index + random.sample(rest, add_n) if add_n > 0 else self.edit_view_index
+        self.train_view_index_stack = self.train_view_index.copy()
 
 
         self.heights: List[int] = (
@@ -265,6 +287,176 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         self.width: int = self.widths[0]
         self.batch_size: int = self.batch_sizes[0]
 
+    def _select_cameras_by_quadrants(self, candidate_indices, num_cameras):
+        """
+        Forward facing scene에 대해 x, y 축 기준으로 2x2 = 4개 구획으로 나눠서
+        각 구획에서 균등하게 카메라를 선택
+        
+        Args:
+            candidate_indices: 선택 가능한 카메라 인덱스 리스트 또는 range 객체
+            num_cameras: 선택할 총 카메라 수
+        
+        Returns:
+            선택된 카메라 인덱스 리스트
+        """
+        # range 객체를 리스트로 변환
+        candidate_indices = list(candidate_indices)
+        
+        if len(candidate_indices) == 0:
+            return []
+        
+        # 모든 카메라의 중심 위치 가져오기
+        cam_centers = []
+        for idx in candidate_indices:
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            # torch.Tensor를 numpy로 변환
+            if isinstance(center, torch.Tensor):
+                center = center.detach().cpu().numpy()
+            cam_centers.append(center)
+        
+        cam_centers = np.array(cam_centers)  # shape: (N, 3)
+        
+        # x, y 좌표의 중앙값 계산 (z는 무시)
+        median_x = np.median(cam_centers[:, 0])
+        median_y = np.median(cam_centers[:, 1])
+        
+        # 4개 구획으로 분류
+        # 구획 0: x < median_x, y < median_y (왼쪽 아래)
+        # 구획 1: x >= median_x, y < median_y (오른쪽 아래)
+        # 구획 2: x < median_x, y >= median_y (왼쪽 위)
+        # 구획 3: x >= median_x, y >= median_y (오른쪽 위)
+        quadrants = {
+            0: [],  # 왼쪽 아래
+            1: [],  # 오른쪽 아래
+            2: [],  # 왼쪽 위
+            3: [],  # 오른쪽 위
+        }
+        
+        for idx, center in zip(candidate_indices, cam_centers):
+            x, y = center[0], center[1]
+            if x < median_x and y < median_y:
+                quadrants[0].append(idx)
+            elif x >= median_x and y < median_y:
+                quadrants[1].append(idx)
+            elif x < median_x and y >= median_y:
+                quadrants[2].append(idx)
+            else:  # x >= median_x and y >= median_y
+                quadrants[3].append(idx)
+        
+        # 각 구획에서 선택할 카메라 수 계산
+        cameras_per_quadrant = num_cameras // 4
+        remainder = num_cameras % 4
+        
+        selected_indices = []
+        
+        # 각 구획에서 균등하게 선택
+        for quad_idx in range(4):
+            quadrant_candidates = quadrants[quad_idx]
+            if len(quadrant_candidates) == 0:
+                continue
+            
+            # 나머지가 있으면 처음 4개 구획에 1개씩 추가
+            num_to_select = cameras_per_quadrant + (1 if quad_idx < remainder else 0)
+            num_to_select = min(num_to_select, len(quadrant_candidates))
+            
+            if num_to_select > 0:
+                selected = random.sample(quadrant_candidates, num_to_select)
+                selected_indices.extend(selected)
+        
+        return selected_indices
+
+    def _select_cameras_by_rows(self, candidate_indices, num_cameras):
+        """
+        y축으로 4등분해서 각 row마다 균등한 개수의 카메라를 선택
+        
+        Args:
+            candidate_indices: 선택 가능한 카메라 인덱스 리스트 또는 range 객체
+            num_cameras: 선택할 총 카메라 수
+        
+        Returns:
+            선택된 카메라 인덱스 리스트
+        """
+        # range 객체를 리스트로 변환
+        candidate_indices = list(candidate_indices)
+        
+        if len(candidate_indices) == 0:
+            return []
+        
+        # 모든 카메라의 중심 위치 가져오기
+        cam_centers = []
+        for idx in candidate_indices:
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            # torch.Tensor를 numpy로 변환
+            if isinstance(center, torch.Tensor):
+                center = center.detach().cpu().numpy()
+            cam_centers.append(center)
+        
+        cam_centers = np.array(cam_centers)  # shape: (N, 3)
+        
+        # y 좌표의 최소값과 최대값 계산
+        min_y = np.min(cam_centers[:, 1])
+        max_y = np.max(cam_centers[:, 1])
+
+        # y축 기준으로 정렬한 인덱스들
+        sorted_indices = np.argsort(cam_centers[:, 1])
+        sorted_candidate_indices = [candidate_indices[i] for i in sorted_indices]
+        print(f"sorted_candidate_indices: {sorted_candidate_indices}")
+        print(f"cam_centers: {cam_centers}")
+        
+        # y축을 4등분하는 경계값 계산
+        y_range = max_y - min_y
+        y_boundary_1 = min_y + y_range * 0.25  # 25% 지점
+        y_boundary_2 = min_y + y_range * 0.5   # 50% 지점 (중앙)
+        y_boundary_3 = min_y + y_range * 0.75  # 75% 지점
+        
+        # 4개 row로 분류
+        # row 0: y < y_boundary_1 (가장 아래)
+        # row 1: y_boundary_1 <= y < y_boundary_2
+        # row 2: y_boundary_2 <= y < y_boundary_3
+        # row 3: y >= y_boundary_3 (가장 위)
+        rows = {
+            0: [],  # 가장 아래
+            1: [],  # 아래쪽 중간
+            2: [],  # 위쪽 중간
+            3: [],  # 가장 위
+        }
+        
+        for idx, center in zip(candidate_indices, cam_centers):
+            y = center[1]
+            if y < y_boundary_1:
+                rows[0].append(idx)
+            elif y < y_boundary_2:
+                rows[1].append(idx)
+            elif y < y_boundary_3:
+                rows[2].append(idx)
+            else:  # y >= y_boundary_3
+                rows[3].append(idx)
+        
+        # 각 row에서 선택할 카메라 수 계산
+        cameras_per_row = num_cameras // 4
+        remainder = num_cameras % 4
+        
+        selected_indices = []
+        
+        # 각 row에서 균등하게 선택
+        for row_idx in range(4):
+            row_candidates = rows[row_idx]
+            if len(row_candidates) == 0:
+                continue
+            
+            # 나머지가 있으면 처음 4개 row에 1개씩 추가
+            num_to_select = cameras_per_row + (1 if row_idx < remainder else 0)
+            num_to_select = min(num_to_select, len(row_candidates))
+            
+            if num_to_select > 0:
+                selected = random.sample(row_candidates, num_to_select)
+                selected.sort()  # 각 row별로 정렬
+                selected_indices.extend(selected)
+        
+        return selected_indices
+
     def collate(self, batch) -> Dict[str, Any]:
         cam_list = []
         index_list = []
@@ -296,7 +488,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
     #     # progressive view
     #     self.progressive_view(global_step)
 
-    def update_editing_cameras(self, random_seed: int = 0):
+    def update_editing_cameras(self, random_seed: int = 0): # TODO: edit_view_index 먼저 고르고 train_view_index는 나머지 카메라 중에서 고르기
         random.seed(random_seed)
 
         self.train_view_index = random.sample(
@@ -305,9 +497,10 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         )
         self.train_view_index_stack = self.train_view_index.copy()
 
-        self.edit_view_index = random.sample(
-            self.train_view_index,
-            min(len(self.train_view_index), self.cfg.max_edit_view_num),
+        # Forward facing scene에 대해 x, y 축 기준으로 2x2 = 4개 구획으로 나눠서 선택
+        self.edit_view_index = self._select_cameras_by_quadrants(
+            range(0, self.total_view_num),
+            min(len(self.train_view_index), self.cfg.max_edit_view_num)
         )
         self.edit_view_index_stack = self.edit_view_index.copy()
 
@@ -376,10 +569,10 @@ class GS_load(pl.LightningDataModule):
             self.cfg.width = self.cfg.eval_width
         
         self.train_scene = CamScene( # 전체 카메라를 로드
-            self.cfg.source, h=self.cfg.height, w=self.cfg.width
+            self.cfg.source, h=self.cfg.height, w=self.cfg.width # Colmap_HW -> readColmapSceneInfo_hw
         )
         self.eval_scene = CamScene(
-            self.cfg.source, h=self.cfg.eval_height, w=self.cfg.eval_width
+            self.cfg.source, h=self.cfg.eval_height, w=self.cfg.eval_width # Colmap -> readColmapSceneInfo
         )
 
     def setup(self, stage=None) -> None:

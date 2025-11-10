@@ -626,9 +626,9 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                 if self.use_ada_layer_norm_zero:
                     ff_output = gate_mlp.unsqueeze(1) * ff_output
 
-                hidden_states = ff_output + hidden_states
+                hidden_states = ff_output + hidden_states # [12, 4096, 320] + [12, 4096, 320]
 
-            return hidden_states
+            return hidden_states # [12, 4096, 320]
 
     return DGEBlock
 
