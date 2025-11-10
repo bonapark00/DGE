@@ -575,7 +575,7 @@ class DGE(BaseLift3DSystem):
             images = torch.cat(images, dim=0)
             original_frames = torch.cat(original_frames, dim=0)
 
-            edited_images = self.guidance(
+            edited_images = self.guidance( # dge_guidance.py:478 의 __call__ 함수 호출
                 images,
                 original_frames,
                 self.prompt_processor(),

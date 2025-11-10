@@ -274,7 +274,7 @@ def register_extended_attention(model):
     Multi-view 간 attention을 수행하는 extended attention 등록
     text, image, uncond 각각에 대해 모든 view 간 attention 계산
     """
-    def sa_forward(self):
+    def sa_forward(self): # Self-Attention Forward
         to_out = self.to_out
         if type(to_out) is torch.nn.modules.container.ModuleList:
             to_out = self.to_out[0]
@@ -287,12 +287,12 @@ def register_extended_attention(model):
             n_frames = batch_size // 3  # text, image, uncond 각각 n_frames개
             is_cross = encoder_hidden_states is not None
             encoder_hidden_states = encoder_hidden_states if is_cross else x
-            q = self.to_q(x)
-            k = self.to_k(encoder_hidden_states)
-            v = self.to_v(encoder_hidden_states)
+            q = self.to_q(x) # ([15, 4096, 320])
+            k = self.to_k(encoder_hidden_states) # ([15, 4096, 320])
+            v = self.to_v(encoder_hidden_states) # ([15, 4096, 320])
             
             # 각 view의 key/value를 모든 view에 대해 반복
-            k_text = k[:n_frames].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1)
+            k_text = k[:n_frames].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1) # [5, 20480, 320]
             k_image = k[n_frames: 2*n_frames].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1)
             k_uncond = k[2*n_frames:].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1)
 
@@ -300,16 +300,16 @@ def register_extended_attention(model):
             v_image = v[n_frames:2*n_frames].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1)
             v_uncond = v[2*n_frames:].reshape(1, n_frames * sequence_length, -1).repeat(n_frames, 1, 1)
 
-            q_text = self.head_to_batch_dim(q[:n_frames])
-            q_image = self.head_to_batch_dim(q[n_frames: 2*n_frames])
+            q_text = self.head_to_batch_dim(q[:n_frames]) # [40, 4096, 40]
+            q_image = self.head_to_batch_dim(q[n_frames: 2*n_frames]) # [40, 4096, 40]
             q_uncond = self.head_to_batch_dim(q[2 * n_frames:])
 
-            k_text = self.head_to_batch_dim(k_text)
-            k_image = self.head_to_batch_dim(k_image)
+            k_text = self.head_to_batch_dim(k_text) # [40, 20480, 40]
+            k_image = self.head_to_batch_dim(k_image) # [40, 20480, 40]
             k_uncond = self.head_to_batch_dim(k_uncond)
 
-            v_text = self.head_to_batch_dim(v_text)
-            v_image = self.head_to_batch_dim(v_image)
+            v_text = self.head_to_batch_dim(v_text) # [40, 20480, 40]
+            v_image = self.head_to_batch_dim(v_image) # [40, 20480, 40]
             v_uncond = self.head_to_batch_dim(v_uncond)
 
             out_text = []
@@ -317,13 +317,13 @@ def register_extended_attention(model):
             out_uncond = []
 
             # Multi-head attention을 위해 reshape
-            q_text = q_text.view(n_frames, h, sequence_length, dim // h)
-            k_text = k_text.view(n_frames, h, sequence_length * n_frames, dim // h)
-            v_text = v_text.view(n_frames, h, sequence_length * n_frames, dim // h)
+            q_text = q_text.view(n_frames, h, sequence_length, dim // h) # [5, 8, 4096, 40]
+            k_text = k_text.view(n_frames, h, sequence_length * n_frames, dim // h) # [5, 8, 5120, 80]
+            v_text = v_text.view(n_frames, h, sequence_length * n_frames, dim // h) # [5, 8, 5120, 80]
 
-            q_image = q_image.view(n_frames, h, sequence_length, dim // h)
-            k_image = k_image.view(n_frames, h, sequence_length * n_frames, dim // h)
-            v_image = v_image.view(n_frames, h, sequence_length * n_frames, dim // h)
+            q_image = q_image.view(n_frames, h, sequence_length, dim // h) # [5, 8, 1024, 80]
+            k_image = k_image.view(n_frames, h, sequence_length * n_frames, dim // h) # [5, 8, 5120, 80]
+            v_image = v_image.view(n_frames, h, sequence_length * n_frames, dim // h) # [5, 8, 5120, 80]
 
             q_uncond = q_uncond.view(n_frames, h, sequence_length, dim // h)
             k_uncond = k_uncond.view(n_frames, h, sequence_length * n_frames, dim // h)
@@ -344,8 +344,8 @@ def register_extended_attention(model):
             out_image = torch.cat(out_image, dim=0).view(h, n_frames,sequence_length, dim // h).permute(1, 0, 2, 3).reshape(h * n_frames, sequence_length, -1)
             out_uncond = torch.cat(out_uncond, dim=0).view(h, n_frames,sequence_length, dim // h).permute(1, 0, 2, 3).reshape(h * n_frames, sequence_length, -1)
 
-            out = torch.cat([out_text, out_image, out_uncond], dim=0)
-            out = self.batch_to_head_dim(out)
+            out = torch.cat([out_text, out_image, out_uncond], dim=0) # [120, 1024, 80]
+            out = self.batch_to_head_dim(out) # [15, 1024, 640]
 
             return to_out(out)
 
@@ -407,15 +407,22 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                     # Non-pivotal pass: 가장 가까운 key camera 찾기
                     batch_idxs = [self.batch_idx]
                     if self.batch_idx > 0:
-                        batch_idxs.append(self.batch_idx - 1)  # 이전 batch도 고려
+                        batch_idxs.append(self.batch_idx - 1)  
                     idx1 = []
                     idx2 = []
                     
                     # 카메라 간 거리 계산하여 가장 가까운 key camera 찾기
                     cam_distance = compute_camera_distance(self.cams, self.key_cams)
                     cam_distance_min = cam_distance.sort(dim=-1)
-                    closest_cam = cam_distance_min[1][:,:len(batch_idxs)]
-                    closest_cam_pivot_hidden_states = self.pivot_hidden_states[1][closest_cam]
+                    closest_cam = cam_distance_min[1][:,:len(batch_idxs)] # shape: [5, 1](첫번째 배치) or [5, 2](두번째 배치 이후부터)
+                    #(ex) closest_cam = tensor([[1, 0], # 카메라 0: key_cams[1]과 key_cams[0]가 가장 가까움
+                    # [2, 3], # 카메라 1: key_cams[2]과 key_cams[3]가 가장 가까움
+                    # [1, 4], # 카메라 2: key_cams[1]과 key_cams[4]가 가장 가까움
+                    # [1, 4], # 카메라 3: key_cams[1]과 key_cams[4]가 가장 가까움
+                    # [2, 3], # 카메라 4: key_cams[2]과 key_cams[3]가 가장 가까움
+                    # [2, 3]], device='cuda:0'
+
+                    closest_cam_pivot_hidden_states = self.pivot_hidden_states[1][closest_cam] # shape: [5, 1, 4096, 320] or [5, 2, 4096, 320]
                     
                     # 현재 view와 key camera view 간의 similarity 계산
                     sim = torch.einsum('bld,bcsd->bcls', norm_hidden_states[1] / norm_hidden_states[1].norm(dim=-1, keepdim=True), closest_cam_pivot_hidden_states / closest_cam_pivot_hidden_states.norm(dim=-1, keepdim=True)).squeeze()
@@ -423,14 +430,14 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                     # Epipolar constraint 적용 전 초기 similarity 기반 인덱스 찾기
                     if len(batch_idxs) == 2:
                         sim1, sim2 = sim.chunk(2, dim=1)
-                        sim1 = sim1.view(-1, sequence_length)
-                        sim2 = sim2.view(-1, sequence_length)
+                        sim1 = sim1.view(-1, sequence_length) 
+                        sim2 = sim2.view(-1, sequence_length) 
                         sim1_max = sim1.max(dim=-1)
                         sim2_max = sim2.max(dim=-1)
                         idx1.append(sim1_max[1])
                         idx2.append(sim2_max[1])
                     else:
-                        sim = sim.view(-1, sequence_length)
+                        sim = sim.view(-1, sequence_length) # 현재 배치 key camera와의 similarity
                         sim_max = sim.max(dim=-1)
                         idx1.append(sim_max[1])
 
@@ -518,17 +525,17 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                 # Extended attention 사용 (multi-view 처리)
                 if self.pivotal_pass:
                     # Key camera의 attention 계산 및 저장
-                    self.attn_output = self.attn1(
+                    self.attn_output = self.attn1( # attn1.forward() 함수 호출: extended attention 메커니즘 (register_extended_attention으로 등록)
                             norm_hidden_states.view(batch_size, sequence_length, dim),
                             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
                             **cross_attention_kwargs,
                         )
-                    self.kf_attn_output = self.attn_output  # 나중에 다른 view에서 사용하기 위해 저장
+                    self.kf_attn_output = self.attn_output  # 나중에 다른 view에서 사용하기 위해 저장 # [15, 1024, 640]
 
                 else:
                     # Non-pivotal pass: 가장 가까운 key camera의 attention을 가져옴
-                    batch_kf_size, _, _ = self.kf_attn_output.shape
-                    self.attn_output = self.kf_attn_output.view(3, batch_kf_size // 3, sequence_length, dim)[:, closest_cam]
+                    batch_kf_size, _, _ = self.kf_attn_output.shape # batch_kf_size: 15
+                    self.attn_output = self.kf_attn_output.view(3, batch_kf_size // 3, sequence_length, dim)[:, closest_cam] # [3, 5, 1, 4096, 320]
 
             if self.use_ada_layer_norm_zero:
                 self.n = gate_msa.unsqueeze(1) * self.attn_output

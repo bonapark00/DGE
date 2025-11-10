@@ -271,7 +271,7 @@ class DGEGuidance(BaseObject):
         current_H = image_cond_latents.shape[2]  # 현재 높이
         current_W = image_cond_latents.shape[3]  # 현재 너비
 
-        camera_batch_size = self.cfg.camera_batch_size
+        camera_batch_size = self.cfg.camera_batch_size # 5
         print("Start editing images...")
 
         with torch.no_grad():
@@ -305,8 +305,9 @@ class DGEGuidance(BaseObject):
                     pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) 
                     register_pivotal(self.unet, True)  # pivotal 모드 활성화
                     
+                    ## PIVOT 연산
                     # Pivotal 카메라 선택
-                    key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
+                    key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()] # camera_batch_size개의 카메라
                     
                     # Pivotal 이미지에 대한 입력 준비 (positive, negative, negative 3개 복사)
                     latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
@@ -318,6 +319,7 @@ class DGEGuidance(BaseObject):
                     self.forward_unet(latent_model_input, t, encoder_hidden_states=pivot_text_embeddings)
                     register_pivotal(self.unet, False)  # pivotal 모드 비활성화
 
+                    ## NON-PIVOT 연산
                     # 각 카메라 배치에 대해 처리
                     for i, b in enumerate(range(0, len(latents), camera_batch_size)):
                         register_batch_idx(self.unet, i)  # 현재 배치 인덱스 등록
@@ -498,7 +500,7 @@ class DGEGuidance(BaseObject):
             편집된 이미지 또는 SDS 손실
         """
         assert cams is not None, "cams is required for dge guidance"
-        batch_size, H, W, _ = rgb.shape
+        batch_size, H, W, _ = rgb.shape # batch_size: max_view_num
         
         # 이미지 크기를 64의 배수로 조정 (VAE 요구사항)
         factor = 512 / max(W, H)
