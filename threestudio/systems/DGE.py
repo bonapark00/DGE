@@ -701,8 +701,13 @@ class DGE(BaseLift3DSystem):
             with self._latency_logger.timeit("edit_all_view.collect_cameras"):
                 for id in self.edit_view_index:
                     cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
-            with self._latency_logger.timeit("edit_all_view.sort_cameras"):
-                sorted_cam_idx = self.sort_the_cameras_idx(cameras) # [19, 7, 16, 0, 1, 3, 11, 5, 17, 13, 8, 10, 15, 12, 18, 4, 14, 2, 6, 9] 인덱스랑은 상관이 없네
+
+            if self.cfg.guidance.edit_view_selection_strategy != "random":
+                sorted_cam_idx = [_ for _ in range(len(cameras))]
+            else:
+                sorted_cam_idx = self.sort_the_cameras_idx(cameras) # 카메라 x축 기준으로 정렬된 카메라의 인덱스
+                # [19, 7, 16, 0, 1, 3, 11, 5, 17, 13, 8, 10, 15, 12, 18, 4, 14, 2, 6, 9] 인덱스랑은 상관이 없네
+
             view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
             cams_sorted = [cameras[idx] for idx in sorted_cam_idx]     
                    

@@ -245,6 +245,16 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 range(0, self.total_view_num),
                 self.cfg.max_edit_view_num
             )
+        elif self.cfg.edit_view_selection_strategy == "manual-20":
+            self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
+        elif self.cfg.edit_view_selection_strategy == "manual-15":
+            # self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 16, 19, 20, 21, 24]
+            self.edit_view_index = [10, 7, 6, 50, 3, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
+        elif self.cfg.edit_view_selection_strategy == "random":
+            self.edit_view_index = random.sample(
+                range(0, self.total_view_num),
+                self.cfg.max_edit_view_num
+            )
         else:
             raise ValueError(f"Invalid edit view selection strategy: {self.cfg.edit_view_selection_strategy}")
         self.edit_view_index_stack = self.edit_view_index.copy()

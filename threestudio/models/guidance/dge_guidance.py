@@ -43,6 +43,7 @@ class DGEGuidance(BaseObject):
         diffusion_steps: int = 20
         use_sds: bool = False
         camera_batch_size: int = 5
+        edit_view_selection_strategy: str = ""
 
     cfg: Config
 
@@ -224,7 +225,12 @@ class DGEGuidance(BaseObject):
                         noise_pred_uncond = []
                         
                         with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.pivotal_setup"):
-                            pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) 
+                            if self.cfg.edit_view_selection_strategy == "manual-20":
+                                pivotal_idx = torch.tensor([2, 7, 12, 17]) # 카메라 uid가 [6, 32, 42, 20] 인 카메라를 가리키는 인덱스
+                            elif self.cfg.edit_view_selection_strategy == "manual-15":
+                                pivotal_idx = torch.tensor([2, 7, 12]) # 카메라 uid가 [6, 32, 20] 인 카메라를 가리키는 인덱스
+                            else:
+                                pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) # ex)  [0, 2, 1, 2] + [0, 5, 10, 15]
                             register_pivotal(self.unet, True)
                             
                             key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
