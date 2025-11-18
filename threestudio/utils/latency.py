@@ -44,21 +44,45 @@ class LatencyLogger:
         lines: List[str] = []
         lines.append(f"Latency Summary (seconds) - Total Time: {total:.3f}s\n")
         
+        def get_direct_children(parent_prefix: str, all_items: Dict[str, float]) -> List[Tuple[str, float]]:
+            """Get direct children of a parent (not grandchildren)"""
+            children = []
+            parent_depth = parent_prefix.count('.') if parent_prefix else 0
+            
+            for name, secs in all_items.items():
+                if name.startswith(parent_prefix + '.'):
+                    # Check if this is a direct child (one more level deep)
+                    remaining = name[len(parent_prefix) + 1:]  # Remove parent prefix and '.'
+                    if '.' not in remaining:  # Direct child has no more dots
+                        children.append((name, secs))
+            
+            return children
+        
+        def add_children_recursive(parent_prefix: str, indent_level: int, all_items: Dict[str, float]):
+            """Recursively add children maintaining hierarchy"""
+            children = get_direct_children(parent_prefix, all_items)
+            if not children:
+                return
+            
+            # Sort direct children by time
+            children = sorted(children, key=lambda x: -x[1])
+            
+            for child_name, child_secs in children:
+                child_pct = (child_secs / total * 100.0) if total > 0 else 0.0
+                display_name = child_name.split('.')[-1]  # Get last part after last dot
+                indent = "  " * indent_level + "└─ "
+                lines.append(f"{indent}{display_name}: {child_secs:.3f}s ({child_pct:.2f}%)")
+                
+                # Recursively add grandchildren
+                add_children_recursive(child_name, indent_level + 1, all_items)
+        
         # Sort by total time
         for name, secs in sorted(top_level_categories.items(), key=lambda x: -x[1]):
             pct = (secs / total * 100.0) if total > 0 else 0.0
             lines.append(f"{name}: {secs:.3f}s ({pct:.2f}%)")
             
-            # Add nested measurements with proper indentation
-            nested_items = [(k, v) for k, v in nested_categories.items() if k.startswith(name + '.')]
-            if nested_items:
-                for nested_name, nested_secs in sorted(nested_items, key=lambda x: -x[1]):
-                    nested_pct = (nested_secs / total * 100.0) if total > 0 else 0.0
-                    # Count the number of dots to determine indentation level
-                    dot_count = nested_name.count('.')
-                    indent = "  " * dot_count + "└─ "
-                    display_name = nested_name.split('.', dot_count)[dot_count]
-                    lines.append(f"{indent}{display_name}: {nested_secs:.3f}s ({nested_pct:.2f}%)")
+            # Add nested measurements with proper hierarchy
+            add_children_recursive(name, 1, nested_categories)
         
         out_path = os.path.join(self.base_dir, filename)
         with open(out_path, "w") as f:
