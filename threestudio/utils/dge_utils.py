@@ -404,93 +404,178 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                 if self.pivotal_pass:
                     self.pivot_hidden_states = norm_hidden_states
                 else:
-                    # Non-pivotal pass: 가장 가까운 key camera 찾기
+                    # ============================================================
+                    # Non-pivotal pass: 일반 뷰에서 key-view와의 매칭 수행
+                    # ============================================================
+                    # 현재 배치와 이전 배치의 인덱스 설정
                     batch_idxs = [self.batch_idx]
                     if self.batch_idx > 0:
                         batch_idxs.append(self.batch_idx - 1)  
                     idx1 = []
                     idx2 = []
                     
-                    # 카메라 간 거리 계산하여 가장 가까운 key camera 찾기
+                    # ============================================================
+                    # Step 1: 가장 가까운 key camera 찾기
+                    # ============================================================
+                    # 카메라 중심점 간의 거리를 계산하여 현재 뷰와 가장 가까운 key-view 선택
                     cam_distance = compute_camera_distance(self.cams, self.key_cams)
                     cam_distance_min = cam_distance.sort(dim=-1)
-                    closest_cam = cam_distance_min[1][:,:len(batch_idxs)] # shape: [5, 1](첫번째 배치) or [5, 2](두번째 배치 이후부터)
-                    #(ex) closest_cam = tensor([[1, 0], # 카메라 0: key_cams[1]과 key_cams[0]가 가장 가까움
-                    # [2, 3], # 카메라 1: key_cams[2]과 key_cams[3]가 가장 가까움
-                    # [1, 4], # 카메라 2: key_cams[1]과 key_cams[4]가 가장 가까움
-                    # [1, 4], # 카메라 3: key_cams[1]과 key_cams[4]가 가장 가까움
-                    # [2, 3], # 카메라 4: key_cams[2]과 key_cams[3]가 가장 가까움
-                    # [2, 3]], device='cuda:0'
+                    # closest_cam: 각 현재 뷰 카메라에 대해 가장 가까운 key-view 인덱스
+                    # shape: [n_frames, 1] (첫번째 배치) or [n_frames, 2] (두번째 배치 이후부터)
+                    closest_cam = cam_distance_min[1][:,:len(batch_idxs)]
+                    # 예시: closest_cam = tensor([
+                    #   [1, 0],  # 카메라 0: key_cams[1]과 key_cams[0]가 가장 가까움
+                    #   [2, 3],  # 카메라 1: key_cams[2]과 key_cams[3]가 가장 가까움
+                    #   [1, 4],  # 카메라 2: key_cams[1]과 key_cams[4]가 가장 가까움
+                    #   [1, 4],  # 카메라 3: key_cams[1]과 key_cams[4]가 가장 가까움
+                    #   [2, 3],  # 카메라 4: key_cams[2]과 key_cams[3]가 가장 가까움
+                    # ], device='cuda:0')
 
-                    closest_cam_pivot_hidden_states = self.pivot_hidden_states[1][closest_cam] # shape: [5, 1, 4096, 320] or [5, 2, 4096, 320]
+                    # 가장 가까운 key-view의 hidden states 가져오기
+                    # shape: [n_frames, 1, sequence_length, dim] or [n_frames, 2, sequence_length, dim]
+                    closest_cam_pivot_hidden_states = self.pivot_hidden_states[1][closest_cam]
                     
-                    # 현재 view와 key camera view 간의 similarity 계산
-                    sim = torch.einsum('bld,bcsd->bcls', norm_hidden_states[1] / norm_hidden_states[1].norm(dim=-1, keepdim=True), closest_cam_pivot_hidden_states / closest_cam_pivot_hidden_states.norm(dim=-1, keepdim=True)).squeeze()
+                    # ============================================================
+                    # Step 2: Feature Similarity 계산
+                    # ============================================================
+                    # 현재 뷰의 각 픽셀과 key-view의 각 픽셀 간 cosine similarity 계산
+                    # norm_hidden_states[1]: 현재 뷰의 normalized hidden states (image 조건)
+                    # closest_cam_pivot_hidden_states: 가장 가까운 key-view의 hidden states
+                    # 
+                    # einsum 연산:
+                    #   'bld': (batch, sequence_length, dim) - 현재 뷰 픽셀 feature
+                    #   'bcsd': (batch, closest_cam, sequence_length, dim) - key-view 픽셀 feature
+                    #   'bcls': (batch, closest_cam, sequence_length, sequence_length) - similarity 행렬
+                    #
+                    # sim[i, j, k, l] = 현재 뷰의 i번째 배치, k번째 픽셀과
+                    #                  key-view의 j번째 카메라, l번째 픽셀 간의 feature similarity
+                    sim = torch.einsum('bld,bcsd->bcls', 
+                                     norm_hidden_states[1] / norm_hidden_states[1].norm(dim=-1, keepdim=True), 
+                                     closest_cam_pivot_hidden_states / closest_cam_pivot_hidden_states.norm(dim=-1, keepdim=True)).squeeze()
                         
-                    # Epipolar constraint 적용 전 초기 similarity 기반 인덱스 찾기
+                    # ============================================================
+                    # Step 3: Epipolar Constraint 적용 전 초기 매칭 (참고용)
+                    # ============================================================
+                    # Epipolar constraint 적용 전에 feature similarity만으로 매칭을 찾음
+                    # (실제로는 아래에서 epipolar constraint를 적용한 후 다시 계산)
                     if len(batch_idxs) == 2:
-                        sim1, sim2 = sim.chunk(2, dim=1)
+                        sim1, sim2 = sim.chunk(2, dim=1)  # 두 개의 가까운 key-view로 분리
                         sim1 = sim1.view(-1, sequence_length) 
                         sim2 = sim2.view(-1, sequence_length) 
-                        sim1_max = sim1.max(dim=-1)
+                        sim1_max = sim1.max(dim=-1)  # 각 픽셀에서 가장 유사한 key-view 픽셀
                         sim2_max = sim2.max(dim=-1)
-                        idx1.append(sim1_max[1])
+                        idx1.append(sim1_max[1])  # 인덱스 저장 (참고용, 나중에 덮어씀)
                         idx2.append(sim2_max[1])
                     else:
-                        sim = sim.view(-1, sequence_length) # 현재 배치 key camera와의 similarity
+                        sim = sim.view(-1, sequence_length)  # 현재 배치 key camera와의 similarity
                         sim_max = sim.max(dim=-1)
-                        idx1.append(sim_max[1])
+                        idx1.append(sim_max[1])  # 인덱스 저장 (참고용, 나중에 덮어씀)
 
-                    # Epipolar constraint 적용하여 geometry에 맞지 않는 similarity 제거
+                    # ============================================================
+                    # Step 4: Epipolar Constraint 적용
+                    # ============================================================
+                    # Feature similarity만으로는 부족한 경우가 있음:
+                    #   - 텍스처 반복: 같은 패턴이 여러 곳에 있으면 잘못된 매칭 발생
+                    #   - 조명 변화: 다른 뷰에서 조명이 달라지면 feature가 달라짐
+                    #   - 가려짐: 일부 픽셀이 다른 뷰에서 가려지면 feature가 없음
+                    #
+                    # Epipolar constraint는 geometry적으로 가능한 매칭만 허용:
+                    #   - 한 뷰의 픽셀은 다른 뷰의 특정 epipolar line 위에만 대응 가능
+                    #   - 이 line에서 멀리 떨어진 픽셀은 geometry적으로 불가능
+                    
                     if len(batch_idxs) == 2:
                         idx1 = []
                         idx2 = []
                         pivot_this_batch = self.pivot_this_batch
                         
-                        # 가장 가까운 key camera에 대한 epipolar constraint 가져오기
-                        idx1_epipolar, idx2_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda().chunk(2, dim=1)
+                        # ============================================================
+                        # 4-1. Epipolar Constraint 마스크 가져오기
+                        # ============================================================
+                        # 가장 가까운 key-view에 대한 epipolar constraint 가져오기
+                        # epipolar_constrains[sequence_length]: (n_key_cams, n_cams, H*W, H*W)
+                        #   - 각 key-view와 현재 뷰 간의 epipolar constraint
+                        #   - idx1_epipolar[i, j, k] = True → i번째 픽셀에서 k번째 epipolar line까지의 거리가 1보다 큼
+                        #   - → Geometry적으로 불가능한 매칭
+                        idx1_epipolar, idx2_epipolar = self.epipolar_constrains[sequence_length].gather(
+                            dim=1, 
+                            index=closest_cam[:, :, None, None].expand(-1, -1, 
+                                self.epipolar_constrains[sequence_length].shape[2], 
+                                self.epipolar_constrains[sequence_length].shape[3])
+                        ).cuda().chunk(2, dim=1)
                         idx1_epipolar = idx1_epipolar.reshape(n_frames, sequence_length, sequence_length)
     
-                        # Pivot camera 자체는 constraint 적용 안 함
+                        # ============================================================
+                        # 4-2. Pivot Camera 제외
+                        # ============================================================
+                        # Pivot camera (key-view) 자체는 constraint 적용 안 함
+                        # (자기 자신과의 매칭은 항상 가능)
                         idx1_epipolar[pivot_this_batch, ...] = False
                         idx2_epipolar = idx2_epipolar.reshape(n_frames, sequence_length, sequence_length)
 
+                        # ============================================================
+                        # 4-3. Reshape 및 Edge Case 처리
+                        # ============================================================
                         idx1_epipolar = idx1_epipolar.reshape(n_frames * sequence_length, sequence_length)
                         idx2_epipolar = idx2_epipolar.reshape(n_frames * sequence_length, sequence_length)
-                        idx2_sum = idx2_epipolar.sum(dim=-1)
+                        idx2_sum = idx2_epipolar.sum(dim=-1)  # 각 픽셀에 대해 constraint에 걸린 픽셀 수
                         idx1_sum = idx1_epipolar.sum(dim=-1)
 
                         # 모든 픽셀이 constraint에 걸리는 경우는 제외
+                        # (이 경우 epipolar constraint를 적용하면 매칭이 불가능하므로)
                         idx1_epipolar[idx1_sum == sequence_length, :] = False
                         idx2_epipolar[idx2_sum == sequence_length, :] = False
                         
-                        # Epipolar constraint를 위반하는 similarity를 0으로 설정
+                        # ============================================================
+                        # 4-4. Geometry적으로 불가능한 매칭의 Similarity 제거
+                        # ============================================================
+                        # Epipolar constraint를 위반하는 픽셀 쌍의 similarity를 0으로 설정
+                        # → 매칭 후보에서 제외
                         sim1[idx1_epipolar] = 0
                         sim2[idx2_epipolar] = 0
 
-                        # Constraint 적용 후 가장 유사한 픽셀 인덱스 찾기
-                        sim1_max = sim1.max(dim=-1)
+                        # ============================================================
+                        # Step 5: 최적 매칭 찾기
+                        # ============================================================
+                        # Epipolar constraint를 적용한 후 가장 유사한 픽셀 인덱스 찾기
+                        # → Feature similarity가 높으면서 동시에 geometry적으로도 가능한 매칭
+                        sim1_max = sim1.max(dim=-1)  # 각 픽셀에서 가장 유사한 key-view 픽셀
                         sim2_max = sim2.max(dim=-1)
-                        idx1.append(sim1_max[1])
+                        idx1.append(sim1_max[1])  # 매칭된 픽셀 인덱스 저장
                         idx2.append(sim2_max[1])
                     else:
+                        # 하나의 가까운 key-view만 있는 경우
                         idx1 = []
                         pivot_this_batch = self.pivot_this_batch
 
-                        # Epipolar constraint 마스크 가져오기
-                        idx1_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda()
+                        # ============================================================
+                        # Epipolar Constraint 마스크 가져오기 (단일 key-view)
+                        # ============================================================
+                        idx1_epipolar = self.epipolar_constrains[sequence_length].gather(
+                            dim=1, 
+                            index=closest_cam[:, :, None, None].expand(-1, -1, 
+                                self.epipolar_constrains[sequence_length].shape[2], 
+                                self.epipolar_constrains[sequence_length].shape[3])
+                        ).cuda()
 
                         idx1_epipolar = idx1_epipolar.view(n_frames, -1, sequence_length)
-                        idx1_epipolar[pivot_this_batch, ...] = False
+                        idx1_epipolar[pivot_this_batch, ...] = False  # Pivot camera 제외
 
                         idx1_epipolar = idx1_epipolar.view(n_frames * sequence_length, sequence_length)
                         idx1_sum = idx1_epipolar.sum(dim=-1)
-                        idx1_epipolar[idx1_sum == sequence_length, :] = False
+                        idx1_epipolar[idx1_sum == sequence_length, :] = False  # Edge case 처리
                         
+                        # ============================================================
                         # Geometry에 맞지 않는 similarity를 0으로 설정
+                        # ============================================================
+                        # geometry 적으로 맞지 않는 픽셀의 similarity 값을 0으로 만듦.
                         sim[idx1_epipolar] = 0
+                        
+                        # ============================================================
+                        # 최적 매칭 찾기
+                        # ============================================================
+                        # 각 픽셀에서 가장 유사한 key-view 픽셀 index를 찾음.
                         sim_max = sim.max(dim=-1)
-                        idx1.append(sim_max[1])
+                        idx1.append(sim_max[1])  # 이 index를 기준으로 나중에 attention 결과를 gather 함.
                             
                     idx1 = torch.stack(idx1 * 3, dim=0) # 3, n_frames * seq_len
                     idx1 = idx1.squeeze(1)
@@ -549,7 +634,7 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                         idx1 = idx1.view(3, n_frames, sequence_length)
                         idx2 = idx2.view(3, n_frames, sequence_length)
                         
-                        # Epipolar constraint를 만족하는 픽셀의 attention 값만 선택
+                        ## Epipolar constraint를 만족하는 픽셀의 attention 값만 선택
                         attn_output1 = attn_1.gather(dim=2, index=idx1.unsqueeze(-1).repeat(1, 1, 1, dim))
                         attn_output2 = attn_2.gather(dim=2, index=idx2.unsqueeze(-1).repeat(1, 1, 1, dim))
                         
