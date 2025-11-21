@@ -2,7 +2,7 @@ import os
 import time
 from contextlib import contextmanager
 from typing import Dict, List, Tuple
-
+import torch
 
 class LatencyLogger:
     def __init__(self, base_dir: str) -> None:
@@ -11,15 +11,31 @@ class LatencyLogger:
         self.name_to_total_s: Dict[str, float] = {}
         self.entries: List[Tuple[str, float]] = []
 
+    # @contextmanager
+    # def timeit(self, name: str):
+    #     start = time.time()
+    #     try:
+    #         yield
+    #     finally:
+    #         dt = time.time() - start
+    #         self.name_to_total_s[name] = self.name_to_total_s.get(name, 0.0) + dt
+    #         self.entries.append((name, dt))
+
     @contextmanager
     def timeit(self, name: str):
+    # CPU timestamp before
         start = time.time()
         try:
             yield
         finally:
+            # ---- ADD THIS ----
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            # -------------------
             dt = time.time() - start
             self.name_to_total_s[name] = self.name_to_total_s.get(name, 0.0) + dt
             self.entries.append((name, dt))
+
 
     def record(self, name: str, seconds: float) -> None:
         self.name_to_total_s[name] = self.name_to_total_s.get(name, 0.0) + seconds
