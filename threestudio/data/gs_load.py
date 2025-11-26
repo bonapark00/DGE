@@ -241,10 +241,20 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 self.cfg.max_edit_view_num
             )
         elif self.cfg.edit_view_selection_strategy == "row":
+            # row 전략: 기존 카메라 선택
             self.edit_view_index = self._select_cameras_by_rows(
                 range(0, self.total_view_num),
                 self.cfg.max_edit_view_num
             )
+        elif self.cfg.edit_view_selection_strategy == "row-generate":
+            # row-generate 전략: 새로운 카메라 뷰 생성 (4개 row, 각 5개씩)
+            self.generated_cameras, self.edit_view_index = self._generate_cameras_by_rows()
+            # 생성된 카메라를 scene.cameras에 추가
+            original_cam_count = len(self.scene.cameras)
+            self.scene.cameras.extend(self.generated_cameras)
+            self.total_view_num = len(self.scene.cameras)
+            # 생성된 카메라의 인덱스는 원본 카메라 개수 이후부터 시작
+            self.edit_view_index = [original_cam_count + i for i in range(len(self.generated_cameras))]
         elif self.cfg.edit_view_selection_strategy == "manual-20":
             self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
         elif self.cfg.edit_view_selection_strategy == "manual-15":
@@ -466,6 +476,130 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 selected_indices.extend(selected)
         
         return selected_indices
+
+    def _generate_cameras_by_rows(self):
+        """
+        4개 row에 각각 5개의 카메라 뷰를 생성 (총 20개)
+        각 row마다 좌우로 퍼지게 배치
+        
+        Returns:
+            generated_cameras: 생성된 카메라 객체 리스트
+            camera_indices: 생성된 카메라의 인덱스 리스트
+        """
+        from gaussiansplatting.scene.cameras import C2W_Camera
+        import math
+        
+        # 기존 카메라들의 위치 분석
+        cam_centers = []
+        cam_orientations = []
+        FoV_list = []
+        
+        for idx in range(len(self.scene.cameras)):
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            if isinstance(center, torch.Tensor):
+                center = center.detach().cpu().numpy()
+            else:
+                center = np.array(center)
+            cam_centers.append(center)
+            
+            # 카메라 방향 추출 (c2w에서)
+            c2w = torch.inverse(cam.world_view_transform.T)
+            R = c2w[:3, :3].detach().cpu().numpy()
+            cam_orientations.append(R)
+            
+            # FoV 저장
+            FoV_list.append(cam.FoVy)
+        
+        cam_centers = np.array(cam_centers)  # shape: (N, 3)
+        
+        # y 좌표 범위 계산
+        min_y = np.min(cam_centers[:, 1])
+        max_y = np.max(cam_centers[:, 1])
+        y_range = max_y - min_y
+        
+        # x 좌표 범위 계산
+        min_x = np.min(cam_centers[:, 0])
+        max_x = np.max(cam_centers[:, 0])
+        x_range = max_x - min_x
+        
+        # z 좌표 (평균값 사용)
+        mean_z = np.mean(cam_centers[:, 2])
+        
+        # 평균 FoV 사용
+        mean_FoVy = np.mean(FoV_list) if FoV_list else (np.pi / 3.0)  # 기본값 60도
+        
+        # 카메라 해상도 (기존 카메라에서 가져오기)
+        height = self.scene.cameras[0].image_height
+        width = self.scene.cameras[0].image_width
+        
+        # 4개 row의 y 좌표 계산
+        row_y_positions = [
+            min_y + y_range * 0.125,  # row 0: 12.5% 지점
+            min_y + y_range * 0.375,  # row 1: 37.5% 지점
+            min_y + y_range * 0.625,  # row 2: 62.5% 지점
+            min_y + y_range * 0.875,  # row 3: 87.5% 지점
+        ]
+        
+        # 각 row마다 5개의 카메라 생성 (좌우로 퍼지게)
+        num_cameras_per_row = 5
+        generated_cameras = []
+        
+        for row_idx, row_y in enumerate(row_y_positions):
+            # x 좌표를 좌우로 퍼지게 5개 생성
+            # x 범위를 약간 확장해서 더 넓게 배치
+            x_margin = x_range * 0.1  # 10% 마진
+            x_start = min_x - x_margin
+            x_end = max_x + x_margin
+            x_positions = np.linspace(x_start, x_end, num_cameras_per_row)
+            
+            for cam_idx_in_row, x_pos in enumerate(x_positions):
+                # 카메라 위치
+                camera_position = np.array([x_pos, row_y, mean_z])
+                
+                # 카메라가 원점을 바라보도록 설정
+                # 원점 방향 벡터
+                target = np.array([0.0, 0.0, 0.0])  # 원점
+                direction = target - camera_position
+                direction = direction / (np.linalg.norm(direction) + 1e-8)
+                
+                # 카메라 좌표계 생성 (look-at)
+                # forward: 원점 방향
+                forward = direction
+                # right: forward와 up의 외적
+                up = np.array([0.0, 1.0, 0.0])  # y축이 위
+                right = np.cross(forward, up)
+                right = right / (np.linalg.norm(right) + 1e-8)
+                # up: right와 forward의 외적
+                up = np.cross(right, forward)
+                up = up / (np.linalg.norm(up) + 1e-8)
+                
+                # c2w 행렬 생성
+                c2w = np.eye(4)
+                c2w[:3, 0] = right
+                c2w[:3, 1] = up
+                c2w[:3, 2] = -forward  # OpenGL/OpenCV 좌표계에 따라
+                c2w[:3, 3] = camera_position
+                
+                # torch tensor로 변환
+                c2w_tensor = torch.from_numpy(c2w).float()
+                
+                # C2W_Camera 생성
+                camera = C2W_Camera(
+                    c2w=c2w_tensor,
+                    FoVy=mean_FoVy,
+                    height=height,
+                    width=width,
+                    data_device="cuda"
+                )
+                
+                generated_cameras.append(camera)
+        
+        # 생성된 카메라 인덱스 (원본 카메라 개수 이후부터 시작)
+        camera_indices = list(range(len(self.scene.cameras), 
+                                   len(self.scene.cameras) + len(generated_cameras)))
+        
+        return generated_cameras, camera_indices
 
     def collate(self, batch) -> Dict[str, Any]:
         cam_list = []
