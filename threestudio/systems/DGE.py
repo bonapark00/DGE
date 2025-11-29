@@ -606,40 +606,40 @@ class DGE(BaseLift3DSystem):
             name="test",
             step=self.true_global_step,
         )
-        save_list = []
-        # view_sorted 순서대로 저장 (순서가 저장되어 있으면 사용, 없으면 view index 오름차순)
-        if len(self.edit_frames_order) > 0:
-            # view_sorted 순서대로 저장
-            for index in self.edit_frames_order:
-                if index in self.edit_frames:
-                    # 이미지에 인덱스 번호 추가
-                    img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
-                    save_list.append(
-                        {
-                            "type": "rgb",
-                            "img": img_with_index,
-                            "kwargs": {"data_format": "HWC"},
-                        },
-                    )
-        else:
-            # 순서 정보가 없으면 view index 오름차순으로 정렬
-            for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
-                # 이미지에 인덱스 번호 추가
-                img_with_index = self._add_index_to_image(image[0], index)
-                save_list.append(
-                    {
-                        "type": "rgb",
-                        "img": img_with_index,
-                        "kwargs": {"data_format": "HWC"},
-                    },
-                )
-        if len(save_list) > 0:
-            self.save_image_grid(
-                f"edited_images.png",
-                save_list,
-                name="edited_images",
-                step=self.true_global_step,
-            )
+        # save_list = []
+        # # view_sorted 순서대로 저장 (순서가 저장되어 있으면 사용, 없으면 view index 오름차순)
+        # if len(self.edit_frames_order) > 0:
+        #     # view_sorted 순서대로 저장
+        #     for index in self.edit_frames_order:
+        #         if index in self.edit_frames:
+        #             # 이미지에 인덱스 번호 추가
+        #             img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+        #             save_list.append(
+        #                 {
+        #                     "type": "rgb",
+        #                     "img": img_with_index,
+        #                     "kwargs": {"data_format": "HWC"},
+        #                 },
+        #             )
+        # else:
+        #     # 순서 정보가 없으면 view index 오름차순으로 정렬
+        #     for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
+        #         # 이미지에 인덱스 번호 추가
+        #         img_with_index = self._add_index_to_image(image[0], index)
+        #         save_list.append(
+        #             {
+        #                 "type": "rgb",
+        #                 "img": img_with_index,
+        #                 "kwargs": {"data_format": "HWC"},
+        #             },
+        #         )
+        # if len(save_list) > 0:
+        #     self.save_image_grid(
+        #         f"edited_images.png",
+        #         save_list,
+        #         name="edited_images",
+        #         step=self.true_global_step,
+        #     )
 
         save_path = self.get_save_path(f"last.ply")
         print("save_path", save_path)
@@ -754,6 +754,43 @@ class DGE(BaseLift3DSystem):
                 for view_index_tmp in range(len(self.edit_view_index)):
                     self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
     
+        save_list = []
+        # view_sorted 순서대로 저장 (순서가 저장되어 있으면 사용, 없으면 view index 오름차순)
+        if len(self.edit_frames_order) > 0:
+            # view_sorted 순서대로 저장
+            for index in self.edit_frames_order:
+                if index in self.edit_frames:
+                    # 이미지에 인덱스 번호 추가
+                    img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+                    save_list.append(
+                        {
+                            "type": "rgb",
+                            "img": img_with_index,
+                            "kwargs": {"data_format": "HWC"},
+                        },
+                    )
+        else:
+            # 순서 정보가 없으면 view index 오름차순으로 정렬
+            for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
+                # 이미지에 인덱스 번호 추가
+                img_with_index = self._add_index_to_image(image[0], index)
+                save_list.append(
+                    {
+                        "type": "rgb",
+                        "img": img_with_index,
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                )
+        if len(save_list) > 0:
+            self.save_image_grid(
+                f"edited_images.png",
+                save_list,
+                name="edited_images",
+                step=self.true_global_step,
+            )
+        print("edited images saved")
+
+
     def sort_the_cameras_idx(self, cams):
         foward_vectos = [cam.R[:, 2] for cam in cams]
         foward_vectos = np.array(foward_vectos)
