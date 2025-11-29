@@ -248,18 +248,23 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
             )
         elif self.cfg.edit_view_selection_strategy == "row-generate":
             # row-generate 전략: 새로운 카메라 뷰 생성 (4개 row, 각 5개씩)
+            # 함수 내부에서 이미 scene.cameras에 추가하고 인덱스를 반환함
             self.generated_cameras, self.edit_view_index = self._generate_cameras_by_rows()
-            # 생성된 카메라를 scene.cameras에 추가
-            original_cam_count = len(self.scene.cameras)
-            self.scene.cameras.extend(self.generated_cameras)
             self.total_view_num = len(self.scene.cameras)
-            # 생성된 카메라의 인덱스는 원본 카메라 개수 이후부터 시작
-            self.edit_view_index = [original_cam_count + i for i in range(len(self.generated_cameras))]
+
+        elif self.cfg.edit_view_selection_strategy == "spherical":
+            self.generated_cameras, self.edit_view_index = self._generate_spherical_novel_cameras()
+            self.total_view_num = len(self.scene.cameras)
+        elif self.cfg.edit_view_selection_strategy == "depth":
+            self.edit_view_index = self._select_cameras_by_depth()
+            self.total_view_num = len(self.scene.cameras)
+
         elif self.cfg.edit_view_selection_strategy == "manual-20":
             self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
         elif self.cfg.edit_view_selection_strategy == "manual-15":
             # self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 16, 19, 20, 21, 24]
             self.edit_view_index = [10, 7, 6, 50, 3, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
+
         elif self.cfg.edit_view_selection_strategy == "random":
             self.edit_view_index = random.sample(
                 range(0, self.total_view_num),
@@ -386,6 +391,71 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         
         return selected_indices
 
+    def _select_cameras_by_farthest(self, candidate_indices, num_cameras: int):
+        """
+        기존 self.scene.cameras 중에서 camera_center를 기준으로
+        farthest point sampling(FPS)으로 num_cameras개를 선택.
+
+        Args:
+            candidate_indices: 선택 가능한 카메라 인덱스 리스트 또는 range 객체
+            num_cameras: 선택할 카메라 개수
+
+        Returns:
+            선택된 카메라 인덱스 리스트
+        """
+        import numpy as np
+        import torch
+
+        candidate_indices = list(candidate_indices)
+        if len(candidate_indices) == 0:
+            return []
+        if len(candidate_indices) <= num_cameras:
+            return candidate_indices
+
+        # camera_center 모으기
+        cam_centers = []
+        for idx in candidate_indices:
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            if isinstance(center, torch.Tensor):
+                center = center.detach().cpu().numpy()
+            cam_centers.append(center)
+        cam_centers = np.array(cam_centers, dtype=np.float32)  # (N, 3)
+
+        N = cam_centers.shape[0]
+        K = min(num_cameras, N)
+
+        # 초기점: 전체 center의 평균에서 가장 먼 카메라
+        mean_center = cam_centers.mean(axis=0, keepdims=True)  # (1, 3)
+        dists_to_mean = np.linalg.norm(cam_centers - mean_center, axis=1)  # (N,)
+        first_idx_local = int(np.argmax(dists_to_mean))
+
+        selected_local_indices = [first_idx_local]
+
+        # 각 포인트가 현재 선택 집합과 가지는 최소 거리
+        min_dists = np.linalg.norm(
+            cam_centers - cam_centers[first_idx_local:first_idx_local + 1], axis=1
+        )  # (N,)
+
+        for _ in range(1, K):
+            # 아직 선택되지 않은 것들 중에서 min_dists가 가장 큰 것 선택
+            # 이미 선택된 인덱스는 -1로 마킹해서 다시 뽑히지 않도록 처리
+            min_dists[selected_local_indices] = -1.0
+            next_idx_local = int(np.argmax(min_dists))
+            selected_local_indices.append(next_idx_local)
+
+            # 새로 선택된 포인트와의 거리로 min_dists 업데이트
+            new_dists = np.linalg.norm(
+                cam_centers - cam_centers[next_idx_local:next_idx_local + 1], axis=1
+            )
+            # 아직 선택되지 않은 위치에 대해서만 최소 거리 갱신
+            mask = min_dists >= 0.0
+            min_dists[mask] = np.minimum(min_dists[mask], new_dists[mask])
+
+        # local index -> 원래 scene 카메라 인덱스로 매핑
+        selected_indices = [candidate_indices[i] for i in selected_local_indices]
+        return selected_indices
+
     def _select_cameras_by_rows(self, candidate_indices, num_cameras):
         """
         y축으로 4등분해서 각 row마다 균등한 개수의 카메라를 선택
@@ -479,127 +549,184 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
 
     def _generate_cameras_by_rows(self):
         """
-        4개 row에 각각 5개의 카메라 뷰를 생성 (총 20개)
-        각 row마다 좌우로 퍼지게 배치
-        
-        Returns:
-            generated_cameras: 생성된 카메라 객체 리스트
-            camera_indices: 생성된 카메라의 인덱스 리스트
+        4개 row × 각 5개의 카메라(총 20개)를 기존 카메라 분포를 기준으로 생성.
+        - y축을 값 기준으로 4등분해서 row를 나눔
+        - 각 row 안에서 기존 카메라의 x 범위에서 5개 위치를 샘플
+        - 회전(R)은 해당 row의 '대표 카메라'에서 그대로 가져오고, 위치(translation)만 바꿈
+        => GS/Colmap 좌표계 convention을 유지하므로 검정 화면 문제를 피함
         """
         from gaussiansplatting.scene.cameras import C2W_Camera
-        import math
-        
-        # 기존 카메라들의 위치 분석
-        cam_centers = []
-        cam_orientations = []
-        FoV_list = []
-        
-        for idx in range(len(self.scene.cameras)):
-            cam = self.scene.cameras[idx]
-            center = cam.camera_center
-            if isinstance(center, torch.Tensor):
-                center = center.detach().cpu().numpy()
-            else:
-                center = np.array(center)
-            cam_centers.append(center)
-            
-            # 카메라 방향 추출 (c2w에서)
-            c2w = torch.inverse(cam.world_view_transform.T)
-            R = c2w[:3, :3].detach().cpu().numpy()
-            cam_orientations.append(R)
-            
-            # FoV 저장
-            FoV_list.append(cam.FoVy)
-        
-        cam_centers = np.array(cam_centers)  # shape: (N, 3)
-        
-        # y 좌표 범위 계산
-        min_y = np.min(cam_centers[:, 1])
-        max_y = np.max(cam_centers[:, 1])
+        import numpy as np
+        import torch
+
+        # 1. 기존 카메라 인덱스와 center 수집
+        indices = list(range(len(self.scene.cameras)))
+        centers = []
+        for idx in indices:
+            c = self.scene.cameras[idx].camera_center
+            if isinstance(c, torch.Tensor):
+                c = c.detach().cpu().numpy()
+            centers.append(c)
+        centers = np.array(centers)  # (N, 3)
+
+        # 2. y축으로 4등분
+        min_y = np.min(centers[:, 1])
+        max_y = np.max(centers[:, 1])
         y_range = max_y - min_y
-        
-        # x 좌표 범위 계산
-        min_x = np.min(cam_centers[:, 0])
-        max_x = np.max(cam_centers[:, 0])
-        x_range = max_x - min_x
-        
-        # z 좌표 (평균값 사용)
-        mean_z = np.mean(cam_centers[:, 2])
-        
-        # 평균 FoV 사용
-        mean_FoVy = np.mean(FoV_list) if FoV_list else (np.pi / 3.0)  # 기본값 60도
-        
-        # 카메라 해상도 (기존 카메라에서 가져오기)
+        y_b1 = min_y + 0.25 * y_range
+        y_b2 = min_y + 0.50 * y_range
+        y_b3 = min_y + 0.75 * y_range
+
+        rows = {0: [], 1: [], 2: [], 3: []}  # 각 row에 카메라 인덱스 저장
+        for idx, c in zip(indices, centers):
+            y = c[1]
+            if y < y_b1:
+                rows[0].append(idx)
+            elif y < y_b2:
+                rows[1].append(idx)
+            elif y < y_b3:
+                rows[2].append(idx)
+            else:
+                rows[3].append(idx)
+
+        generated_cameras = []
+
         height = self.scene.cameras[0].image_height
         width = self.scene.cameras[0].image_width
-        
-        # 4개 row의 y 좌표 계산
-        row_y_positions = [
-            min_y + y_range * 0.125,  # row 0: 12.5% 지점
-            min_y + y_range * 0.375,  # row 1: 37.5% 지점
-            min_y + y_range * 0.625,  # row 2: 62.5% 지점
-            min_y + y_range * 0.875,  # row 3: 87.5% 지점
-        ]
-        
-        # 각 row마다 5개의 카메라 생성 (좌우로 퍼지게)
-        num_cameras_per_row = 5
-        generated_cameras = []
-        
-        for row_idx, row_y in enumerate(row_y_positions):
-            # x 좌표를 좌우로 퍼지게 5개 생성
-            # x 범위를 약간 확장해서 더 넓게 배치
-            x_margin = x_range * 0.1  # 10% 마진
-            x_start = min_x - x_margin
-            x_end = max_x + x_margin
-            x_positions = np.linspace(x_start, x_end, num_cameras_per_row)
-            
-            for cam_idx_in_row, x_pos in enumerate(x_positions):
-                # 카메라 위치
-                camera_position = np.array([x_pos, row_y, mean_z])
-                
-                # 카메라가 원점을 바라보도록 설정
-                # 원점 방향 벡터
-                target = np.array([0.0, 0.0, 0.0])  # 원점
-                direction = target - camera_position
-                direction = direction / (np.linalg.norm(direction) + 1e-8)
-                
-                # 카메라 좌표계 생성 (look-at)
-                # forward: 원점 방향
-                forward = direction
-                # right: forward와 up의 외적
-                up = np.array([0.0, 1.0, 0.0])  # y축이 위
-                right = np.cross(forward, up)
-                right = right / (np.linalg.norm(right) + 1e-8)
-                # up: right와 forward의 외적
-                up = np.cross(right, forward)
-                up = up / (np.linalg.norm(up) + 1e-8)
-                
-                # c2w 행렬 생성
-                c2w = np.eye(4)
-                c2w[:3, 0] = right
-                c2w[:3, 1] = up
-                c2w[:3, 2] = -forward  # OpenGL/OpenCV 좌표계에 따라
-                c2w[:3, 3] = camera_position
-                
-                # torch tensor로 변환
-                c2w_tensor = torch.from_numpy(c2w).float()
-                
-                # C2W_Camera 생성
-                camera = C2W_Camera(
+        fovy = self.scene.cameras[0].FoVy
+
+        # 3. 각 row마다 5개씩 생성
+        for r in range(4):
+            row_idx_list = rows[r]
+            if len(row_idx_list) == 0:
+                continue
+
+            row_centers = centers[row_idx_list]  # (Nr, 3)
+
+            # x 범위, y/z 대표값
+            x_min, x_max = row_centers[:, 0].min(), row_centers[:, 0].max()
+            y_med = np.median(row_centers[:, 1])
+            z_med = np.median(row_centers[:, 2])
+
+            x_samples = np.linspace(x_min, x_max, 5)
+
+            # 이 row의 '대표 카메라' 하나 선택 (중앙 인덱스)
+            ref_idx = row_idx_list[len(row_idx_list) // 2]
+            ref_cam = self.scene.cameras[ref_idx]
+
+            # ref_cam 의 world_view_transform 을 이용해 c2w 추출
+            # (Graphdeco convention: c2w = inv(world_view_transform^T))
+            ref_wv = ref_cam.world_view_transform  # 4x4
+            ref_c2w = torch.inverse(ref_wv.T).detach().cpu().numpy()
+
+            # ref 카메라의 기존 center (검증용)
+            ref_center = ref_c2w[:3, 3].copy()
+
+            for x in x_samples:
+                new_c2w = ref_c2w.copy()
+                new_c2w[:3, 3] = np.array([x, y_med, z_med], dtype=np.float32)
+
+                c2w_tensor = torch.from_numpy(new_c2w).float()
+
+                new_cam = C2W_Camera(
                     c2w=c2w_tensor,
-                    FoVy=mean_FoVy,
+                    FoVy=fovy,
                     height=height,
                     width=width,
-                    data_device="cuda"
+                    data_device="cuda",
                 )
-                
-                generated_cameras.append(camera)
-        
-        # 생성된 카메라 인덱스 (원본 카메라 개수 이후부터 시작)
-        camera_indices = list(range(len(self.scene.cameras), 
-                                   len(self.scene.cameras) + len(generated_cameras)))
-        
+                generated_cameras.append(new_cam)
+
+        # 4. scene 에 append 하고 인덱스 반환
+        start_idx = len(self.scene.cameras)
+        self.scene.cameras.extend(generated_cameras)
+        end_idx = len(self.scene.cameras)
+
+        camera_indices = list(range(start_idx, end_idx))
         return generated_cameras, camera_indices
+
+
+    def estimate_radius_from_cameras(self, quantile: float = 0.8) -> float:
+        """
+        기존 scene.cameras의 camera_center 분포에서 적당한 반지름을 추정.
+        - 너무 작은 반지름이면 오ブ젝트에 너무 가까워서 깨질 수 있어서
+        상위 quantile 쪽 거리(예: 80% 지점)를 사용.
+        """
+        cam_centers = []
+        for cam in self.scene.cameras:
+            c = cam.camera_center
+            if isinstance(c, torch.Tensor):
+                c = c.detach().cpu().numpy()
+            cam_centers.append(c)
+        cam_centers = np.array(cam_centers)  # (N,3)
+
+        # 원점으로부터의 거리
+        dists = np.linalg.norm(cam_centers, axis=1)
+        radius = float(np.quantile(dists, quantile))  # 예: 80% 지점
+        return radius
+
+
+    def _generate_spherical_novel_cameras(self,
+        n_azimuth: int = 24,
+        elevations: list[float] = [0.0, 15.0],
+        radius: float | None = None,
+        device: str = "cuda",
+    ):
+        """
+        3DGS 좌표계 기준 spherical novel view들을 생성.
+        - azimuth: 0~360도를 균일하게 샘플
+        - elevations: 여러 고도(각도)에서 링을 여러 개 생성
+        - radius: None이면 기존 카메라들에서 추정
+        """
+        if radius is None:
+            radius = self.estimate_radius_from_cameras()
+
+        height = self.scene.cameras[0].image_height
+        width = self.scene.cameras[0].image_width
+        fovy = self.scene.cameras[0].FoVy
+
+        from gaussiansplatting.scene.cameras import C2W_Camera
+        novel_cams: list[C2W_Camera] = []
+
+        for phi in elevations:            # 고도
+            for i in range(n_azimuth):    # 방위각
+                theta = 360.0 * i / n_azimuth  # [0, 360)
+                c2w = pose_spherical(theta, phi, radius)  # 이미 정의된 함수 사용
+                c2w = c2w.to(device)
+
+                cam = C2W_Camera(
+                    c2w=c2w,
+                    FoVy=fovy,
+                    height=height,
+                    width=width,
+                    data_device=device,
+                )
+                novel_cams.append(cam)
+
+        start_idx = len(self.scene.cameras)
+        self.scene.cameras.extend(novel_cams)
+        end_idx = len(self.scene.cameras)
+        camera_indices = list(range(start_idx, end_idx))
+        return novel_cams, camera_indices
+
+    def _select_cameras_by_depth(self):
+
+        device = "cuda"
+        source_masked_center = torch.tensor([1.4750, 2.2077, 7.0923], device=device)
+        cam_centers = []
+        for cam in self.scene.cameras:
+            c = cam.camera_center
+            if isinstance(c, torch.Tensor):
+                c = c.detach().to(device)
+            else:
+                c = torch.tensor(c, device=device, dtype=torch.float32)
+            cam_centers.append(c)
+        cam_centers = torch.stack(cam_centers, dim=0)  # (N,3)
+
+        dists = torch.norm(cam_centers - source_masked_center[None, :], dim=1)
+        sorted_indices = torch.argsort(dists).cpu().numpy()
+        selected_indices = sorted_indices[:20]
+        return list(selected_indices)   
 
     def collate(self, batch) -> Dict[str, Any]:
         cam_list = []
