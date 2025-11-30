@@ -246,7 +246,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 range(0, self.total_view_num),
                 self.cfg.max_edit_view_num
             )
-        elif self.cfg.edit_view_selection_strategy == "row-generate":
+        elif self.cfg.edit_view_selection_strategy == "row-generate": # 안돼~
             # row-generate 전략: 새로운 카메라 뷰 생성 (4개 row, 각 5개씩)
             # 함수 내부에서 이미 scene.cameras에 추가하고 인덱스를 반환함
             self.generated_cameras, self.edit_view_index = self._generate_cameras_by_rows()
@@ -258,7 +258,10 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         elif self.cfg.edit_view_selection_strategy == "depth":
             self.edit_view_index = self._select_cameras_by_depth()
             self.total_view_num = len(self.scene.cameras)
-
+        elif self.cfg.edit_view_selection_strategy == "y-axis":
+            self.edit_view_index = self._select_cameras_by_y_axis(self.cfg.max_edit_view_num)
+            self.total_view_num = len(self.scene.cameras)
+ 
         elif self.cfg.edit_view_selection_strategy == "manual-20":
             self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
         elif self.cfg.edit_view_selection_strategy == "manual-15":
@@ -710,7 +713,13 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         return novel_cams, camera_indices
 
     def _select_cameras_by_depth(self):
-
+        """
+        Select cameras based on distance from source_masked_center.
+        Returns the 20 cameras with the largest distance.
+        
+        Returns:
+            List of selected camera indices
+        """
         device = "cuda"
         source_masked_center = torch.tensor([1.4750, 2.2077, 7.0923], device=device)
         cam_centers = []
@@ -725,8 +734,38 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
 
         dists = torch.norm(cam_centers - source_masked_center[None, :], dim=1)
         sorted_indices = torch.argsort(dists).cpu().numpy()
-        selected_indices = sorted_indices[:20]
+        selected_indices = sorted_indices[-20:]
+        return list(selected_indices)
+
+    def _select_cameras_by_y_axis(self, num_cameras):
+        """
+        Select cameras based on y-axis value (highest y values).
+        
+        Args:
+            num_cameras: Number of cameras to select (default: 20)
+        
+        Returns:
+            List of selected camera indices
+        """
+        device = "cuda"
+        cam_centers = []
+        for cam in self.scene.cameras:
+            c = cam.camera_center
+            if isinstance(c, torch.Tensor):
+                c = c.detach().to(device)
+            else:
+                c = torch.tensor(c, device=device, dtype=torch.float32)
+            cam_centers.append(c)
+        cam_centers = torch.stack(cam_centers, dim=0)  # (N,3)
+
+        # Select by y-axis value (highest y values)
+        y_values = cam_centers[:, 1]  # y-axis is index 1
+        sorted_indices = torch.argsort(y_values, descending=True).cpu().numpy()
+        selected_indices = sorted_indices[:num_cameras]
+        
         return list(selected_indices)   
+
+
 
     def collate(self, batch) -> Dict[str, Any]:
         cam_list = []
