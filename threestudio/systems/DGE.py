@@ -53,7 +53,7 @@ class DGE(BaseLift3DSystem):
         max_densify_percent: float = 0.01
 
         gs_lr_scaler: float = 1
-        gs_final_lr_scaler: float = 1
+        gs_final_lr_scaler: float = 1            
         color_lr_scaler: float = 1
         opacity_lr_scaler: float = 1
         scaling_lr_scaler: float = 1
@@ -63,9 +63,17 @@ class DGE(BaseLift3DSystem):
         mask_thres: float = 0.5
         max_grad: float = 1e-7
         min_opacity: float = 0.005
+        
+        # floater pruning
+        prune_floater_at_step: int = -1  # -1: disabled, otherwise prune at this step
+        prune_floater_depth_range: Tuple[float, float] = (10.0, 15.0)  # depth range for object
+        prune_floater_threshold: float = 1.5  # multiplier: prune points beyond depth_range * threshold
 
         seg_prompt: str = ""
         target_prompt: str = ""
+        
+        # segmentation confidence threshold
+        seg_confidence_threshold: float = 0.3  # Only use masks when confidence >= this threshold
 
         # cache
         cache_overwrite: bool = True
@@ -106,7 +114,9 @@ class DGE(BaseLift3DSystem):
         self.origin_frames = {}
         self.edit_frames_order = []  # view_sorted 순서를 저장
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
-        self.text_segmentor = LangSAMTextSegmentor().to(get_device())
+        self.text_segmentor = LangSAMTextSegmentor(
+            confidence_threshold=self.cfg.seg_confidence_threshold
+        ).to(get_device())
 
         if len(self.cfg.cache_dir) > 0:
             print("Using cache directory: ", self.cfg.cache_dir)
@@ -130,12 +140,60 @@ class DGE(BaseLift3DSystem):
 
 
         elif seg_object == self.cfg.seg_prompt:
-            # view_list = self.view_list
-            view_list = random.sample(range(0, 60), 30)
+            # view_list = random.sample(range(0, 60), 30)
+            
+            # Select 30 cameras with largest distance from Gaussian center
+            all_cameras = self.trainer.datamodule.train_dataset.scene.cameras
+            
+            # Compute Gaussian center from model
+            gaussian_center = None
+            if hasattr(self, 'gaussian') and self.gaussian is not None:
+                try:
+                    xyz = self.gaussian.get_xyz  # (N, 3) tensor
+                    if isinstance(xyz, torch.Tensor):
+                        xyz_np = xyz.detach().cpu().numpy()
+                    else:
+                        xyz_np = np.array(xyz)
+                    gaussian_center = np.mean(xyz_np, axis=0).astype(np.float32)
+                    print(f"Computed Gaussian center from model: {gaussian_center}")
+                except Exception as e:
+                    threestudio.warn(f"Failed to get Gaussian center from model: {e}")
+            
+            # Fallback: use median of camera centers if Gaussian center not available
+            if gaussian_center is None:
+                cam_centers = []
+                for cam in all_cameras:
+                    center = cam.camera_center
+                    if isinstance(center, torch.Tensor):
+                        center = center.detach().cpu().numpy()
+                    cam_centers.append(center)
+                cam_centers = np.array(cam_centers)
+                gaussian_center = np.median(cam_centers, axis=0)
+                print(f"Using median of camera centers as object center: {gaussian_center}")
+            
+            gaussian_center_tensor = torch.tensor(gaussian_center, device=get_device(), dtype=torch.float32)
+            
+            # Calculate distance from each camera to Gaussian center
+            camera_distances = []
+            for idx, cam in enumerate(all_cameras):
+                camera_center = cam.camera_center
+                if isinstance(camera_center, torch.Tensor):
+                    camera_center = camera_center.to(get_device())
+                else:
+                    camera_center = torch.tensor(camera_center, device=get_device(), dtype=torch.float32)
+                
+                distance = torch.norm(camera_center - gaussian_center_tensor).item()
+                camera_distances.append((idx, distance))
+            
+            # Sort by distance (descending) and select top 30
+            camera_distances.sort(key=lambda x: x[1], reverse=True)
+            view_list = [idx for idx, _ in camera_distances[:30]]
+            
+            print(f"Selected 30 cameras with largest distance from Gaussian center: {[f'{idx}(dist={dist:.2f})' for idx, dist in camera_distances[:30]]}")
 
         # view_list = [_ for _ in range(0, 65)]
 
-        print(f"View list: {view_list}")
+        print(f"View list for segmentation: {view_list}")
 
         print(f"Segment with prompt: {seg_object}")
         mask_cache_dir = os.path.join(
@@ -225,6 +283,89 @@ class DGE(BaseLift3DSystem):
 
         self.gaussian.set_mask(selected_mask)
         self.gaussian.apply_grad_mask(selected_mask)
+
+    @torch.no_grad()
+    def prune_distant_floater_gaussians(self):
+        """
+        Prune Gaussian points that are too far from editing views.
+        If editing views have objects at depth 10-15, prune points beyond that range.
+        """
+        if not hasattr(self, 'edit_view_index') or len(self.edit_view_index) == 0:
+            print("No editing views available for floater pruning")
+            return
+        
+        print(f"Pruning distant floater Gaussians using {len(self.edit_view_index)} editing views...")
+        
+        # Get Gaussian point positions
+        gaussian_xyz = self.gaussian.get_xyz  # (N, 3)
+        num_gaussians = gaussian_xyz.shape[0]
+        
+        # Depth range for object (10-15)
+        depth_min, depth_max = self.cfg.prune_floater_depth_range
+        depth_threshold = depth_max * self.cfg.prune_floater_threshold  # e.g., 15 * 1.5 = 22.5
+        
+        # Track which points should be pruned
+        # A point is pruned if it's too far from ALL editing views
+        # Start with all points marked as "too far" (True = prune)
+        prune_mask = torch.ones(num_gaussians, dtype=torch.bool, device=gaussian_xyz.device)
+        
+        # Find the maximum object depth across all editing views
+        max_object_depth_all_views = depth_min
+        
+        # First pass: find maximum object depth across all views
+        for view_idx in self.edit_view_index:
+            cam = self.trainer.datamodule.train_dataset.scene.cameras[view_idx]
+            
+            # Render depth for this view
+            render_pkg = render(cam, self.gaussian, self.pipe, self.background_tensor)
+            depth_map = render_pkg["depth_3dgs"]  # (H, W)
+            
+            # Find pixels with depth in the object range (10-15)
+            object_depth_mask = (depth_map >= depth_min) & (depth_map <= depth_max)
+            
+            if object_depth_mask.sum() > 0:
+                max_object_depth_view = depth_map[object_depth_mask].max().item()
+                max_object_depth_all_views = max(max_object_depth_all_views, max_object_depth_view)
+        
+        # Calculate threshold based on maximum object depth
+        if max_object_depth_all_views > depth_min:
+            threshold_distance = max_object_depth_all_views * self.cfg.prune_floater_threshold
+        else:
+            # Fallback: use depth_max if no object pixels found
+            threshold_distance = depth_max * self.cfg.prune_floater_threshold
+        
+        print(f"Object depth range: [{depth_min}, {depth_max}], Max found: {max_object_depth_all_views:.2f}, Threshold: {threshold_distance:.2f}")
+        
+        # Second pass: check each editing view and mark points that are within threshold
+        for view_idx in self.edit_view_index:
+            cam = self.trainer.datamodule.train_dataset.scene.cameras[view_idx]
+            
+            # Calculate distance from each Gaussian point to camera center
+            camera_center = cam.camera_center
+            if isinstance(camera_center, torch.Tensor):
+                camera_center = camera_center.to(gaussian_xyz.device)
+            else:
+                camera_center = torch.tensor(camera_center, device=gaussian_xyz.device, dtype=torch.float32)
+            
+            # Distance from each Gaussian to camera center
+            gaussian_to_camera = gaussian_xyz - camera_center[None, :]
+            distances = torch.norm(gaussian_to_camera, dim=1)  # (N,)
+            
+            # Points that are within reasonable distance from this view (keep these)
+            # If a point is within threshold from at least one view, keep it
+            within_threshold = distances <= threshold_distance
+            prune_mask = prune_mask & (~within_threshold)  # Only prune if too far from ALL views
+        
+        # Final prune mask: points that are too far from ALL editing views
+        num_to_prune = prune_mask.sum().item()
+        num_total = num_gaussians
+        
+        if num_to_prune > 0:
+            print(f"Pruning {num_to_prune}/{num_total} ({100*num_to_prune/num_total:.2f}%) distant Gaussian points")
+            self.gaussian.prune_points(prune_mask)
+            torch.cuda.empty_cache()
+        else:
+            print(f"No distant floater Gaussians found to prune")
 
     def on_validation_epoch_end(self):
         pass
@@ -657,6 +798,10 @@ class DGE(BaseLift3DSystem):
         )
         self.cameras_extent = self.trainer.datamodule.train_dataset.scene.cameras_extent
         self.gaussian.spatial_lr_scale = self.cameras_extent
+        
+        # Set Gaussian model to dataset for MMR view selection
+        if hasattr(self.trainer.datamodule.train_dataset, 'gaussian_model'):
+            self.trainer.datamodule.train_dataset.gaussian_model = self.gaussian
 
         self.pipe = PipelineParams(self.parser)
         opt = OmegaConf.create(vars(opt))
@@ -699,13 +844,14 @@ class DGE(BaseLift3DSystem):
         self.guidance.max_step = t_max_step[min(len(t_max_step)-1, self.true_global_step//self.cfg.camera_update_per_step)]
         with torch.no_grad():
             with self._latency_logger.timeit("edit_all_view.collect_cameras"):
+                # self.edit_view_index = [_ for _ in range(len(self.trainer.datamodule.train_dataset.scene.cameras))]
                 for id in self.edit_view_index:
                     cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
 
-            if self.cfg.guidance.edit_view_selection_strategy != "random":
-                sorted_cam_idx = [_ for _ in range(len(cameras))]
-            else:
-                sorted_cam_idx = self.sort_the_cameras_idx(cameras) # 카메라 x축 기준으로 정렬된 카메라의 인덱스
+            # if self.cfg.guidance.edit_view_selection_strategy != "random":
+            #     sorted_cam_idx = [_ for _ in range(len(cameras))]
+            # else:
+            sorted_cam_idx = self.sort_the_cameras_idx(cameras) # 카메라 x축 기준으로 정렬된 카메라의 인덱스
                 # [19, 7, 16, 0, 1, 3, 11, 5, 17, 13, 8, 10, 15, 12, 18, 4, 14, 2, 6, 9] 인덱스랑은 상관이 없네
 
             view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
@@ -792,16 +938,51 @@ class DGE(BaseLift3DSystem):
 
 
     def sort_the_cameras_idx(self, cams):
-        foward_vectos = [cam.R[:, 2] for cam in cams]
-        foward_vectos = np.array(foward_vectos)
+        # 각도 기반 원형 정렬 (한 방향으로만, 방향 전환 없이) - 벡터화 최적화
+        # 전방 벡터와 카메라 중심 추출 (벡터화)
+        forward_vectors = np.array([cam.R[:, 2] for cam in cams])  # (N, 3)
         cams_center_x = np.array([cam.camera_center[0].item() for cam in cams])
-        most_left_vecotr = foward_vectos[np.argmin(cams_center_x)]
-        distances = [np.arccos(np.clip(np.dot(most_left_vecotr, cam.R[:, 2]), 0, 1)) for cam in cams]
-        sorted_cams = [cam for _, cam in sorted(zip(distances, cams), key=lambda pair: pair[0])]
-        reference_axis = np.cross(most_left_vecotr, sorted_cams[1].R[:, 2])
-        distances_with_sign = [np.arccos(np.dot(most_left_vecotr, cam.R[:, 2])) if np.dot(reference_axis,  np.cross(most_left_vecotr, cam.R[:, 2])) >= 0 else 2 * np.pi - np.arccos(np.dot(most_left_vecotr, cam.R[:, 2])) for cam in cams]
         
-        sorted_cam_idx = [idx for _, idx in sorted(zip(distances_with_sign, range(len(cams))), key=lambda pair: pair[0])]
+        # 가장 왼쪽 카메라의 전방 벡터를 기준으로 선택
+        most_left_idx = np.argmin(cams_center_x)
+        most_left_vector = forward_vectors[most_left_idx]
+        
+        # 참조 축 생성: 카메라 중심들의 평균 위치를 기준으로
+        cam_centers = np.array([cam.camera_center.cpu().numpy() if isinstance(cam.camera_center, torch.Tensor) else cam.camera_center for cam in cams])
+        center_mean = cam_centers.mean(axis=0)
+        center_to_left = cam_centers[most_left_idx] - center_mean
+        center_to_left = center_to_left / (np.linalg.norm(center_to_left) + 1e-8)
+        
+        # 참조 축: center_to_left와 most_left_vector의 외적 (카메라 배치에 맞는 축)
+        reference_axis = np.cross(most_left_vector, center_to_left)
+        if np.linalg.norm(reference_axis) < 1e-6:
+            # 평행한 경우, 위쪽 방향(Y축) 사용
+            up_vector = np.array([0, 1, 0])
+            reference_axis = np.cross(most_left_vector, up_vector)
+            if np.linalg.norm(reference_axis) < 1e-6:
+                # 여전히 평행하면 X축 사용
+                reference_axis = np.cross(most_left_vector, np.array([1, 0, 0]))
+        reference_axis = reference_axis / (np.linalg.norm(reference_axis) + 1e-8)
+        
+        # 벡터화된 signed angle 계산 (한 방향으로만)
+        # 모든 카메라의 전방 벡터와 기준 벡터의 내적 계산
+        dot_products = np.clip(np.dot(forward_vectors, most_left_vector), -1.0, 1.0)  # (N,)
+        angles = np.arccos(dot_products)  # (N,)
+        
+        # 외적 계산 (벡터화)
+        # most_left_vector와 각 forward_vector의 외적
+        cross_products = np.cross(most_left_vector[None, :], forward_vectors)  # (N, 3)
+        signs = np.sign(np.dot(cross_products, reference_axis))  # (N,)
+        
+        # signed angle 계산 및 정규화
+        signed_angles = signs * angles  # (N,)
+        normalized_angles = np.where(signed_angles < 0, 2 * np.pi + signed_angles, signed_angles)  # (N,)
+        
+        # 각도 순서로 정렬
+        sorted_cam_idx = np.argsort(normalized_angles).tolist()
+
+        print(f"sorted_cam_idx: {sorted_cam_idx}")
+
 
         return sorted_cam_idx
 
@@ -867,6 +1048,11 @@ class DGE(BaseLift3DSystem):
             with self._latency_logger.timeit(f"update_mask at step {self.true_global_step}"):
                 print(f"Update mask with prompt: {self.cfg.target_prompt}")
                 self.update_mask(self.cfg.target_prompt)
+        
+        # Prune distant floater Gaussians
+        if self.cfg.prune_floater_at_step >= 0 and self.true_global_step == self.cfg.prune_floater_at_step:
+            with self._latency_logger.timeit(f"prune_floater at step {self.true_global_step}"):
+                self.prune_distant_floater_gaussians()
 
         self.gaussian.update_learning_rate(self.true_global_step)
         batch_index = batch["index"]
@@ -915,7 +1101,7 @@ class DGE(BaseLift3DSystem):
                 #         )
                 #     self.edit_frames[cur_index] = result["edit_images"].detach().clone()
 
-            if len(gt_images) > 0:
+            if len(gt_images) > 0: # ground truth image가 있다면 기존의 Loss를 그대로 활용
                 gt_images = torch.concatenate(gt_images, dim=0)
 
                 if self.cfg.use_masked_image:
@@ -940,19 +1126,49 @@ class DGE(BaseLift3DSystem):
             else:
                 # Direction CLIP loss
                 # images shape: (B, H, W, C) -> (B, C, H, W)로 변환 필요
+                # Prepare images for CLIP: apply mask if use_masked_image is True
+                # if self.cfg.use_masked_image:
+                #     # Apply mask to both rendered and original images
+                #     images_masked = images * mask  # (B, H, W, C)
+                #     gt_images_list = []
+                #     for idx in batch_index:
+                #         gt_images_list.append(self.origin_frames[idx])
+                #     gt_images_masked = torch.concatenate(gt_images_list, dim=0) * mask  # (B, H, W, C)
+                    
+                #     images_clip = images_masked.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                #     gt_images_clip = gt_images_masked.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                # else:
                 images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
-                gt_images_clip = self.origin_frames[batch_index[0]].permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                gt_images_list = []
+                for idx in batch_index:
+                    gt_images_list.append(self.origin_frames[idx])
+                gt_images_clip = torch.concatenate(gt_images_list, dim=0).permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+            
                 render_features = clip_model.encode_image(
                     clip_normalize(images_clip))
                 source_features = clip_model.encode_image(
                     clip_normalize(gt_images_clip))
-                render_features /= (render_features.clone().norm(dim=-1, keepdim=True))
+                # NOTE: add eps to prevent NaN/Inf when norm is near-zero
+                eps = 1e-6
+                render_features = render_features / (
+                    render_features.clone().norm(dim=-1, keepdim=True) + eps
+                )
 
-                img_direction = (render_features-source_features)
-                img_direction /= img_direction.clone().norm(dim=-1, keepdim=True)
+                img_direction = render_features - source_features
+                img_direction = img_direction / (
+                    img_direction.clone().norm(dim=-1, keepdim=True) + eps
+                )
+
+                # `self.style_direction` may be stored as (D,) or (1, D).
+                # Make it 1D first, then broadcast to (B, D) safely.
+                style_dir = self.style_direction
+                if style_dir.ndim == 2 and style_dir.shape[0] == 1:
+                    style_dir = style_dir[0]
+                style_dir = style_dir / (style_dir.norm(dim=-1, keepdim=False) + eps)
+                style_dir = style_dir.unsqueeze(0).expand(render_features.size(0), -1)
 
                 loss_d = (1 - torch.cosine_similarity(img_direction,
-                        self.style_direction.repeat(render_features.size(0), 1), dim=1)).mean()
+                        style_dir, dim=1)).mean()
                 
                 loss_dict = {"loss_d": loss_d}
 
