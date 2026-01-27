@@ -71,9 +71,6 @@ class DGE(BaseLift3DSystem):
 
         seg_prompt: str = ""
         target_prompt: str = ""
-        
-        # segmentation confidence threshold
-        seg_confidence_threshold: float = 0.3  # Only use masks when confidence >= this threshold
 
         # cache
         cache_overwrite: bool = True
@@ -114,9 +111,7 @@ class DGE(BaseLift3DSystem):
         self.origin_frames = {}
         self.edit_frames_order = []  # view_sorted 순서를 저장
         self.perceptual_loss = PerceptualLoss().eval().to(get_device())
-        self.text_segmentor = LangSAMTextSegmentor(
-            confidence_threshold=self.cfg.seg_confidence_threshold
-        ).to(get_device())
+        self.text_segmentor = LangSAMTextSegmentor().to(get_device())
 
         if len(self.cfg.cache_dir) > 0:
             print("Using cache directory: ", self.cfg.cache_dir)

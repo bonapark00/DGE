@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import random
 from argparse import ArgumentParser
 from PIL import Image
@@ -88,6 +89,28 @@ def get_direction(emb1, emb2):
     return direction
 
 
+def convert_render_filename_to_gt(render_filename, gt_dir):
+    """Convert render filename (e.g., '0.png') to GT filename (e.g., '00000.png')
+    Args:
+        render_filename: Filename from render directory (e.g., '0.png', '1.png')
+        gt_dir: GT directory path to check file existence
+    Returns:
+        gt_filename: GT filename with 5-digit zero padding (e.g., '00000.png')
+    """
+    # Extract number from render filename
+    match = re.search(r'(\d+)', render_filename)
+    if match:
+        num = int(match.group(1))
+        # Convert to 5-digit zero-padded format
+        gt_filename = f"{num:05d}.png"
+        gt_path = os.path.join(gt_dir, gt_filename)
+        # Check if file exists, if not try original filename
+        if os.path.exists(gt_path):
+            return gt_filename
+    # Fallback to original filename if conversion fails or file doesn't exist
+    return render_filename
+
+
 class CLIPDirSim():
     def __init__(self,
                  model,
@@ -115,7 +138,8 @@ class CLIPDirSim():
         images = 0
         with torch.no_grad():
             for filename in files:
-                gt_path = os.path.join(gt_image_path, filename)
+                gt_filename = convert_render_filename_to_gt(filename, gt_image_path)
+                gt_path = os.path.join(gt_image_path, gt_filename)
                 render_path = os.path.join(render_image_path, filename)
                 gt_feat = encode_image(
                     self.model, self.preprocess, gt_path, device=self.device)
@@ -146,8 +170,10 @@ class CLIPDirCons():
         with torch.no_grad():
             for i, _ in enumerate(files):
                 if i < len(files) - k:
-                    gt_path = os.path.join(gt_image_path, files[i])
-                    gt_path_next = os.path.join(gt_image_path, files[i+k])
+                    gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
+                    gt_filename_next = convert_render_filename_to_gt(files[i+k], gt_image_path)
+                    gt_path = os.path.join(gt_image_path, gt_filename)
+                    gt_path_next = os.path.join(gt_image_path, gt_filename_next)
                     render_path = os.path.join(render_image_path, files[i])
                     render_path_next = os.path.join(
                         render_image_path, files[i+k])
@@ -219,8 +245,10 @@ class CLIPF():
         with torch.no_grad():
             for i, _ in enumerate(files):
                 if i < len(files) - 1:
-                    gt_path = os.path.join(gt_image_path, files[i])
-                    gt_path_next = os.path.join(gt_image_path, files[i+1])
+                    gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
+                    gt_filename_next = convert_render_filename_to_gt(files[i+1], gt_image_path)
+                    gt_path = os.path.join(gt_image_path, gt_filename)
+                    gt_path_next = os.path.join(gt_image_path, gt_filename_next)
                     render_path = os.path.join(render_image_path, files[i])
                     render_path_next = os.path.join(
                         render_image_path, files[i+1])
