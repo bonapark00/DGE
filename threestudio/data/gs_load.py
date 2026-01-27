@@ -1,5 +1,6 @@
 import bisect
 import random
+import os
 from dataclasses import dataclass, field
 
 import pytorch_lightning as pl
@@ -12,7 +13,10 @@ from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 
 from threestudio.utils.typing import *
+from threestudio.utils.sam import LangSAMTextSegmentor
+from threestudio.utils.misc import get_device
 import numpy as np
+from plyfile import PlyData
 
 
 def safe_normalize(x, eps=1e-20):
@@ -211,13 +215,31 @@ class GSLoadDataModuleConfig:
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0 
     use_original_resolution: bool = False # use the original resolution of the image or center crop the image
+    
+    # MMR view selection hyperparameters
+    mmr_object_center: Optional[Tuple[float, float, float]] = None  # Object center in world coordinates, if None will be estimated
+    mmr_representative_view_idx: int = 0  # Representative view index v_r for segmentation
+    mmr_target_coverage: float = 0.3  # Target coverage γ* (desired object coverage ratio)
+    mmr_sigma_d: float = 0.7  # Depth matching scale parameter
+    mmr_sigma_h: float = 0.3  # Height matching scale parameter
+    
+    mmr_alpha_d: float = 1.0  # Weight for depth score
+    mmr_alpha_h: float = 0.0  # Weight for height score
+    
+    mmr_sigma_c: float = 1.0  # Position similarity scale parameter
+    mmr_sigma_theta: float = 0.5  # Direction similarity scale parameter (in radians)
+    mmr_lambda: float = 0.7  # Relevance-diversity trade-off (0=only diversity, 1=only relevance)
+    mmr_seg_prompt: str = ""  # Text prompt for segmentation (e.g., "a lego bulldozer"). If empty, will use gt_alpha_mask if available
+    mmr_use_gt_mask: bool = True  # If True and mmr_seg_prompt is empty, use gt_alpha_mask from camera. If False, assume full image as object (fallback)
 
 
 class GSLoadIterableDataset(IterableDataset, Updateable):
-    def __init__(self, cfg, scene) -> None:
+    def __init__(self, cfg, scene, system_seg_prompt: Optional[str] = None, gaussian_model=None) -> None:
         super().__init__()
         self.cfg: GSLoadDataModuleConfig = cfg
         self.scene = scene
+        self.system_seg_prompt = system_seg_prompt  # System's seg_prompt, if available
+        self.gaussian_model = gaussian_model  # GaussianModel instance, if available
         self.total_view_num = len(self.scene.cameras)
         random.seed(0)  # make sure same views
 
@@ -261,7 +283,11 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         elif self.cfg.edit_view_selection_strategy == "y-axis":
             self.edit_view_index = self._select_cameras_by_y_axis(self.cfg.max_edit_view_num)
             self.total_view_num = len(self.scene.cameras)
- 
+        elif self.cfg.edit_view_selection_strategy == "mmr":
+            self.edit_view_index = self._select_cameras_by_mmr(self.cfg.max_edit_view_num)
+            self.total_view_num = len(self.scene.cameras)
+        elif self.cfg.edit_view_selection_strategy == "region-aware-only":
+            self.edit_view_index = self._select_cameras_by_region_aware_only(self.cfg.max_edit_view_num)
         elif self.cfg.edit_view_selection_strategy == "manual-20":
             self.edit_view_index = [10, 7, 6, 50, 3, 37, 35, 32, 30, 29, 40, 41, 42, 45, 47, 16, 19, 20, 21, 24]
         elif self.cfg.edit_view_selection_strategy == "manual-15":
@@ -668,6 +694,109 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         radius = float(np.quantile(dists, quantile))  # 예: 80% 지점
         return radius
 
+    def get_gaussian_center_from_model(self) -> Optional[np.ndarray]:
+        """
+        가우시안 모델 객체에서 직접 xyz 좌표를 읽어서 중심 좌표를 계산.
+        
+        Returns:
+            가우시안들의 중심 좌표 (3D numpy array) 또는 None
+        """
+        if self.gaussian_model is None:
+            return None
+        
+        try:
+            # get_xyz는 property로 정의되어 있음
+            xyz = self.gaussian_model.get_xyz  # (N, 3) tensor
+            
+            if isinstance(xyz, torch.Tensor):
+                xyz_np = xyz.detach().cpu().numpy()
+            else:
+                xyz_np = np.array(xyz)
+            
+            # 중심 좌표 계산 (평균)
+            gaussian_center = np.mean(xyz_np, axis=0)
+            threestudio.info(f"Computed Gaussian center from model: {gaussian_center}")
+            return gaussian_center.astype(np.float32)
+        except Exception as e:
+            threestudio.warn(f"Failed to get Gaussian center from model: {e}")
+            return None
+
+    def get_gaussian_center_from_ply(self) -> Optional[np.ndarray]:
+        """
+        PLY 파일에서 가우시안 위치를 읽어서 중심 좌표를 계산.
+        
+        Returns:
+            가우시안들의 중심 좌표 (3D numpy array) 또는 None
+        """
+        source_path = self.cfg.source
+        
+        # 1. 학습된 가우시안 모델의 PLY 파일 찾기 시도
+        # 일반적으로 model_path/point_cloud/iteration_X/point_cloud.ply에 있음
+        # 하지만 model_path를 모르므로, source_path의 상위 디렉토리나 일반적인 위치를 확인
+        possible_ply_paths = []
+        
+        # 학습된 모델 경로 시도 (일반적인 구조)
+        if os.path.exists(source_path):
+            parent_dir = os.path.dirname(source_path)
+            # output/xxx/point_cloud/iteration_XXX/point_cloud.ply 형태를 찾기
+            if os.path.exists(parent_dir):
+                for item in os.listdir(parent_dir):
+                    potential_model_path = os.path.join(parent_dir, item, "point_cloud")
+                    if os.path.exists(potential_model_path):
+                        # 최신 iteration 찾기
+                        iterations = []
+                        for iter_dir in os.listdir(potential_model_path):
+                            if iter_dir.startswith("iteration_"):
+                                try:
+                                    iter_num = int(iter_dir.split("_")[1])
+                                    iterations.append((iter_num, iter_dir))
+                                except:
+                                    pass
+                        if iterations:
+                            latest_iter = max(iterations, key=lambda x: x[0])[1]
+                            ply_path = os.path.join(potential_model_path, latest_iter, "point_cloud.ply")
+                            if os.path.exists(ply_path):
+                                possible_ply_paths.append(ply_path)
+        
+        # 2. 초기 point cloud 파일 시도
+        initial_ply_path = os.path.join(source_path, "sparse", "0", "points3D.ply")
+        if os.path.exists(initial_ply_path):
+            possible_ply_paths.append(initial_ply_path)
+        
+        # 3. 다른 일반적인 위치들
+        other_paths = [
+            os.path.join(source_path, "points3d.ply"),
+            os.path.join(source_path, "sparse", "points3D.ply"),
+        ]
+        for path in other_paths:
+            if os.path.exists(path):
+                possible_ply_paths.append(path)
+        
+        # PLY 파일 읽기 시도
+        for ply_path in possible_ply_paths:
+            try:
+                plydata = PlyData.read(ply_path)
+                vertices = plydata['vertex']
+                
+                # 가우시안 위치 추출
+                xyz = np.stack([
+                    np.asarray(vertices['x']),
+                    np.asarray(vertices['y']),
+                    np.asarray(vertices['z'])
+                ], axis=1)
+                
+                # 중심 좌표 계산 (평균)
+                gaussian_center = np.mean(xyz, axis=0)
+                threestudio.info(f"Loaded Gaussian center from PLY file: {ply_path}")
+                return gaussian_center.astype(np.float32)
+            except Exception as e:
+                threestudio.warn(f"Failed to load PLY file {ply_path}: {e}")
+                continue
+        
+        # 모든 시도 실패 시 None 반환
+        threestudio.warn("Could not find any PLY file to compute Gaussian center. Falling back to camera center median.")
+        return None
+
 
     def _generate_spherical_novel_cameras(self,
         n_azimuth: int = 24,
@@ -763,8 +892,427 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         sorted_indices = torch.argsort(y_values, descending=True).cpu().numpy()
         selected_indices = sorted_indices[:num_cameras]
         
-        return list(selected_indices)   
+        return list(selected_indices)
 
+    def _load_camera_image(self, cam, cam_idx: int = 0):
+        """
+        Load image from camera object.
+        Supports both Camera (with original_image) and Simple_Camera (with image_name).
+        
+        Args:
+            cam: Camera object (Camera, Simple_Camera, or C2W_Camera)
+            cam_idx: Camera index for logging purposes
+        
+        Returns:
+            torch.Tensor: Image tensor in format (1, H, W, C) normalized to [0, 1], or None if failed
+        """
+        # Try Camera class with original_image
+        if hasattr(cam, 'original_image'):
+            image_to_segment = cam.original_image.permute(1, 2, 0).unsqueeze(0)  # (1, H, W, C)
+            if image_to_segment.max() > 1.0:
+                image_to_segment = image_to_segment / 255.0
+            image_to_segment = image_to_segment.clamp(0.0, 1.0).to(get_device())
+            return image_to_segment
+        
+        # Try Simple_Camera with image_name
+        elif hasattr(cam, 'image_name'):
+            from PIL import Image
+            from gaussiansplatting.utils.general_utils import PILtoTorch
+            
+            # Construct image path from source path
+            source_path = self.cfg.source
+            images_folder = os.path.join(source_path, "images")
+            if not os.path.exists(images_folder):
+                # Try alternative paths
+                images_folder = source_path
+            
+            # Find image file (try common extensions)
+            image_name = cam.image_name
+            image_path = None
+            for ext in ['.jpg', '.jpeg', '.png', '.JPG', '.JPEG', '.PNG']:
+                potential_path = os.path.join(images_folder, image_name + ext)
+                if os.path.exists(potential_path):
+                    image_path = potential_path
+                    break
+                # Also try with image_name as full filename
+                potential_path = os.path.join(images_folder, image_name)
+                if os.path.exists(potential_path):
+                    image_path = potential_path
+                    break
+            
+            if image_path and os.path.exists(image_path):
+                try:
+                    pil_image = Image.open(image_path)
+                    # Resize to camera resolution
+                    h = cam.image_height if hasattr(cam, 'image_height') else 512
+                    w = cam.image_width if hasattr(cam, 'image_width') else 512
+                    resized_image_rgb = PILtoTorch(pil_image, (w, h))
+                    gt_image = resized_image_rgb[:3, ...]  # (C, H, W)
+                    image_to_segment = gt_image.permute(1, 2, 0).unsqueeze(0)  # (1, H, W, C)
+                    
+                    if image_to_segment.max() > 1.0:
+                        image_to_segment = image_to_segment / 255.0
+                    image_to_segment = image_to_segment.clamp(0.0, 1.0).to(get_device())
+                    return image_to_segment
+                except Exception as e:
+                    threestudio.warn(f"Failed to load image from {image_path}: {e}")
+            else:
+                threestudio.warn(f"Could not find image file for camera {cam_idx} with image_name: {image_name}")
+        
+        return None
+
+    def _compute_region_aware_scores(self, candidate_indices, cam_centers, cam_centers_np):
+        """
+        Compute region-aware relevance scores for cameras.
+        This is the shared logic used by both MMR and region-aware-only selection.
+        
+        Args:
+            candidate_indices: List of camera indices
+            cam_centers: Tensor of camera centers (N, 3)
+            cam_centers_np: Numpy array of camera centers (N, 3)
+        
+        Returns:
+            relevance_scores: Normalized relevance scores (N,)
+        """
+        import numpy as np
+        import torch
+        
+        device = cam_centers.device if isinstance(cam_centers, torch.Tensor) else "cuda"
+        
+        # Step 1: Single-view segmentation from representative view v_r
+        rep_view_idx = self.cfg.mmr_representative_view_idx
+        if rep_view_idx >= len(candidate_indices):
+            rep_view_idx = 0  # Fallback to first view
+        
+        rep_cam = self.scene.cameras[rep_view_idx]
+        
+        # Get segmentation mask (A_obj area)
+        A_obj = 0.0
+        A_img = 1.0
+        
+        # Determine which segmentation prompt to use
+        seg_prompt = None
+        if self.cfg.mmr_seg_prompt and len(self.cfg.mmr_seg_prompt.strip()) > 0:
+            seg_prompt = self.cfg.mmr_seg_prompt
+        elif self.system_seg_prompt and len(self.system_seg_prompt.strip()) > 0:
+            seg_prompt = self.system_seg_prompt
+        
+        # Try text-based segmentation first if prompt is provided
+        mask_np = None
+        if seg_prompt:
+            try:
+                # Load image from camera using common function
+                image_to_segment = self._load_camera_image(rep_cam, rep_view_idx)
+                
+                if image_to_segment is not None:
+                    # Perform text-based segmentation
+                    text_segmentor = LangSAMTextSegmentor().to(get_device())
+                    with torch.no_grad():
+                        mask_tensor = text_segmentor(image_to_segment, seg_prompt)[0]
+                    
+                    # Convert mask to numpy
+                    mask_np = mask_tensor[0].detach().cpu().numpy()  # (H, W)
+                    
+                    threestudio.info(f"Text-based segmentation successful for prompt: {seg_prompt}")
+                else:
+                    threestudio.warn(f"Could not load image for camera {rep_view_idx}, falling back to gt_alpha_mask or full image")
+            except Exception as e:
+                threestudio.warn(f"Text-based segmentation failed: {e}, falling back to gt_alpha_mask or full image")
+        
+        # Fallback to gt_alpha_mask if text segmentation failed or not attempted
+        if mask_np is None and self.cfg.mmr_use_gt_mask and hasattr(rep_cam, 'gt_alpha_mask') and rep_cam.gt_alpha_mask is not None:
+            mask = rep_cam.gt_alpha_mask
+            if isinstance(mask, torch.Tensor):
+                mask_np = mask.detach().cpu().numpy()
+            else:
+                mask_np = np.array(mask)
+            mask_np = mask_np.squeeze()
+        
+        # Process mask if we have one
+        if mask_np is not None:
+            if mask_np.ndim > 2:
+                mask_np = mask_np.squeeze()
+            
+            A_obj = float(np.sum(mask_np > 0.5))
+            if hasattr(rep_cam, 'image_height') and hasattr(rep_cam, 'image_width'):
+                A_img = float(rep_cam.image_height * rep_cam.image_width)
+            else:
+                A_img = float(mask_np.size)
+            
+            if A_obj > 0 and mask_np.ndim == 2:
+                y_coords, x_coords = np.where(mask_np > 0.5)
+                if len(y_coords) > 0:
+                    obj_centroid_y = float(np.mean(y_coords))
+                    obj_mask_height = float(np.max(y_coords) - np.min(y_coords)) if len(y_coords) > 1 else 1.0
+                else:
+                    obj_centroid_y = mask_np.shape[0] / 2.0
+                    obj_mask_height = mask_np.shape[0]
+            else:
+                obj_centroid_y = mask_np.shape[0] / 2.0 if mask_np.ndim >= 1 else 0.5
+                obj_mask_height = mask_np.shape[0] if mask_np.ndim >= 1 else 1.0
+        else:
+            # Fallback: assume full image as object
+            if hasattr(rep_cam, 'image_height') and hasattr(rep_cam, 'image_width'):
+                A_img = float(rep_cam.image_height * rep_cam.image_width)
+                A_obj = A_img
+                obj_centroid_y = float(rep_cam.image_height) / 2.0
+                obj_mask_height = float(rep_cam.image_height)
+            else:
+                A_img = 1.0
+                A_obj = 1.0
+                obj_centroid_y = 0.5
+                obj_mask_height = 1.0
+        
+        # Calculate coverage ratio γ_r
+        gamma_r = A_obj / A_img if A_img > 0 else 0.0
+        
+        # Estimate or use provided object center
+        if self.cfg.mmr_object_center is None:
+            gaussian_center = self.get_gaussian_center_from_model()
+            if gaussian_center is None:
+                gaussian_center = self.get_gaussian_center_from_ply()
+            
+            if gaussian_center is not None:
+                object_center = gaussian_center
+            else:
+                object_center = np.median(cam_centers_np, axis=0)
+        else:
+            object_center = np.array(self.cfg.mmr_object_center, dtype=np.float32)
+        
+        object_center_tensor = torch.tensor(object_center, device=device, dtype=torch.float32)
+        
+        # Calculate d_r: distance from representative view camera center to object center
+        rep_cam_center = cam_centers[rep_view_idx]
+        d_r = abs(torch.norm(rep_cam_center - object_center_tensor).item())
+        
+        # Calculate κ = γ_r * d_r
+        kappa = abs(gamma_r * d_r)
+        
+        # Compute target depth and height
+        target_coverage = self.cfg.mmr_target_coverage
+        if target_coverage > 0:
+            target_depth = abs(kappa / target_coverage)
+        else:
+            target_depth = d_r
+        
+        # Map object centroid y-coordinate to camera height
+        if hasattr(rep_cam, 'image_height'):
+            img_height = float(rep_cam.image_height)
+            normalized_y = obj_centroid_y / img_height if img_height > 0 else 0.5
+            y_min = float(np.min(cam_centers_np[:, 1]))
+            y_max = float(np.max(cam_centers_np[:, 1]))
+            y_range = y_max - y_min if y_max > y_min else 1.0
+            target_height = y_min + normalized_y * y_range
+        else:
+            target_height = float(np.median(cam_centers_np[:, 1]))
+        
+        # Compute depth to object center for all cameras
+        depths = torch.norm(cam_centers - object_center_tensor.unsqueeze(0), dim=1)
+        depths_np = np.abs(depths.detach().cpu().numpy())
+        
+        # Compute camera height (y coordinate)
+        heights = cam_centers[:, 1].detach().cpu().numpy()
+        
+        # Compute depth/height matching scores
+        sigma_d = self.cfg.mmr_sigma_d
+        sigma_h = self.cfg.mmr_sigma_h
+        
+        depth_scores = np.exp(-np.abs(depths_np - target_depth) / sigma_d)
+        height_scores = np.exp(-np.abs(heights - target_height) / sigma_h)
+        
+        # Combine into region-aware relevance score
+        alpha_d = self.cfg.mmr_alpha_d
+        alpha_h = self.cfg.mmr_alpha_h
+        relevance_scores = alpha_d * depth_scores + alpha_h * height_scores
+        
+        # Normalize to [0, 1]
+        if relevance_scores.max() > relevance_scores.min():
+            relevance_scores = (relevance_scores - relevance_scores.min()) / (relevance_scores.max() - relevance_scores.min())
+        
+        return relevance_scores
+
+    def _select_cameras_by_mmr(self, num_cameras: int):
+        """
+        Region-Aware and Redundancy-Aware (MMR) View Selection.
+        
+        Selects cameras based on:
+        1. Region-aware scores (depth and height matching)
+        2. Redundancy-aware diversity (position and direction similarity)
+        
+        Args:
+            num_cameras: Number of cameras to select (budget M)
+        
+        Returns:
+            List of selected camera indices
+        """
+        import numpy as np
+        import torch
+        
+        candidate_indices = list(range(self.total_view_num))
+        if len(candidate_indices) == 0:
+            return []
+        if len(candidate_indices) <= num_cameras:
+            return candidate_indices
+        
+        device = "cuda"
+        
+        # Extract camera centers and viewing directions
+        cam_centers = []
+        viewing_directions = []
+        for idx in candidate_indices:
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            if isinstance(center, torch.Tensor):
+                center = center.detach().to(device)
+            else:
+                center = torch.tensor(center, device=device, dtype=torch.float32)
+            cam_centers.append(center)
+            
+            # Extract viewing direction from camera (forward vector)
+            # In camera coordinate system, forward is typically -z
+            # We need to transform to world coordinates using c2w
+            forward = None
+            if hasattr(cam, 'c2w'):
+                # C2W_Camera has direct c2w attribute
+                c2w = cam.c2w
+                if isinstance(c2w, torch.Tensor):
+                    forward = c2w[:3, 2].to(device)
+                else:
+                    forward = torch.tensor(c2w[:3, 2], device=device, dtype=torch.float32)
+            elif hasattr(cam, 'world_view_transform'):
+                # Standard camera: compute c2w from world_view_transform
+                wv = cam.world_view_transform  # 4x4
+                if isinstance(wv, torch.Tensor):
+                    wv = wv.to(device)
+                else:
+                    wv = torch.tensor(wv, device=device, dtype=torch.float32)
+                c2w = torch.inverse(wv.T)
+                # Forward vector in world coordinates (third column of rotation matrix)
+                forward = c2w[:3, 2]
+            
+            if forward is None:
+                # Fallback: use direction from center to origin (looking at origin)
+                forward = -safe_normalize(center.unsqueeze(0)).squeeze(0)
+            
+            # Normalize viewing direction
+            forward_normalized = safe_normalize(forward.unsqueeze(0)).squeeze(0)
+            viewing_directions.append(forward_normalized)
+        
+        cam_centers = torch.stack(cam_centers, dim=0)  # (N, 3)
+        viewing_directions = torch.stack(viewing_directions, dim=0)  # (N, 3)
+        
+        # Convert to numpy for easier computation
+        cam_centers_np = cam_centers.detach().cpu().numpy()
+        viewing_directions_np = viewing_directions.detach().cpu().numpy()
+        
+        # Compute region-aware relevance scores (shared logic)
+        relevance_scores = self._compute_region_aware_scores(candidate_indices, cam_centers, cam_centers_np)
+        
+        # Step 2: Define view similarity for redundancy measurement
+        sigma_c = self.cfg.mmr_sigma_c
+        sigma_theta = self.cfg.mmr_sigma_theta
+        
+        def compute_similarity(i, j):
+            # Position similarity
+            pos_diff = np.linalg.norm(cam_centers_np[i] - cam_centers_np[j])
+            pos_sim = np.exp(-(pos_diff ** 2) / (2 * sigma_c ** 2))
+            
+            # Direction similarity using angular distance
+            dot_product = np.clip(np.dot(viewing_directions_np[i], viewing_directions_np[j]), -1.0, 1.0)
+            theta_ij = np.arccos(dot_product)
+            dir_sim = np.exp(-(theta_ij ** 2) / (2 * sigma_theta ** 2))
+            
+            return pos_sim * dir_sim
+        
+        # Step 3: MMR Greedy selection
+        # 3.1. Initialize with highest relevance score
+        selected_indices = [int(np.argmax(relevance_scores))]
+        
+        # 3.2. Initialize redundancy cache
+        redundancy_cache = np.zeros(len(candidate_indices))
+        for i in range(len(candidate_indices)):
+            if i not in selected_indices:
+                redundancy_cache[i] = compute_similarity(i, selected_indices[0])
+        
+        # 3.3. Greedy selection
+        lambda_param = self.cfg.mmr_lambda
+        
+        while len(selected_indices) < num_cameras:
+            best_score = -np.inf
+            best_idx = None
+            
+            for i in range(len(candidate_indices)):
+                if i in selected_indices:
+                    continue
+                
+                # MMR marginal score: λ * relevance - (1-λ) * redundancy
+                mmr_score = lambda_param * relevance_scores[i] - (1 - lambda_param) * redundancy_cache[i]
+                
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = i
+            
+            if best_idx is None:
+                break
+            
+            selected_indices.append(best_idx)
+            
+            # Update redundancy cache efficiently
+            for i in range(len(candidate_indices)):
+                if i not in selected_indices:
+                    sim = compute_similarity(i, best_idx)
+                    redundancy_cache[i] = max(redundancy_cache[i], sim)
+        
+        return selected_indices
+
+    def _select_cameras_by_region_aware_only(self, num_cameras: int):
+        """
+        Region-Aware View Selection (without MMR diversity).
+        
+        Selects cameras based only on region-aware scores (depth and height matching).
+        This is a simpler version that doesn't consider redundancy/diversity.
+        
+        Args:
+            num_cameras: Number of cameras to select (budget M)
+        
+        Returns:
+            List of selected camera indices
+        """
+        import numpy as np
+        import torch
+        
+        candidate_indices = list(range(self.total_view_num))
+        if len(candidate_indices) == 0:
+            return []
+        if len(candidate_indices) <= num_cameras:
+            return candidate_indices
+        
+        device = "cuda"
+        
+        # Extract camera centers
+        cam_centers = []
+        for idx in candidate_indices:
+            cam = self.scene.cameras[idx]
+            center = cam.camera_center
+            if isinstance(center, torch.Tensor):
+                center = center.detach().to(device)
+            else:
+                center = torch.tensor(center, device=device, dtype=torch.float32)
+            cam_centers.append(center)
+        
+        cam_centers = torch.stack(cam_centers, dim=0)  # (N, 3)
+        
+        # Convert to numpy for easier computation
+        cam_centers_np = cam_centers.detach().cpu().numpy()
+        
+        # Compute region-aware relevance scores (shared logic)
+        relevance_scores = self._compute_region_aware_scores(candidate_indices, cam_centers, cam_centers_np)
+        
+        # Select cameras with highest relevance scores (simple top-k selection)
+        sorted_indices = np.argsort(relevance_scores)[::-1]  # Descending order
+        selected_indices = sorted_indices[:num_cameras].tolist()
+        
+        return selected_indices
 
 
     def collate(self, batch) -> Dict[str, Any]:
