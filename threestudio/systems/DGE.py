@@ -93,6 +93,8 @@ class DGE(BaseLift3DSystem):
         
         
         mask_update_at_step: int = 500 ## BONA
+        # number of novel views used when updating mask at mask_update_at_step
+        mask_update_view_num: int = 10
 
     cfg: Config
 
@@ -127,11 +129,14 @@ class DGE(BaseLift3DSystem):
         
         if seg_object == self.cfg.target_prompt:
             # select 20 views not in self.view_list
-            all_views = set(range(0, 60))
+            all_views = set(range(0, self.trainer.datamodule.train_dataset.total_view_num))
             candidates = list(all_views - set(self.edit_view_index))
-            if len(candidates) < 20:
-                raise ValueError(f"Not enough views outside self.view_list to sample 20 views (got {len(candidates)}).")
-            view_list = random.sample(candidates, 20)
+            if len(candidates) < self.cfg.mask_update_view_num:
+                raise ValueError(
+                    f"Not enough views outside self.view_list to sample "
+                    f"{self.cfg.mask_update_view_num} views (got {len(candidates)})."
+                )
+            view_list = random.sample(candidates, self.cfg.mask_update_view_num)
 
 
         elif seg_object == self.cfg.seg_prompt:
