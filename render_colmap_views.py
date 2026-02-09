@@ -7,9 +7,8 @@ and a trained 3D Gaussian point_cloud.ply, then write PNGs + a video.
 Run:
   cd /working/style-transfer/DGE-camera-selection
   python render_colmap_views.py \
-    --model_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk \
+    --ply_path /path/to/point_cloud/iteration_30000/point_cloud.ply \
     --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
-    --iteration -1 \
     --out_dir output/colmap_views \
     --video_path output/colmap_views.mp4
 """
@@ -24,19 +23,19 @@ import torchvision
 from gaussiansplatting.gaussian_renderer import render
 from gaussiansplatting.scene.camera_scene import CamScene
 from gaussiansplatting.scene.vanilla_gaussian_model import GaussianModel
-from gaussiansplatting.utils.system_utils import searchForMaxIteration
 from gaussiansplatting.arguments import ModelParams, PipelineParams, get_combined_args
 from gaussiansplatting.utils.general_utils import safe_state
 
 
-def load_gaussians(model_path: str, iteration: int, sh_degree: int):
+def load_gaussians(ply_path: str, sh_degree: int):
+    """Load 3D Gaussians from a .ply file path."""
+    ply_path = os.path.abspath(ply_path)
+    if not os.path.isfile(ply_path):
+        raise FileNotFoundError(f"PLY file not found: {ply_path}")
     gaussians = GaussianModel(sh_degree)
-    if iteration == -1:
-        iteration = searchForMaxIteration(os.path.join(model_path, "point_cloud"))
-    ply_path = os.path.join(model_path, "point_cloud", f"iteration_{iteration}", "point_cloud.ply")
     print(f"Loading Gaussian model from {ply_path}")
     gaussians.load_ply(ply_path)
-    return gaussians, iteration
+    return gaussians
 
 
 def load_colmap_views_as_cameras(colmap_path: str, h: int, w: int):
@@ -54,14 +53,14 @@ def main():
     model = ModelParams(parser, sentinel=True)
     pipeline = PipelineParams(parser)
 
+    parser.add_argument("--ply_path", type=str, required=True, help="Path to point_cloud.ply file")
     parser.add_argument("--colmap_path", type=str, required=True, help="Dataset root containing sparse/0")
-    parser.add_argument("--iteration", type=int, default=-1)
     parser.add_argument("--out_dir", type=str, default="output/colmap_views")
     parser.add_argument("--video_path", type=str, default="output/colmap_views.mp4")
     parser.add_argument("--fps", type=int, default=24)
 
-    parser.add_argument("--render_width", type=int, default=512)
-    parser.add_argument("--render_height", type=int, default=512)
+    parser.add_argument("--render_width", type=int, default=4029)
+    parser.add_argument("--render_height", type=int, default=3021)
 
     parser.add_argument("--stride", type=int, default=1, help="Render every Nth COLMAP view")
     parser.add_argument("--max_views", type=int, default=-1, help="Limit number of rendered views (-1 = all)")
@@ -70,10 +69,22 @@ def main():
     args = get_combined_args(parser)
     safe_state(args.quiet)
 
+    # When using --ply_path only there is no cfg_args, so ModelParams/PipelineParams fields stay None
+    # (sentinel=True). Fill defaults so model.extract() / pipeline.extract() return valid objects.
+    defaults = [
+        ("source_path", ""),
+        ("model_path", ""),
+        ("sh_degree", 3),
+        ("white_background", False),
+    ]
+    for name, val in defaults:
+        if getattr(args, name, None) is None:
+            setattr(args, name, val)
+
     pipe = pipeline.extract(args)
     m = model.extract(args)
 
-    gaussians, used_iter = load_gaussians(args.model_path, args.iteration, m.sh_degree)
+    gaussians = load_gaussians(args.ply_path, m.sh_degree)
     bg_color = [1, 1, 1] if m.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
 
