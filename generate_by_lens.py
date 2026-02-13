@@ -191,6 +191,7 @@ def load_colmap_prior(colmap_path: str):
     else:
         fy = float(first_intr.params[0])
     fovy = float(focal2fov(fy, h))
+    print(f"fovy: {fovy}, fy: {fy}, h: {h}")
 
     return (
         np.stack(cam_centers, axis=0),
@@ -1454,6 +1455,129 @@ def compute_roi_mask_from_segmentation(
         print(f"[ROI] WARNING: No Gaussians matched prompt '{prompt}'. Falling back to all Gaussians.")
         return None
     return roi_mask
+
+
+# ===================================================================
+# Reusable pipeline for gs_load / threestudio
+# ===================================================================
+
+def run_generate_by_lens_pipeline(
+    gaussians: GaussianModel,
+    cam_centers: np.ndarray,
+    cam_forwards: np.ndarray,
+    fovy: float,
+    h: int,
+    w: int,
+    roi_mask: Optional[torch.Tensor] = None,
+    pipe_params=None,
+    background: Optional[torch.Tensor] = None,
+    seg_prompt: str = "",
+    edit_prompt: str = "",
+    use_ip2p_scoring: bool = False,
+    ip2p_pipe=None,
+    distance_multipliers: Optional[List[float]] = None,
+    n_candidates: int = 150,
+    n_select: int = 20,
+    hemisphere_only: bool = False,
+    cone_half_angle_deg: float = 90.0,
+    w_vis: float = 0.6,
+    w_can: float = 0.4,
+    top_fraction: float = 0.20,
+    lambda_leak: float = 1.5,
+    lambda_ent: float = 2.0,
+    entropy_thresh: float = 0.97,
+    override_opacity: Optional[torch.Tensor] = None,
+    device: str = "cuda",
+) -> List[Simple_Camera]:
+    """
+    Run the full Generate-by-Lens pipeline. Returns list of Simple_Camera.
+
+    Used by threestudio gs_load when edit_view_selection_strategy == "lens".
+    """
+    from argparse import Namespace
+    from gaussiansplatting.arguments import PipelineParams
+    from argparse import ArgumentParser
+
+    if pipe_params is None:
+        parser = ArgumentParser()
+        pp = PipelineParams(parser)  # add args once; avoid re-calling which causes conflicts
+        args = Namespace(convert_SHs_python=False, compute_cov3D_python=False, debug=False)
+        pipe_params = pp.extract(args)
+
+    if background is None:
+        background = torch.tensor([0, 0, 0], dtype=torch.float32, device=device)
+
+    # ROI mask via segmentation if needed
+    if seg_prompt and roi_mask is None and gaussians is not None:
+        roi_mask = compute_roi_mask_from_segmentation(
+            gaussians, seg_prompt, pipe_params, background,
+            cam_centers, cam_forwards, fovy, h, w,
+            override_opacity=override_opacity, device=device,
+        )
+
+    # Step 1: ROI Intrinsic Analysis
+    roi_info = roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+    colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
+    colmap_median_dist = float(np.median(colmap_dists))
+    roi_info["colmap_median_dist"] = colmap_median_dist
+    if roi_info["object_size"] > colmap_median_dist:
+        roi_info["object_size"] = colmap_median_dist
+
+    # Step 2: Scale Probing
+    dist_mults = distance_multipliers or [1.5, 2.0, 2.5, 3.0, 3.5]
+    optimal_distance = scale_probing(
+        gaussians, roi_info, pipe_params, background, fovy, h, w, roi_mask,
+        ip2p_pipe=ip2p_pipe, edit_prompt=edit_prompt,
+        distance_multipliers=dist_mults,
+        lambda_leak=lambda_leak, lambda_ent=lambda_ent, entropy_thresh=entropy_thresh,
+        override_opacity=override_opacity, device=device,
+    )
+
+    # Step 3: Fibonacci Manifold Sampling
+    candidates = fibonacci_camera_candidates(
+        center=roi_info["center"],
+        distance=optimal_distance,
+        n_candidates=n_candidates,
+        fovy=fovy, h=h, w=w,
+        hemisphere_only=hemisphere_only,
+        colmap_cam_centers=cam_centers,
+        cone_half_angle_deg=cone_half_angle_deg,
+        device=device,
+    )
+
+    # Step 4: Energy-based Scoring (with actual rendering)
+    scored = score_candidates(
+        candidates, gaussians, roi_mask, roi_info, pipe_params, background,
+        w_vis=w_vis, w_can=w_can,
+        override_opacity=override_opacity, device=device,
+    )
+
+    # Step 5: Diversity-aware Selection
+    selected_indices = diversity_selection(
+        candidates, scored, roi_info["center"],
+        n_select=n_select, top_fraction=top_fraction, device=device,
+    )
+
+    final_cameras = [candidates[i] for i in selected_indices]
+    center = roi_info["center"]
+
+    def _azimuth(cam):
+        cc = cam.camera_center.cpu().numpy()
+        diff = cc - center
+        return math.atan2(diff[2], diff[0])
+
+    final_cameras.sort(key=_azimuth)
+    return final_cameras
+
+
+def simple_camera_to_c2w(simple_cam: Simple_Camera) -> np.ndarray:
+    """Convert Simple_Camera to 4x4 c2w matrix. R is R_c2w, T = -(R^T @ cam_center)."""
+    R = simple_cam.R
+    cam_center = (-R @ np.array(simple_cam.T, dtype=np.float32)).astype(np.float32)
+    c2w = np.eye(4, dtype=np.float32)
+    c2w[:3, :3] = R
+    c2w[:3, 3] = cam_center
+    return c2w
 
 
 # ===================================================================
