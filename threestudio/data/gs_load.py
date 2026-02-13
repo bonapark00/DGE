@@ -16,7 +16,9 @@ from threestudio.utils.typing import *
 from threestudio.utils.sam import LangSAMTextSegmentor
 from threestudio.utils.misc import get_device
 import numpy as np
+import math
 from plyfile import PlyData
+from typing import Any, Dict, List, Optional, Tuple
 
 
 def safe_normalize(x, eps=1e-20):
@@ -232,14 +234,736 @@ class GSLoadDataModuleConfig:
     mmr_seg_prompt: str = ""  # Text prompt for segmentation (e.g., "a lego bulldozer"). If empty, will use gt_alpha_mask if available
     mmr_use_gt_mask: bool = True  # If True and mmr_seg_prompt is empty, use gt_alpha_mask from camera. If False, assume full image as object (fallback)
 
+    # Lens view generation hyperparameters (strategy="lens")
+    lens_seg_prompt: str = ""  # Text prompt for ROI segmentation (e.g. "red sweater")
+    lens_n_candidates: int = 150  # Number of Fibonacci sphere candidates
+    lens_hemisphere_only: bool = False  # Restrict to upper hemisphere
+    lens_cone_half_angle_deg: float = 90.0  # Cone constraint around COLMAP mean direction
+    lens_distance_multipliers: str = "2.0,2.5,3.0,4.0,5.0,6.0"  # Distance probing multipliers (× r_obj)
+    lens_w_vis: float = 0.6  # Visibility score weight
+    lens_w_can: float = 0.4  # Canonical alignment weight
+    lens_top_fraction: float = 0.20  # Top fraction for FPS diversity selection
+    lens_n_seg_views: int = 8  # Number of views for multi-view ROI segmentation
+    lens_seg_threshold: float = 0.3  # Back-projection threshold for ROI mask
+    lens_min_opacity: float = 0.0  # Prune Gaussians below this opacity
+    lens_ply_path: str = ""  # Path to .ply for lens (default: load from gaussian_model when set)
+    lens_edit_prompt: str = ""  # IP2P edit prompt for SAGE scoring (required if use_ip2p)
+    lens_use_ip2p_scoring: bool = False  # Use IP2P/SAGE for scale probing (slower, better results)
+    lens_ip2p_steps: int = 20  # IP2P num_inference_steps (override via data.lens_ip2p_steps=N)
+    lens_ip2p_guidance_scale: float = 7.5  # IP2P guidance_scale for SAGE probing
+    lens_ip2p_image_guidance_scale: float = 1.5  # IP2P image_guidance_scale for SAGE probing
+    lens_lambda_leak: float = 1.5  # SAGE leak penalty
+    lens_lambda_ent: float = 2.0  # SAGE entropy penalty
+    lens_entropy_thresh: float = 0.97  # SAGE entropy hard threshold
+
+
+# ===================================================================
+# Generate-by-Lens pipeline (inlined from generate_by_lens.py, no external import)
+# ===================================================================
+
+
+def _lens_load_colmap_prior(colmap_path: str):
+    """
+    Load cam_centers, cam_forwards from COLMAP in same order as generate_by_lens.
+    CamScene sorts by image_name; we use images.values() order for consistency.
+    """
+    from gaussiansplatting.scene.colmap_loader import (
+        qvec2rotmat,
+        read_extrinsics_binary,
+        read_intrinsics_binary,
+    )
+    from gaussiansplatting.utils.graphics_utils import focal2fov, getWorld2View2
+
+    sparse0 = os.path.join(os.path.abspath(colmap_path), "sparse", "0")
+    images = read_extrinsics_binary(os.path.join(sparse0, "images.bin"))
+    cams = read_intrinsics_binary(os.path.join(sparse0, "cameras.bin"))
+
+    cam_centers, cam_forwards = [], []
+    first_intr = None
+    for img in images.values():
+        intr = cams[img.camera_id]
+        if first_intr is None:
+            first_intr = intr
+        R = np.transpose(qvec2rotmat(img.qvec)).astype(np.float32)
+        T_vec = np.array(img.tvec, dtype=np.float32)
+        W2C = getWorld2View2(R, T_vec)
+        C2W = np.linalg.inv(W2C)
+        cam_centers.append(C2W[:3, 3].astype(np.float32))
+        cam_forwards.append(C2W[:3, 2].astype(np.float32))
+
+    h = int(first_intr.height)
+    if first_intr.model == "PINHOLE":
+        fy = float(first_intr.params[1])
+    elif first_intr.model in ("SIMPLE_PINHOLE", "SIMPLE_RADIAL"):
+        fy = float(first_intr.params[0])
+    else:
+        fy = float(first_intr.params[0])
+    fovy = float(focal2fov(fy, h))
+
+    return (
+        np.stack(cam_centers, axis=0),
+        np.stack(cam_forwards, axis=0),
+        fovy,
+    )
+
+
+def _lens_normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    n = float(np.linalg.norm(v))
+    return v / n if n > eps else v
+
+
+def _lens_look_at_c2w(eye: np.ndarray, target: np.ndarray, world_up: np.ndarray) -> np.ndarray:
+    eye = np.asarray(eye, dtype=np.float32)
+    target = np.asarray(target, dtype=np.float32)
+    up = _lens_normalize(np.asarray(world_up, dtype=np.float32))
+    forward = _lens_normalize(target - eye)
+    right = np.cross(up, forward)
+    if np.linalg.norm(right) < 1e-6:
+        up = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+        right = np.cross(up, forward)
+    right = _lens_normalize(right)
+    cam_up = np.cross(forward, right)
+    R_c2w = np.stack([right, cam_up, forward], axis=1)
+    c2w = np.eye(4, dtype=np.float32)
+    c2w[:3, :3] = R_c2w
+    c2w[:3, 3] = eye
+    return c2w
+
+
+def _lens_c2w_to_RT(c2w: np.ndarray):
+    R_c2w = c2w[:3, :3].astype(np.float32)
+    cam_center = c2w[:3, 3].astype(np.float32)
+    R = R_c2w
+    T = (-(R_c2w.T) @ cam_center).astype(np.float32)
+    return R, T
+
+
+def _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards) -> Dict:
+    from gaussiansplatting.utils.graphics_utils import focal2fov
+    xyz = gaussians.get_xyz.detach()
+    opacity = gaussians.get_opacity.detach().squeeze(-1)
+    if roi_mask is not None:
+        roi_mask = roi_mask.to(xyz.device).bool()
+        xyz = xyz[roi_mask]
+        opacity = opacity[roi_mask]
+    weights = opacity
+    w_sum = weights.sum() + 1e-8
+    center = (weights[:, None] * xyz).sum(dim=0) / w_sum
+    diff = xyz - center[None, :]
+    C = (weights[:, None, None] * (diff.unsqueeze(2) * diff.unsqueeze(1))).sum(dim=0) / w_sum
+    eigenvalues, eigenvectors = torch.linalg.eigh(C.float())
+    eigenvalues = eigenvalues.flip(0)
+    eigenvectors = eigenvectors.flip(1)
+    v1 = eigenvectors[:, 0].cpu().numpy()
+    v2 = eigenvectors[:, 1].cpu().numpy()
+    v3 = eigenvectors[:, 2].cpu().numpy()
+    evals = eigenvalues.cpu().numpy()
+    object_size = float(2.0 * np.sqrt(np.median(np.abs(evals))))
+    mean_fwd = _lens_normalize(cam_forwards.mean(axis=0))
+    proj_on_v1 = np.dot(mean_fwd, v1) * v1
+    v_front = _lens_normalize(-(mean_fwd - proj_on_v1))
+    if np.linalg.norm(v_front) < 1e-6:
+        v_front = v3.copy()
+    center_np = center.cpu().numpy()
+    return dict(
+        center=center_np, v1=v1, v2=v2, v3=v3,
+        eigenvalues=evals, object_size=object_size, v_front=v_front,
+    )
+
+
+def _lens_make_camera(eye, target, world_up, fovy, h, w, uid, device="cuda"):
+    from gaussiansplatting.scene.cameras import Simple_Camera
+    from gaussiansplatting.utils.graphics_utils import focal2fov, fov2focal
+    c2w = _lens_look_at_c2w(eye, target, world_up)
+    R, T = _lens_c2w_to_RT(c2w)
+    fy = fov2focal(float(fovy), int(h))
+    fx = fy * (float(w) / float(h))
+    fovx = float(focal2fov(float(fx), int(w)))
+    return Simple_Camera(
+        colmap_id=uid, R=R, T=T, FoVx=float(fovx), FoVy=float(fovy),
+        h=h, w=w, image_name=f"probe_{uid:05d}", uid=uid, data_device=device, qvec=None,
+    )
+
+
+def _lens_compute_entropy(attention_map: torch.Tensor) -> float:
+    epsilon = 1e-10
+    P = attention_map / (attention_map.sum() + epsilon)
+    return float(-torch.sum(P * torch.log(P + epsilon)))
+
+
+@torch.no_grad()
+def _lens_project_roi_mask(gaussians, roi_mask_3d, cam, pipe_params, background, override_opacity, device):
+    from gaussiansplatting.gaussian_renderer import render
+    N = gaussians.get_xyz.shape[0]
+    roi_mask_3d = roi_mask_3d.to(gaussians.get_xyz.device).bool()
+    colors = torch.zeros(N, 3, device=device)
+    colors[roi_mask_3d] = 1.0
+    bg_black = torch.zeros(3, device=device)
+    out = render(cam, gaussians, pipe_params, bg_black, override_color=colors, override_opacity=override_opacity)
+    mask_rgb = out["render"]
+    mask_2d = mask_rgb.mean(dim=0, keepdim=True)
+    mask_2d = (mask_2d > 0.1).float()
+    return mask_2d
+
+
+def _lens_compute_sage_score(A_spatial, roi_mask_2d, lambda_leak=1.5, lambda_ent=2.0, entropy_thresh=0.97,
+                              occupancy_lo=0.10, occupancy_hi=0.70, size_penalty_val=10.0):
+    M = roi_mask_2d.float().squeeze(0)
+    h_m, w_m = M.shape
+    A_native = A_spatial.float()
+    A_native_norm = (A_native - A_native.min()) / (A_native.max() - A_native.min() + 1e-8)
+    raw_entropy = _lens_compute_entropy(A_native_norm)
+    max_entropy = math.log(A_native.numel()) + 1e-8
+    entropy = raw_entropy / max_entropy
+    A_resized = torch.nn.functional.interpolate(
+        A_spatial[None, None].float(), size=(h_m, w_m), mode="bilinear"
+    ).squeeze()
+    A = A_resized.to(M.device)
+    A = (A - A.min()) / (A.max() - A.min() + 1e-8)
+    focus = float((A * M).sum() / (A.sum() + 1e-8))
+    bg = 1.0 - M
+    leakage = float((A * bg).sum() / (bg.sum() + 1e-8))
+    occupancy = float(M.mean())
+    size_penalty = size_penalty_val if (occupancy < occupancy_lo or occupancy > occupancy_hi) else 0.0
+    if entropy > entropy_thresh:
+        total_score = -float("inf")
+    else:
+        total_score = focus - (lambda_leak * leakage) - (lambda_ent * entropy) - size_penalty
+    return total_score, dict(focus=focus, leakage=leakage, entropy=entropy, occupancy=occupancy,
+                             size_penalty=size_penalty, total_score=total_score)
+
+
+def _lens_compute_editability_score(rgb, mask_2d, ip2p_pipe, prompt, lambda_leak, lambda_ent,
+                                    entropy_thresh, num_steps, seed):
+    M = mask_2d.float()
+    occupancy = float(M.mean())
+    if ip2p_pipe is None:
+        optimal_ratio = 0.30
+        focus = max(0.0, 1.0 - abs(occupancy - optimal_ratio) / optimal_ratio)
+        size_penalty = 10.0 if (occupancy < 0.10 or occupancy > 0.70) else 0.0
+        return focus - size_penalty, dict(focus=focus, leakage=0.0, entropy=0.0, occupancy=occupancy,
+                                         size_penalty=size_penalty, total_score=focus - size_penalty,
+                                         mode="heuristic")
+    A_spatial = _lens_extract_attention_map(rgb, ip2p_pipe, prompt, num_steps, seed)
+    if A_spatial is None:
+        optimal_ratio = 0.30
+        focus = max(0.0, 1.0 - abs(occupancy - optimal_ratio) / optimal_ratio)
+        size_penalty = 10.0 if (occupancy < 0.10 or occupancy > 0.70) else 0.0
+        return focus - size_penalty, dict(focus=focus, leakage=0.0, entropy=0.0, occupancy=occupancy,
+                                         size_penalty=size_penalty, total_score=focus - size_penalty,
+                                         mode="fallback")
+    score, details = _lens_compute_sage_score(A_spatial, mask_2d, lambda_leak, lambda_ent, entropy_thresh)
+    details["mode"] = "sage"
+    return score, details
+
+
+def _lens_tokenize_and_find_keyword_indices(ip2p_pipe, prompt):
+    tokenizer = ip2p_pipe.tokenizer
+    tokens = tokenizer(prompt, return_tensors="pt", padding=False)
+    input_ids = tokens["input_ids"][0].tolist()
+    indices = []
+    for i, tid in enumerate(input_ids):
+        if tid not in (tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id):
+            indices.append(i)
+    return indices if indices else list(range(1, min(len(input_ids) - 1, 10)))
+
+
+class _LensStoringAttnProcessor:
+    def __init__(self):
+        self.attn_probs_list: List[torch.Tensor] = []
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
+        residual = hidden_states
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+        query = attn.to_q(hidden_states)
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        self.attn_probs_list.append(attention_probs.detach().cpu())
+        hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+        hidden_states = hidden_states / attn.rescale_output_factor
+        return hidden_states
+
+
+def _lens_aggregate_attention_at_resolution(storing_processors, target_spatial, keyword_indices):
+    collected = []
+    for sp in storing_processors.values():
+        for ap in sp.attn_probs_list:
+            if ap.shape[-2] == target_spatial:
+                collected.append(ap.float())
+    if not collected:
+        return None
+    all_maps = torch.stack(collected)
+    avg_map = all_maps.mean(dim=(0, 1))
+    token_sel = [i for i in keyword_indices if i < avg_map.shape[-1]]
+    if token_sel:
+        avg_map = avg_map[:, token_sel]
+    A_flat = avg_map.max(dim=-1).values
+    side = int(math.sqrt(target_spatial))
+    if side * side != target_spatial:
+        return None
+    return A_flat.view(side, side)
+
+
+def _lens_run_ip2p_and_collect(rendered_rgb, ip2p_pipe, prompt, num_steps=20, seed=None,
+                               guidance_scale=7.5, image_guidance_scale=1.5, device="cuda"):
+    from PIL import Image as PILImage
+    from torchvision.transforms import ToPILImage, ToTensor
+    rgb_pil = ToPILImage()(rendered_rgb.cpu().clamp(0, 1))
+    rgb_pil = rgb_pil.resize((512, 512), PILImage.BICUBIC)
+    keyword_indices = _lens_tokenize_and_find_keyword_indices(ip2p_pipe, prompt)
+    original_processors = {}
+    storing_processors = {}
+    for name, mod in ip2p_pipe.unet.named_modules():
+        if name.endswith(".attn2") and hasattr(mod, "processor"):
+            original_processors[name] = mod.processor
+            sp = _LensStoringAttnProcessor()
+            storing_processors[name] = sp
+            mod.set_processor(sp)
+    generator = None
+    if seed is not None:
+        exec_device = getattr(ip2p_pipe, "_execution_device", None) or ip2p_pipe.unet.device
+        generator = torch.Generator(device=str(exec_device)).manual_seed(seed)
+    with torch.no_grad():
+        result = ip2p_pipe(
+            prompt=prompt, image=rgb_pil, num_inference_steps=num_steps,
+            guidance_scale=guidance_scale, image_guidance_scale=image_guidance_scale,
+            output_type="pil", generator=generator,
+        )
+    for name, mod in ip2p_pipe.unet.named_modules():
+        if name in original_processors:
+            mod.set_processor(original_processors[name])
+    edited_t = ToTensor()(result.images[0]) if result and result.images else None
+    return storing_processors, keyword_indices, edited_t
+
+
+def _lens_extract_attention_map(rendered_rgb, ip2p_pipe, prompt, num_steps=20, seed=None):
+    storing_processors, keyword_indices, _ = _lens_run_ip2p_and_collect(
+        rendered_rgb, ip2p_pipe, prompt, num_steps, seed=seed
+    )
+    TARGET_SPATIAL = 256
+    A = _lens_aggregate_attention_at_resolution(storing_processors, TARGET_SPATIAL, keyword_indices)
+    if A is None:
+        for sp in storing_processors.values():
+            for ap in sp.attn_probs_list:
+                A = _lens_aggregate_attention_at_resolution(storing_processors, ap.shape[-2], keyword_indices)
+                if A is not None:
+                    break
+            if A is not None:
+                break
+    return A
+
+
+def _lens_run_ip2p_unified(rgb, mask_2d, ip2p_pipe, prompt, lambda_leak, lambda_ent, entropy_thresh,
+                           num_steps, seed, guidance_scale, image_guidance_scale, device):
+    storing_processors, keyword_indices, edited_t = _lens_run_ip2p_and_collect(
+        rgb, ip2p_pipe, prompt, num_steps, seed, guidance_scale, image_guidance_scale, device
+    )
+    TARGET_SPATIAL = 256
+    A_16 = _lens_aggregate_attention_at_resolution(storing_processors, TARGET_SPATIAL, keyword_indices)
+    if A_16 is None:
+        for sp in storing_processors.values():
+            for ap in sp.attn_probs_list:
+                A_16 = _lens_aggregate_attention_at_resolution(storing_processors, ap.shape[-2], keyword_indices)
+                if A_16 is not None:
+                    break
+            if A_16 is not None:
+                break
+    if A_16 is not None:
+        sage_score, sage_details = _lens_compute_sage_score(A_16, mask_2d, lambda_leak, lambda_ent, entropy_thresh)
+        sage_details["mode"] = "sage"
+    else:
+        M = mask_2d.float()
+        occupancy = float(M.mean())
+        optimal_ratio = 0.30
+        focus = max(0.0, 1.0 - abs(occupancy - optimal_ratio) / optimal_ratio)
+        size_penalty = 10.0 if (occupancy < 0.10 or occupancy > 0.70) else 0.0
+        sage_score = focus - size_penalty
+        sage_details = dict(focus=focus, leakage=0.0, entropy=0.0, occupancy=occupancy,
+                            size_penalty=size_penalty, total_score=sage_score, mode="fallback")
+    return sage_score, sage_details, edited_t
+
+
+@torch.no_grad()
+def _lens_scale_probing(gaussians, roi_info, pipe_params, background, fovy, h, w, roi_mask,
+                        ip2p_pipe, edit_prompt, distance_multipliers, lambda_leak, lambda_ent,
+                        entropy_thresh, override_opacity, device, ip2p_steps: int = 20,
+                        ip2p_guidance_scale: float = 7.5, ip2p_image_guidance_scale: float = 1.5):
+    from gaussiansplatting.gaussian_renderer import render
+    center = roi_info["center"]
+    v_front = roi_info["v_front"]
+    eigenvalues = roi_info["eigenvalues"]
+    r_obj = float(np.sqrt(np.abs(eigenvalues[0])))
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    print(f"[Step2] r_obj (sqrt(lambda_max)) = {r_obj:.4f}")
+    print(f"[Step2] Candidate distances: {[f'{m}x r_obj = {m * r_obj:.4f}' for m in distance_multipliers]}")
+    best_d = distance_multipliers[len(distance_multipliers) // 2] * r_obj
+    best_score = -float("inf")
+    best_mult = distance_multipliers[len(distance_multipliers) // 2]
+    for i, mult in enumerate(distance_multipliers):
+        d = mult * r_obj
+        eye = center + v_front * d
+        cam = _lens_make_camera(eye, center, world_up, fovy, h, w, uid=i, device=device)
+        out = render(cam, gaussians, pipe_params, background, override_opacity=override_opacity)
+        rgb = out["render"]
+        if roi_mask is not None:
+            mask_2d = _lens_project_roi_mask(gaussians, roi_mask, cam, pipe_params, background, override_opacity, device)
+        else:
+            mask_2d = torch.ones(1, h, w, device=device)
+        per_view_seed = 5  # match generate_by_lens.py for reproducibility
+        if ip2p_pipe is not None:
+            score, details, _ = _lens_run_ip2p_unified(
+                rgb, mask_2d, ip2p_pipe, edit_prompt, lambda_leak, lambda_ent, entropy_thresh,
+                ip2p_steps, per_view_seed, ip2p_guidance_scale, ip2p_image_guidance_scale, device
+            )
+        else:
+            score, details = _lens_compute_editability_score(
+                rgb, mask_2d, None, edit_prompt, lambda_leak, lambda_ent, entropy_thresh,
+                ip2p_steps, per_view_seed
+            )
+        status = "UNSAFE" if score == -float("inf") else f"{score:.4f}"
+        print(
+            f"[Step2]  d={d:.4f} ({mult}x) | "
+            f"focus={details['focus']:.3f}  leak={details['leakage']:.3f}  "
+            f"entropy={details['entropy']:.3f}  occ={details['occupancy']:.3f}  "
+            f"penalty={details['size_penalty']:.1f} | "
+            f"S_total={status}"
+        )
+        if score > best_score:
+            best_score = score
+            best_d = d
+            best_mult = mult
+    if best_score == -float("inf"):
+        fallback_mult = distance_multipliers[len(distance_multipliers) // 2]
+        best_d = fallback_mult * r_obj
+        best_mult = fallback_mult
+    print(f"[Step2] Best distance d*={best_d:.4f} (mult={best_mult:.2f}x, score={best_score:.4f})")
+    return best_d
+
+
+def _lens_fibonacci_sphere_samples(n: int) -> np.ndarray:
+    golden_angle = math.pi * (3.0 - math.sqrt(5.0))
+    points = []
+    for i in range(n):
+        z = 1.0 - (2.0 * i) / (n - 1) if n > 1 else 0.0
+        radius = math.sqrt(max(0.0, 1.0 - z * z))
+        theta = golden_angle * i
+        points.append([radius * math.cos(theta), radius * math.sin(theta), z])
+    return np.array(points, dtype=np.float32)
+
+
+def _lens_fibonacci_camera_candidates(center, distance, n_candidates, world_up, fovy, h, w,
+                                      hemisphere_only, colmap_cam_centers, cone_half_angle_deg, device):
+    directions = _lens_fibonacci_sphere_samples(n_candidates)
+    if hemisphere_only:
+        up_axis = _lens_normalize(world_up)
+        dots = directions @ up_axis
+        directions = directions[dots > -0.1]
+    if colmap_cam_centers is not None:
+        mean_cam_dir = _lens_normalize((colmap_cam_centers - center[None, :]).mean(axis=0))
+        cos_threshold = math.cos(math.radians(cone_half_angle_deg))
+        dots = directions @ mean_cam_dir
+        directions = directions[dots > cos_threshold]
+        print(f"[Step3] Cone filter: {len(directions)} candidates within "
+              f"{cone_half_angle_deg}° of COLMAP mean direction")
+    cameras = []
+    for i, d in enumerate(directions):
+        eye = center + d * distance
+        cam = _lens_make_camera(eye, center, world_up, fovy, h, w, uid=i, device=device)
+        cameras.append(cam)
+    print(f"[Step3] Generated {len(cameras)} Fibonacci candidates (d={distance:.4f})")
+    return cameras
+
+
+@torch.no_grad()
+def _lens_score_candidates(cameras, gaussians, roi_mask, roi_info, pipe_params, background,
+                           w_vis, w_can, override_opacity, device):
+    from gaussiansplatting.gaussian_renderer import render
+    center = roi_info["center"]
+    v_front = roi_info["v_front"]
+    v2 = roi_info["v2"]
+    results = []
+    for idx, cam in enumerate(cameras):
+        out = render(cam, gaussians, pipe_params, background, override_opacity=override_opacity)
+        if roi_mask is not None:
+            mask_2d = _lens_project_roi_mask(gaussians, roi_mask, cam, pipe_params, background, override_opacity, device)
+            S_vis = float(mask_2d.sum()) / (float(mask_2d.numel()) + 1e-8)
+        else:
+            S_vis = 1.0
+        cam_center = cam.camera_center.cpu().numpy()
+        view_dir = _lens_normalize(center - cam_center)
+        cos_front = abs(float(np.dot(view_dir, v_front)))
+        cos_side = abs(float(np.dot(view_dir, v2)))
+        S_can = max(cos_front, cos_side * 0.8)
+        energy = w_vis * S_vis + w_can * S_can
+        results.append((idx, energy, S_vis, S_can))
+    results.sort(key=lambda x: x[1], reverse=True)
+    return results
+
+
+def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
+    n_pool = max(int(len(scored) * top_fraction), n_select)
+    pool = scored[:n_pool]
+    pool_indices = [s[0] for s in pool]
+    pool_energies = {s[0]: s[1] for s in pool}
+    view_dirs = {}
+    for ci in pool_indices:
+        cc = cameras[ci].camera_center.cpu().numpy()
+        view_dirs[ci] = _lens_normalize(cc - center)
+    selected = []
+    remaining = set(pool_indices)
+    first = pool_indices[0]
+    selected.append(first)
+    remaining.discard(first)
+    while len(selected) < n_select and remaining:
+        best_idx, best_sc = None, -1e9
+        for ci in remaining:
+            min_ang = 1e9
+            for si in selected:
+                cos_sim = float(np.dot(view_dirs[ci], view_dirs[si]))
+                ang = math.acos(np.clip(cos_sim, -1.0, 1.0))
+                min_ang = min(min_ang, ang)
+            combined = min_ang * pool_energies[ci]
+            if combined > best_sc:
+                best_sc = combined
+                best_idx = ci
+        if best_idx is not None:
+            selected.append(best_idx)
+            remaining.discard(best_idx)
+        else:
+            break
+    return selected
+
+
+@torch.no_grad()
+def _lens_compute_roi_mask_from_segmentation(gaussians, prompt, pipe_params, background,
+                                             cam_centers, cam_forwards, fovy, h, w, n_views=8,
+                                             threshold=0.3, override_opacity=None, device="cuda"):
+    from gaussiansplatting.utils.graphics_utils import fov2focal
+    from gaussiansplatting.gaussian_renderer import render
+    world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    N_gauss = gaussians.get_xyz.shape[0]
+    accum = torch.zeros(N_gauss, device=device)
+    count = torch.zeros(N_gauss, device=device)
+    num_cams = cam_centers.shape[0]
+    if num_cams == 0:
+        return None
+    segmentor = LangSAMTextSegmentor()
+    indices = list(range(num_cams)) if num_cams <= n_views else np.linspace(0, num_cams - 1, n_views, dtype=int).tolist()
+    for j, cam_idx in enumerate(indices):
+        eye = cam_centers[cam_idx].astype(np.float32)
+        fwd = _lens_normalize(cam_forwards[cam_idx].astype(np.float32))
+        target = eye + fwd
+        cam = _lens_make_camera(eye, target, world_up, fovy, h, w, uid=1000 + j, device=device)
+        out = render(cam, gaussians, pipe_params, background, override_opacity=override_opacity)
+        rgb = out["render"]
+        img_bhwc = rgb.permute(1, 2, 0).unsqueeze(0)
+        mask_2d = segmentor(img_bhwc, prompt).squeeze(0)
+        if mask_2d.sum() < 10:
+            continue
+        xyz = gaussians.get_xyz.detach()
+        R_c2w = torch.tensor(cam.R, device=xyz.device, dtype=torch.float32)
+        T_vec = torch.tensor(cam.T, device=xyz.device, dtype=torch.float32)
+        xyz_cam = xyz @ R_c2w + T_vec[None, :]
+        z = xyz_cam[:, 2]
+        valid = z > 0.01
+        fx = float(fov2focal(cam.FoVx, w))
+        fy_val = float(fov2focal(cam.FoVy, h))
+        px = xyz_cam[:, 0] * fx / z + w * 0.5
+        py = xyz_cam[:, 1] * fy_val / z + h * 0.5
+        in_bounds = valid & (px >= 0) & (px < w) & (py >= 0) & (py < h)
+        ib_idx = torch.where(in_bounds)[0]
+        mask_hw = mask_2d.squeeze().to(xyz.device).float()
+        px_ib = px[ib_idx].long().clamp(0, w - 1)
+        py_ib = py[ib_idx].long().clamp(0, h - 1)
+        mask_vals = mask_hw[py_ib, px_ib]
+        accum[ib_idx] += mask_vals
+        count[ib_idx] += 1.0
+    count = count.clamp(min=1.0)
+    scores = accum / count
+    roi_mask = scores > threshold
+    n_roi = int(roi_mask.sum().item())
+    threestudio.info(f"[ROI] Segmented {n_roi}/{N_gauss} Gaussians as ROI (prompt='{prompt}')")
+    if n_roi == 0:
+        threestudio.warn(f"[ROI] WARNING: No Gaussians matched prompt '{prompt}'. Falling back to all Gaussians.")
+        return None
+    return roi_mask
+
+
+def _lens_simple_camera_to_c2w(simple_cam: "Simple_Camera") -> np.ndarray:
+    R = simple_cam.R
+    cam_center = (-R @ np.array(simple_cam.T, dtype=np.float32)).astype(np.float32)
+    c2w = np.eye(4, dtype=np.float32)
+    c2w[:3, :3] = R
+    c2w[:3, 3] = cam_center
+    return c2w
+
+
+def _lens_run_generate_by_lens_pipeline(
+    gaussians,
+    cam_centers: np.ndarray,
+    cam_forwards: np.ndarray,
+    fovy: float,
+    h: int,
+    w: int,
+    roi_mask=None,
+    pipe_params=None,
+    background=None,
+    seg_prompt: str = "",
+    edit_prompt: str = "",
+    use_ip2p_scoring: bool = False,
+    ip2p_pipe=None,
+    distance_multipliers=None,
+    n_candidates: int = 150,
+    n_select: int = 20,
+    hemisphere_only: bool = False,
+    cone_half_angle_deg: float = 90.0,
+    w_vis: float = 0.6,
+    w_can: float = 0.4,
+    top_fraction: float = 0.20,
+    lambda_leak: float = 1.5,
+    lambda_ent: float = 2.0,
+    entropy_thresh: float = 0.97,
+    ip2p_steps: int = 20,
+    ip2p_guidance_scale: float = 7.5,
+    ip2p_image_guidance_scale: float = 1.5,
+    override_opacity=None,
+    device: str = "cuda",
+    latency_logger=None,
+):
+    """Inlined pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity."""
+    from argparse import Namespace
+    from gaussiansplatting.arguments import PipelineParams
+    from argparse import ArgumentParser
+
+    if pipe_params is None:
+        parser = ArgumentParser()
+        pp = PipelineParams(parser)  # add args once; avoid re-calling which causes conflicts
+        args = Namespace(convert_SHs_python=False, compute_cov3D_python=False, debug=False)
+        pipe_params = pp.extract(args)
+
+    if background is None:
+        background = torch.tensor([0, 0, 0], dtype=torch.float32, device=device)
+
+    if seg_prompt and roi_mask is None and gaussians is not None:
+        roi_mask = _lens_compute_roi_mask_from_segmentation(
+            gaussians, seg_prompt, pipe_params, background,
+            cam_centers, cam_forwards, fovy, h, w,
+            override_opacity=override_opacity, device=device,
+        )
+
+    from contextlib import nullcontext
+    _timeit = lambda name: (latency_logger.timeit(f"camera_generation.lens.{name}") if latency_logger else nullcontext())
+
+    print("\n========== Step 1: ROI Intrinsic Analysis ==========")
+    with _timeit("roi_analysis"):
+        roi_info = _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+        colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
+        colmap_median_dist = float(np.median(colmap_dists))
+        roi_info["colmap_median_dist"] = colmap_median_dist
+        if roi_info["object_size"] > colmap_median_dist:
+            roi_info["object_size"] = colmap_median_dist
+    ev = roi_info["eigenvalues"]
+    print(f"[Step1] ROI center={roi_info['center']}, eigenvalues={ev}, object_size={roi_info['object_size']:.4f}")
+    print(f"[Step1] COLMAP median distance to ROI center: {colmap_median_dist:.4f}")
+
+    print("\n========== Step 2: SAGE-Probing (Sharpness-Aware Scale Probing) ==========")
+    dist_mults = distance_multipliers or [1.5, 2.0, 2.5, 3.0, 3.5]
+    with _timeit("sage_probing"):
+        optimal_distance = _lens_scale_probing(
+            gaussians, roi_info, pipe_params, background, fovy, h, w, roi_mask,
+            ip2p_pipe=ip2p_pipe, edit_prompt=edit_prompt,
+            distance_multipliers=dist_mults,
+            lambda_leak=lambda_leak, lambda_ent=lambda_ent, entropy_thresh=entropy_thresh,
+            override_opacity=override_opacity, device=device,
+            ip2p_steps=ip2p_steps,
+            ip2p_guidance_scale=ip2p_guidance_scale,
+            ip2p_image_guidance_scale=ip2p_image_guidance_scale,
+        )
+
+    print("\n========== Step 3: Fibonacci Manifold Sampling ==========")
+    with _timeit("fibonacci"):
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+        candidates = _lens_fibonacci_camera_candidates(
+            center=roi_info["center"],
+            distance=optimal_distance,
+            n_candidates=n_candidates,
+            world_up=world_up,
+            fovy=fovy, h=h, w=w,
+            hemisphere_only=hemisphere_only,
+            colmap_cam_centers=cam_centers,
+            cone_half_angle_deg=cone_half_angle_deg,
+            device=device,
+        )
+
+    print("\n========== Step 4: Energy-based Scoring ==========")
+    with _timeit("energy_scoring"):
+        scored = _lens_score_candidates(
+            candidates, gaussians, roi_mask, roi_info, pipe_params, background,
+            w_vis=w_vis, w_can=w_can,
+            override_opacity=override_opacity, device=device,
+        )
+    n_scored = len([r for r in scored if r[1] > -1e9])
+    print(f"[Step4] Scored {n_scored}/{len(candidates)} candidates")
+    top5 = [(r[0], f"{r[1]:.4f}") for r in scored[:5]]
+    print(f"[Step4] Top-5 energies: {top5}")
+
+    print("\n========== Step 5: Diversity-aware Selection ==========")
+    with _timeit("diversity_selection"):
+        selected_indices = _lens_diversity_selection(
+            candidates, scored, roi_info["center"],
+            n_select=n_select, top_fraction=top_fraction,
+        )
+    n_pool = max(int(len(scored) * top_fraction), n_select)
+    pool_size = min(n_pool, len(scored))
+    print(f"[Step5] Selected {len(selected_indices)} diverse views from pool of {pool_size}")
+
+    final_cameras = [candidates[i] for i in selected_indices]
+    center = roi_info["center"]
+
+    def _azimuth(cam):
+        cc = cam.camera_center.cpu().numpy()
+        diff = cc - center
+        return math.atan2(diff[2], diff[0])
+
+    final_cameras.sort(key=_azimuth)
+    return final_cameras
+
 
 class GSLoadIterableDataset(IterableDataset, Updateable):
-    def __init__(self, cfg, scene, system_seg_prompt: Optional[str] = None, gaussian_model=None) -> None:
+    def __init__(self, cfg, scene, system_seg_prompt: Optional[str] = None, gaussian_model=None,
+                 latency_logger=None) -> None:
         super().__init__()
         self.cfg: GSLoadDataModuleConfig = cfg
         self.scene = scene
         self.system_seg_prompt = system_seg_prompt  # System's seg_prompt, if available
         self.gaussian_model = gaussian_model  # GaussianModel instance, if available
+        self.latency_logger = latency_logger
         self.total_view_num = len(self.scene.cameras)
         random.seed(0)  # make sure same views
 
@@ -286,6 +1010,12 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         elif self.cfg.edit_view_selection_strategy == "mmr":
             self.edit_view_index = self._select_cameras_by_mmr(self.cfg.max_edit_view_num)
             self.total_view_num = len(self.scene.cameras)
+        elif self.cfg.edit_view_selection_strategy == "lens":
+            # Lens: generate max_view_num cameras; first max_edit_view_num are edit views, all for training
+            self.train_view_index, self.edit_view_index = self._generate_cameras_by_lens(
+                self.cfg.max_view_num, self.cfg.max_edit_view_num
+            )
+            self.total_view_num = len(self.scene.cameras)
         elif self.cfg.edit_view_selection_strategy == "region-aware-only":
             self.edit_view_index = self._select_cameras_by_region_aware_only(self.cfg.max_edit_view_num)
         elif self.cfg.edit_view_selection_strategy == "manual-20":
@@ -303,10 +1033,11 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
             raise ValueError(f"Invalid edit view selection strategy: {self.cfg.edit_view_selection_strategy}")
         self.edit_view_index_stack = self.edit_view_index.copy()
 
-        # train_view_index는 edit_view_index를 포함하고 max_view_num - max_edit_view_num 만큼을 샘플해가지고 합치는거 하고 싶어
-        add_n = self.cfg.max_view_num - self.cfg.max_edit_view_num
-        rest = list(set(range(self.total_view_num)) - set(self.edit_view_index))
-        self.train_view_index = self.edit_view_index + random.sample(rest, add_n) if add_n > 0 else self.edit_view_index
+        # train_view_index: edit_view_index + optionally extra views from rest
+        if self.cfg.edit_view_selection_strategy != "lens":
+            add_n = self.cfg.max_view_num - self.cfg.max_edit_view_num
+            rest = list(set(range(self.total_view_num)) - set(self.edit_view_index))
+            self.train_view_index = self.edit_view_index + random.sample(rest, min(add_n, len(rest))) if add_n > 0 and rest else self.edit_view_index
         self.train_view_index_stack = self.train_view_index.copy()
 
 
@@ -576,103 +1307,103 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         
         return selected_indices
 
-    def _generate_cameras_by_rows(self):
-        """
-        4개 row × 각 5개의 카메라(총 20개)를 기존 카메라 분포를 기준으로 생성.
-        - y축을 값 기준으로 4등분해서 row를 나눔
-        - 각 row 안에서 기존 카메라의 x 범위에서 5개 위치를 샘플
-        - 회전(R)은 해당 row의 '대표 카메라'에서 그대로 가져오고, 위치(translation)만 바꿈
-        => GS/Colmap 좌표계 convention을 유지하므로 검정 화면 문제를 피함
-        """
-        from gaussiansplatting.scene.cameras import C2W_Camera
-        import numpy as np
-        import torch
+    # def _generate_cameras_by_rows(self):
+    #     """
+    #     4개 row × 각 5개의 카메라(총 20개)를 기존 카메라 분포를 기준으로 생성.
+    #     - y축을 값 기준으로 4등분해서 row를 나눔
+    #     - 각 row 안에서 기존 카메라의 x 범위에서 5개 위치를 샘플
+    #     - 회전(R)은 해당 row의 '대표 카메라'에서 그대로 가져오고, 위치(translation)만 바꿈
+    #     => GS/Colmap 좌표계 convention을 유지하므로 검정 화면 문제를 피함
+    #     """
+    #     from gaussiansplatting.scene.cameras import C2W_Camera
+    #     import numpy as np
+    #     import torch
 
-        # 1. 기존 카메라 인덱스와 center 수집
-        indices = list(range(len(self.scene.cameras)))
-        centers = []
-        for idx in indices:
-            c = self.scene.cameras[idx].camera_center
-            if isinstance(c, torch.Tensor):
-                c = c.detach().cpu().numpy()
-            centers.append(c)
-        centers = np.array(centers)  # (N, 3)
+    #     # 1. 기존 카메라 인덱스와 center 수집
+    #     indices = list(range(len(self.scene.cameras)))
+    #     centers = []
+    #     for idx in indices:
+    #         c = self.scene.cameras[idx].camera_center
+    #         if isinstance(c, torch.Tensor):
+    #             c = c.detach().cpu().numpy()
+    #         centers.append(c)
+    #     centers = np.array(centers)  # (N, 3)
 
-        # 2. y축으로 4등분
-        min_y = np.min(centers[:, 1])
-        max_y = np.max(centers[:, 1])
-        y_range = max_y - min_y
-        y_b1 = min_y + 0.25 * y_range
-        y_b2 = min_y + 0.50 * y_range
-        y_b3 = min_y + 0.75 * y_range
+    #     # 2. y축으로 4등분
+    #     min_y = np.min(centers[:, 1])
+    #     max_y = np.max(centers[:, 1])
+    #     y_range = max_y - min_y
+    #     y_b1 = min_y + 0.25 * y_range
+    #     y_b2 = min_y + 0.50 * y_range
+    #     y_b3 = min_y + 0.75 * y_range
 
-        rows = {0: [], 1: [], 2: [], 3: []}  # 각 row에 카메라 인덱스 저장
-        for idx, c in zip(indices, centers):
-            y = c[1]
-            if y < y_b1:
-                rows[0].append(idx)
-            elif y < y_b2:
-                rows[1].append(idx)
-            elif y < y_b3:
-                rows[2].append(idx)
-            else:
-                rows[3].append(idx)
+    #     rows = {0: [], 1: [], 2: [], 3: []}  # 각 row에 카메라 인덱스 저장
+    #     for idx, c in zip(indices, centers):
+    #         y = c[1]
+    #         if y < y_b1:
+    #             rows[0].append(idx)
+    #         elif y < y_b2:
+    #             rows[1].append(idx)
+    #         elif y < y_b3:
+    #             rows[2].append(idx)
+    #         else:
+    #             rows[3].append(idx)
 
-        generated_cameras = []
+    #     generated_cameras = []
 
-        height = self.scene.cameras[0].image_height
-        width = self.scene.cameras[0].image_width
-        fovy = self.scene.cameras[0].FoVy
+    #     height = self.scene.cameras[0].image_height
+    #     width = self.scene.cameras[0].image_width
+    #     fovy = self.scene.cameras[0].FoVy
 
-        # 3. 각 row마다 5개씩 생성
-        for r in range(4):
-            row_idx_list = rows[r]
-            if len(row_idx_list) == 0:
-                continue
+    #     # 3. 각 row마다 5개씩 생성
+    #     for r in range(4):
+    #         row_idx_list = rows[r]
+    #         if len(row_idx_list) == 0:
+    #             continue
 
-            row_centers = centers[row_idx_list]  # (Nr, 3)
+    #         row_centers = centers[row_idx_list]  # (Nr, 3)
 
-            # x 범위, y/z 대표값
-            x_min, x_max = row_centers[:, 0].min(), row_centers[:, 0].max()
-            y_med = np.median(row_centers[:, 1])
-            z_med = np.median(row_centers[:, 2])
+    #         # x 범위, y/z 대표값
+    #         x_min, x_max = row_centers[:, 0].min(), row_centers[:, 0].max()
+    #         y_med = np.median(row_centers[:, 1])
+    #         z_med = np.median(row_centers[:, 2])
 
-            x_samples = np.linspace(x_min, x_max, 5)
+    #         x_samples = np.linspace(x_min, x_max, 5)
 
-            # 이 row의 '대표 카메라' 하나 선택 (중앙 인덱스)
-            ref_idx = row_idx_list[len(row_idx_list) // 2]
-            ref_cam = self.scene.cameras[ref_idx]
+    #         # 이 row의 '대표 카메라' 하나 선택 (중앙 인덱스)
+    #         ref_idx = row_idx_list[len(row_idx_list) // 2]
+    #         ref_cam = self.scene.cameras[ref_idx]
 
-            # ref_cam 의 world_view_transform 을 이용해 c2w 추출
-            # (Graphdeco convention: c2w = inv(world_view_transform^T))
-            ref_wv = ref_cam.world_view_transform  # 4x4
-            ref_c2w = torch.inverse(ref_wv.T).detach().cpu().numpy()
+    #         # ref_cam 의 world_view_transform 을 이용해 c2w 추출
+    #         # (Graphdeco convention: c2w = inv(world_view_transform^T))
+    #         ref_wv = ref_cam.world_view_transform  # 4x4
+    #         ref_c2w = torch.inverse(ref_wv.T).detach().cpu().numpy()
 
-            # ref 카메라의 기존 center (검증용)
-            ref_center = ref_c2w[:3, 3].copy()
+    #         # ref 카메라의 기존 center (검증용)
+    #         ref_center = ref_c2w[:3, 3].copy()
 
-            for x in x_samples:
-                new_c2w = ref_c2w.copy()
-                new_c2w[:3, 3] = np.array([x, y_med, z_med], dtype=np.float32)
+    #         for x in x_samples:
+    #             new_c2w = ref_c2w.copy()
+    #             new_c2w[:3, 3] = np.array([x, y_med, z_med], dtype=np.float32)
 
-                c2w_tensor = torch.from_numpy(new_c2w).float()
+    #             c2w_tensor = torch.from_numpy(new_c2w).float()
 
-                new_cam = C2W_Camera(
-                    c2w=c2w_tensor,
-                    FoVy=fovy,
-                    height=height,
-                    width=width,
-                    data_device="cuda",
-                )
-                generated_cameras.append(new_cam)
+    #             new_cam = C2W_Camera(
+    #                 c2w=c2w_tensor,
+    #                 FoVy=fovy,
+    #                 height=height,
+    #                 width=width,
+    #                 data_device="cuda",
+    #             )
+    #             generated_cameras.append(new_cam)
 
-        # 4. scene 에 append 하고 인덱스 반환
-        start_idx = len(self.scene.cameras)
-        self.scene.cameras.extend(generated_cameras)
-        end_idx = len(self.scene.cameras)
+    #     # 4. scene 에 append 하고 인덱스 반환
+    #     start_idx = len(self.scene.cameras)
+    #     self.scene.cameras.extend(generated_cameras)
+    #     end_idx = len(self.scene.cameras)
 
-        camera_indices = list(range(start_idx, end_idx))
-        return generated_cameras, camera_indices
+    #     camera_indices = list(range(start_idx, end_idx))
+    #     return generated_cameras, camera_indices
 
 
     def estimate_radius_from_cameras(self, quantile: float = 0.8) -> float:
@@ -798,48 +1529,48 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         return None
 
 
-    def _generate_spherical_novel_cameras(self,
-        n_azimuth: int = 24,
-        elevations: list[float] = [0.0, 15.0],
-        radius: float | None = None,
-        device: str = "cuda",
-    ):
-        """
-        3DGS 좌표계 기준 spherical novel view들을 생성.
-        - azimuth: 0~360도를 균일하게 샘플
-        - elevations: 여러 고도(각도)에서 링을 여러 개 생성
-        - radius: None이면 기존 카메라들에서 추정
-        """
-        if radius is None:
-            radius = self.estimate_radius_from_cameras()
+    # def _generate_spherical_novel_cameras(self,
+    #     n_azimuth: int = 24,
+    #     elevations: list[float] = [0.0, 15.0],
+    #     radius: float | None = None,
+    #     device: str = "cuda",
+    # ):
+    #     """
+    #     3DGS 좌표계 기준 spherical novel view들을 생성.
+    #     - azimuth: 0~360도를 균일하게 샘플
+    #     - elevations: 여러 고도(각도)에서 링을 여러 개 생성
+    #     - radius: None이면 기존 카메라들에서 추정
+    #     """
+    #     if radius is None:
+    #         radius = self.estimate_radius_from_cameras()
 
-        height = self.scene.cameras[0].image_height
-        width = self.scene.cameras[0].image_width
-        fovy = self.scene.cameras[0].FoVy
+    #     height = self.scene.cameras[0].image_height
+    #     width = self.scene.cameras[0].image_width
+    #     fovy = self.scene.cameras[0].FoVy
 
-        from gaussiansplatting.scene.cameras import C2W_Camera
-        novel_cams: list[C2W_Camera] = []
+    #     from gaussiansplatting.scene.cameras import C2W_Camera
+    #     novel_cams: list[C2W_Camera] = []
 
-        for phi in elevations:            # 고도
-            for i in range(n_azimuth):    # 방위각
-                theta = 360.0 * i / n_azimuth  # [0, 360)
-                c2w = pose_spherical(theta, phi, radius)  # 이미 정의된 함수 사용
-                c2w = c2w.to(device)
+    #     for phi in elevations:            # 고도
+    #         for i in range(n_azimuth):    # 방위각
+    #             theta = 360.0 * i / n_azimuth  # [0, 360)
+    #             c2w = pose_spherical(theta, phi, radius)  # 이미 정의된 함수 사용
+    #             c2w = c2w.to(device)
 
-                cam = C2W_Camera(
-                    c2w=c2w,
-                    FoVy=fovy,
-                    height=height,
-                    width=width,
-                    data_device=device,
-                )
-                novel_cams.append(cam)
+    #             cam = C2W_Camera(
+    #                 c2w=c2w,
+    #                 FoVy=fovy,
+    #                 height=height,
+    #                 width=width,
+    #                 data_device=device,
+    #             )
+    #             novel_cams.append(cam)
 
-        start_idx = len(self.scene.cameras)
-        self.scene.cameras.extend(novel_cams)
-        end_idx = len(self.scene.cameras)
-        camera_indices = list(range(start_idx, end_idx))
-        return novel_cams, camera_indices
+    #     start_idx = len(self.scene.cameras)
+    #     self.scene.cameras.extend(novel_cams)
+    #     end_idx = len(self.scene.cameras)
+    #     camera_indices = list(range(start_idx, end_idx))
+    #     return novel_cams, camera_indices
 
     def _select_cameras_by_depth(self):
         """
@@ -1265,6 +1996,228 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         
         return selected_indices
 
+    def _generate_cameras_by_lens(self, max_view_num: int, max_edit_view_num: int):
+        """
+        Generate-by-Lens: Same logic as generate_by_lens.py (inlined).
+
+        Pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity.
+        Loads IP2P when lens_use_ip2p_scoring=True for SAGE attention-based scoring.
+        """
+        from gaussiansplatting.scene.vanilla_gaussian_model import GaussianModel
+
+        device = "cuda"
+        height = self.scene.cameras[0].image_height
+        width = self.scene.cameras[0].image_width
+
+        height = 512
+        width = 512
+
+        # Use load_colmap_prior order (images.values()) to match generate_by_lens exactly.
+        # CamScene sorts by image_name → different order → different ROI/selection.
+        cam_centers, cam_forwards, fovy_colmap = _lens_load_colmap_prior(self.cfg.source)
+        fovy = float(self.scene.cameras[0].FoVy)  # use scene FoVy for our render resolution
+        print(f"fovy: {fovy:.6f}, fovy_colmap: {fovy_colmap:.6f}")
+
+        # Resolve gaussian: lens_ply_path or gaussian_model
+        gaussians = self.gaussian_model
+        if gaussians is None and self.cfg.lens_ply_path:
+            threestudio.info(f"[Lens] Loading Gaussians from {self.cfg.lens_ply_path}")
+            gaussians = GaussianModel(sh_degree=3)
+            gaussians.load_ply(self.cfg.lens_ply_path)
+
+        if gaussians is None:
+            raise ValueError(
+                "[Lens] No gaussian model. Set lens_ply_path or ensure gaussian_model is set on dataset."
+            )
+
+        # Background
+        background = torch.tensor([0, 0, 0], dtype=torch.float32, device=device)
+
+        # Opacity override
+        override_opacity = None
+        if self.cfg.lens_min_opacity > 0:
+            op = gaussians.get_opacity
+            override_opacity = torch.where(
+                op >= self.cfg.lens_min_opacity, op, torch.zeros_like(op)
+            ).clone()
+
+        # IP2P: load when needed for SAGE scoring (same as generate_by_lens.py)
+        ip2p_pipe = None
+        if self.cfg.lens_use_ip2p_scoring and self.cfg.lens_edit_prompt:
+            from diffusers import StableDiffusionInstructPix2PixPipeline
+            print("[Step2] Loading IP2P model for SAGE attention-based scoring ...")
+            ip2p_pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+                "timbrooks/instruct-pix2pix",
+                torch_dtype=torch.float16,
+                safety_checker=None,
+            ).to(device)
+
+        seg_prompt = self.cfg.lens_seg_prompt or self.system_seg_prompt or ""
+        dist_mults = [float(x) for x in self.cfg.lens_distance_multipliers.split(",")]
+
+        def _run_lens():
+            return _lens_run_generate_by_lens_pipeline(
+            gaussians=gaussians,
+            cam_centers=cam_centers,
+            cam_forwards=cam_forwards,
+            fovy=fovy,
+            h=height,
+            w=width,
+            roi_mask=None,
+            seg_prompt=seg_prompt,
+            edit_prompt=self.cfg.lens_edit_prompt or "",
+            use_ip2p_scoring=self.cfg.lens_use_ip2p_scoring,
+            ip2p_pipe=ip2p_pipe,
+            distance_multipliers=dist_mults,
+            n_candidates=self.cfg.lens_n_candidates,
+            n_select=max_view_num,
+            hemisphere_only=self.cfg.lens_hemisphere_only,
+            cone_half_angle_deg=self.cfg.lens_cone_half_angle_deg,
+            w_vis=self.cfg.lens_w_vis,
+            w_can=self.cfg.lens_w_can,
+            top_fraction=self.cfg.lens_top_fraction,
+            lambda_leak=self.cfg.lens_lambda_leak,
+            lambda_ent=self.cfg.lens_lambda_ent,
+            entropy_thresh=self.cfg.lens_entropy_thresh,
+            ip2p_steps=self.cfg.lens_ip2p_steps,
+            ip2p_guidance_scale=self.cfg.lens_ip2p_guidance_scale,
+            ip2p_image_guidance_scale=self.cfg.lens_ip2p_image_guidance_scale,
+            override_opacity=override_opacity,
+            device=device,
+            latency_logger=self.latency_logger,
+        )
+        if self.latency_logger is not None:
+            with self.latency_logger.timeit("camera_generation.lens"):
+                simple_cameras = _run_lens()
+        else:
+            simple_cameras = _run_lens()
+
+        # Use Simple_Camera directly (same as generate_by_lens; avoid C2W_Camera conversion bugs)
+        final_cameras = list(simple_cameras)
+
+        # Save original Colmap cameras for update_mask(seg_prompt) - mask uses Colmap views, editing uses lens views
+        self.colmap_cameras_for_mask = list(self.scene.cameras)
+
+        # Replace scene with lens-generated cameras only (remove COLMAP cameras)
+        self.scene.cameras.clear()
+        self.scene.cameras.extend(final_cameras)
+        train_view_indices = list(range(len(final_cameras)))
+        edit_view_indices = train_view_indices[:max_edit_view_num]
+        threestudio.info(f"[Lens] train_view_index={len(train_view_indices)}, edit_view_index={len(edit_view_indices)} (first {max_edit_view_num} of {max_view_num})")
+        return train_view_indices, edit_view_indices
+
+    def _lens_compute_roi_mask(
+        self,
+        prompt: str,
+        cam_centers: np.ndarray,
+        cam_forwards: np.ndarray,
+        fovy: float,
+        h: int,
+        w: int,
+        device: str = "cuda",
+    ) -> Optional[torch.Tensor]:
+        """
+        Multi-view LangSAM segmentation → per-Gaussian ROI mask.
+        Back-projects 2D masks from several views to create a 3D mask.
+        """
+        from gaussiansplatting.scene.cameras import C2W_Camera
+        from gaussiansplatting.utils.graphics_utils import fov2focal
+
+        def _norm(v, eps=1e-8):
+            n = float(np.linalg.norm(v))
+            return v / n if n > eps else v
+
+        segmentor = LangSAMTextSegmentor().to(get_device())
+        world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+        N_gauss = self.gaussian_model.get_xyz.shape[0]
+        accum = torch.zeros(N_gauss, device=device)
+        count = torch.zeros(N_gauss, device=device)
+
+        num_cams = cam_centers.shape[0]
+        n_views = self.cfg.lens_n_seg_views
+        if num_cams <= n_views:
+            indices = list(range(num_cams))
+        else:
+            indices = np.linspace(0, num_cams - 1, n_views, dtype=int).tolist()
+
+        for j, cam_idx in enumerate(indices):
+            # Load actual image from COLMAP camera for segmentation
+            cam_obj = self.scene.cameras[cam_idx]
+            img_bhwc = self._load_camera_image(cam_obj, cam_idx)
+
+            if img_bhwc is None:
+                continue
+
+            with torch.no_grad():
+                mask_2d = segmentor(img_bhwc, prompt)  # (1, 1, H, W)
+            mask_2d = mask_2d.squeeze(0)  # (1, H, W)
+
+            if mask_2d.sum() < 10:
+                continue
+
+            # Back-project: get camera's c2w to project 3D Gaussians to 2D
+            if hasattr(cam_obj, 'c2w'):
+                c2w_mat = cam_obj.c2w
+                if isinstance(c2w_mat, torch.Tensor):
+                    c2w_mat = c2w_mat.detach().cpu().numpy()
+            elif hasattr(cam_obj, 'world_view_transform'):
+                wv = cam_obj.world_view_transform
+                if isinstance(wv, torch.Tensor):
+                    wv = wv.detach().cpu().numpy()
+                c2w_mat = np.linalg.inv(wv.T)
+            else:
+                continue
+
+            R_c2w = c2w_mat[:3, :3].astype(np.float32)
+
+            xyz = self.gaussian_model.get_xyz.detach()
+            R_c2w_t = torch.tensor(R_c2w, device=xyz.device, dtype=torch.float32)
+            T_vec = torch.tensor(
+                -(R_c2w.T @ c2w_mat[:3, 3]).astype(np.float32),
+                device=xyz.device,
+                dtype=torch.float32,
+            )
+
+            xyz_cam = xyz @ R_c2w_t + T_vec[None, :]
+            z = xyz_cam[:, 2]
+            valid = z > 0.01
+
+            cam_h = cam_obj.image_height if hasattr(cam_obj, 'image_height') else h
+            cam_w = cam_obj.image_width if hasattr(cam_obj, 'image_width') else w
+            cam_fovy = cam_obj.FoVy if hasattr(cam_obj, 'FoVy') else fovy
+
+            from gaussiansplatting.utils.graphics_utils import fov2focal, focal2fov
+            fx = float(fov2focal(float(focal2fov(float(fov2focal(cam_fovy, cam_h)), cam_w)), cam_w))
+            # Simplify: fx = fy * (w/h)
+            fy_val = float(fov2focal(cam_fovy, cam_h))
+            fx = fy_val * (float(cam_w) / float(cam_h))
+
+            px = xyz_cam[:, 0] * fx / z + cam_w * 0.5
+            py = xyz_cam[:, 1] * fy_val / z + cam_h * 0.5
+
+            in_bounds = valid & (px >= 0) & (px < cam_w) & (py >= 0) & (py < cam_h)
+            ib_idx = torch.where(in_bounds)[0]
+
+            mask_hw = mask_2d.squeeze().to(xyz.device).float()
+            px_ib = px[ib_idx].long().clamp(0, cam_w - 1)
+            py_ib = py[ib_idx].long().clamp(0, cam_h - 1)
+            mask_vals = mask_hw[py_ib, px_ib]
+
+            accum[ib_idx] += mask_vals
+            count[ib_idx] += 1.0
+
+        count = count.clamp(min=1.0)
+        scores = accum / count
+        roi_mask = scores > self.cfg.lens_seg_threshold
+
+        n_roi = int(roi_mask.sum().item())
+        threestudio.info(f"[Lens ROI] {n_roi}/{N_gauss} Gaussians as ROI (prompt='{prompt}')")
+        if n_roi == 0:
+            threestudio.warn(f"[Lens ROI] No Gaussians matched prompt '{prompt}'. Using all.")
+            return None
+        return roi_mask
+
     def _select_cameras_by_region_aware_only(self, num_cameras: int):
         """
         Region-Aware View Selection (without MMR diversity).
@@ -1435,7 +2388,14 @@ class GS_load(pl.LightningDataModule):
 
     def setup(self, stage=None) -> None:
         if stage in [None, "fit"]:
-            self.train_dataset = GSLoadIterableDataset(self.cfg, self.train_scene)
+            latency_logger = getattr(self, "latency_logger", None)
+            if latency_logger is not None:
+                with latency_logger.timeit("camera_generation"):
+                    self.train_dataset = GSLoadIterableDataset(
+                        self.cfg, self.train_scene, latency_logger=latency_logger
+                    )
+            else:
+                self.train_dataset = GSLoadIterableDataset(self.cfg, self.train_scene)
 
         if stage in [None, "fit", "validate"]:
             self.val_dataset = GSLoadDataset(

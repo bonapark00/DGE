@@ -61,6 +61,7 @@ class DGE(BaseLift3DSystem):
 
         # lr
         mask_thres: float = 0.5
+        mask_max_ratio: float = 0.9  # Skip views where mask covers > this fraction of image (0~1)
         max_grad: float = 1e-7
         min_opacity: float = 0.005
         
@@ -126,72 +127,53 @@ class DGE(BaseLift3DSystem):
 
     @torch.no_grad()
     def update_mask(self, seg_object=None, save_name="mask") -> None:
-        
-        if seg_object == self.cfg.target_prompt:
-            # select 20 views not in self.view_list
-            all_views = set(range(0, self.trainer.datamodule.train_dataset.total_view_num))
-            candidates = list(all_views - set(self.edit_view_index))
-            if len(candidates) < self.cfg.mask_update_view_num:
-                raise ValueError(
-                    f"Not enough views outside self.view_list to sample "
-                    f"{self.cfg.mask_update_view_num} views (got {len(candidates)})."
-                )
-            view_list = random.sample(candidates, self.cfg.mask_update_view_num)
+        train_dataset = self.trainer.datamodule.train_dataset
 
+        # Unified: select 30 cameras with largest distance from Gaussian center
+        if hasattr(train_dataset, 'colmap_cameras_for_mask') and train_dataset.colmap_cameras_for_mask is not None:
+            all_cameras = train_dataset.colmap_cameras_for_mask
+            print("[Lens] update_mask: using Colmap cameras for mask")
+        else:
+            all_cameras = train_dataset.scene.cameras
 
-        elif seg_object == self.cfg.seg_prompt:
-            # view_list = random.sample(range(0, 60), 30)
-            
-            # Select 30 cameras with largest distance from Gaussian center
-            all_cameras = self.trainer.datamodule.train_dataset.scene.cameras
-            
-            # Compute Gaussian center from model
-            gaussian_center = None
-            if hasattr(self, 'gaussian') and self.gaussian is not None:
-                try:
-                    xyz = self.gaussian.get_xyz  # (N, 3) tensor
-                    if isinstance(xyz, torch.Tensor):
-                        xyz_np = xyz.detach().cpu().numpy()
-                    else:
-                        xyz_np = np.array(xyz)
-                    gaussian_center = np.mean(xyz_np, axis=0).astype(np.float32)
-                    print(f"Computed Gaussian center from model: {gaussian_center}")
-                except Exception as e:
-                    threestudio.warn(f"Failed to get Gaussian center from model: {e}")
-            
-            # Fallback: use median of camera centers if Gaussian center not available
-            if gaussian_center is None:
-                cam_centers = []
-                for cam in all_cameras:
-                    center = cam.camera_center
-                    if isinstance(center, torch.Tensor):
-                        center = center.detach().cpu().numpy()
-                    cam_centers.append(center)
-                cam_centers = np.array(cam_centers)
-                gaussian_center = np.median(cam_centers, axis=0)
-                print(f"Using median of camera centers as object center: {gaussian_center}")
-            
-            gaussian_center_tensor = torch.tensor(gaussian_center, device=get_device(), dtype=torch.float32)
-            
-            # Calculate distance from each camera to Gaussian center
-            camera_distances = []
-            for idx, cam in enumerate(all_cameras):
-                camera_center = cam.camera_center
-                if isinstance(camera_center, torch.Tensor):
-                    camera_center = camera_center.to(get_device())
+        # Compute Gaussian center from model
+        gaussian_center = None
+        if hasattr(self, 'gaussian') and self.gaussian is not None:
+            try:
+                xyz = self.gaussian.get_xyz
+                if isinstance(xyz, torch.Tensor):
+                    xyz_np = xyz.detach().cpu().numpy()
                 else:
-                    camera_center = torch.tensor(camera_center, device=get_device(), dtype=torch.float32)
-                
-                distance = torch.norm(camera_center - gaussian_center_tensor).item()
-                camera_distances.append((idx, distance))
-            
-            # Sort by distance (descending) and select top 30
-            camera_distances.sort(key=lambda x: x[1], reverse=True)
-            view_list = [idx for idx, _ in camera_distances[:30]]
-            
-            print(f"Selected 30 cameras with largest distance from Gaussian center: {[f'{idx}(dist={dist:.2f})' for idx, dist in camera_distances[:30]]}")
+                    xyz_np = np.array(xyz)
+                gaussian_center = np.mean(xyz_np, axis=0).astype(np.float32)
+                print(f"Computed Gaussian center from model: {gaussian_center}")
+            except Exception as e:
+                threestudio.warn(f"Failed to get Gaussian center from model: {e}")
 
-        # view_list = [_ for _ in range(0, 65)]
+        if gaussian_center is None:
+            cam_centers = []
+            for cam in all_cameras:
+                center = cam.camera_center
+                if isinstance(center, torch.Tensor):
+                    center = center.detach().cpu().numpy()
+                cam_centers.append(center)
+            cam_centers = np.array(cam_centers)
+            gaussian_center = np.median(cam_centers, axis=0)
+            print(f"Using median of camera centers as object center: {gaussian_center}")
+
+        gaussian_center_tensor = torch.tensor(gaussian_center, device=get_device(), dtype=torch.float32)
+        camera_distances = []
+        for idx, cam in enumerate(all_cameras):
+            camera_center = cam.camera_center
+            if isinstance(camera_center, torch.Tensor):
+                camera_center = camera_center.to(get_device())
+            else:
+                camera_center = torch.tensor(camera_center, device=get_device(), dtype=torch.float32)
+            distance = torch.norm(camera_center - gaussian_center_tensor).item()
+            camera_distances.append((idx, distance))
+        camera_distances.sort(key=lambda x: x[1], reverse=True)
+        view_list = [idx for idx, _ in camera_distances[:30]]
+        print(f"Selected 30 cameras with largest distance from Gaussian center: {[f'{idx}(dist={dist:.2f})' for idx, dist in camera_distances[:30]]}")
 
         print(f"View list for segmentation: {view_list}")
 
@@ -208,22 +190,27 @@ class DGE(BaseLift3DSystem):
             threestudio.info(f"Segmentation with prompt: {seg_object}")
 
 
+            use_colmap_for_mask = (
+                hasattr(train_dataset, 'colmap_cameras_for_mask')
+                and train_dataset.colmap_cameras_for_mask is not None
+            )
+
             for id in tqdm(view_list):
                 cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
                 cur_path_viz = os.path.join(
                     mask_cache_dir, "viz_{:0>4d}.png".format(id)
                 )
-                cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                if use_colmap_for_mask:
+                    cur_cam = train_dataset.colmap_cameras_for_mask[id]
+                else:
+                    cur_cam = train_dataset.scene.cameras[id]
 
                 if seg_object == self.cfg.target_prompt:
-                    # image_to_segment = self.edit_frames[id]
-
-                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
                     cur_batch = {
                         "index": id,
                         "camera": [cur_cam],
-                        "height": self.trainer.datamodule.train_dataset.height,
-                        "width": self.trainer.datamodule.train_dataset.width,
+                        "height": train_dataset.height,
+                        "width": train_dataset.width,
                     }
                     out = self(cur_batch)["comp_rgb"]
                     out_to_save = (
@@ -237,9 +224,26 @@ class DGE(BaseLift3DSystem):
                     )[None]
 
                 elif seg_object == self.cfg.seg_prompt:
-                    image_to_segment = self.origin_frames[id]
+                    if use_colmap_for_mask:
+                        # Lens: render from Colmap camera (origin_frames has lens views)
+                        cur_batch = {
+                            "index": id,
+                            "camera": [cur_cam],
+                            "height": train_dataset.height,
+                            "width": train_dataset.width,
+                        }
+                        out = self(cur_batch)["comp_rgb"]
+                        image_to_segment = out.detach().clone()
+                    else:
+                        image_to_segment = self.origin_frames[id]
 
                 mask = self.text_segmentor(image_to_segment, seg_object)[0].to(get_device())
+
+                # Skip views where mask covers too much of image (likely failed segmentation)
+                mask_ratio = mask[0].float().mean().item()
+                if mask_ratio > self.cfg.mask_max_ratio:
+                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} > {self.cfg.mask_max_ratio}")
+                    continue
 
                 mask_to_save = ( # todo: target_prompt에 대한 마스크는 저장할 필요 없음.
                         mask[0]
@@ -988,11 +992,12 @@ class DGE(BaseLift3DSystem):
 
     def on_fit_start(self) -> None:
         super().on_fit_start()
-        # latency logger under trial_dir/latency
-        latency_dir = os.path.join(self.get_save_dir(), "..", "latency")
-        latency_dir = os.path.abspath(latency_dir)
-        os.makedirs(latency_dir, exist_ok=True)
-        self._latency_logger = LatencyLogger(latency_dir)
+        # latency logger under trial_dir/latency (created in launch.py if not set)
+        if not hasattr(self, "_latency_logger") or self._latency_logger is None:
+            latency_dir = os.path.join(self.get_save_dir(), "..", "latency")
+            latency_dir = os.path.abspath(latency_dir)
+            os.makedirs(latency_dir, exist_ok=True)
+            self._latency_logger = LatencyLogger(latency_dir)
 
         with self._latency_logger.timeit("render_all_view"):
             self.render_all_view(cache_name="origin_render")

@@ -44,7 +44,12 @@ class LangSAMTextSegmentor(torch.nn.Module):
                 if mask is None:
                     print(f"No masks returned, using empty mask")
                     masks.append(torch.zeros_like(images[0, 0:1]))
-                elif getattr(mask, "ndim", 0) == 3:
+                    continue
+                # Convert list to numpy array if needed
+                if isinstance(mask, list):
+                    import numpy as np
+                    mask = np.array(mask)
+                if getattr(mask, "ndim", 0) == 3:
                     # mask may be numpy array [K, H, W]
                     # Check if mask array is empty (K=0)
                     if isinstance(mask, torch.Tensor):

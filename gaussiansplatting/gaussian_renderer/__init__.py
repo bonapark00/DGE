@@ -49,11 +49,13 @@ def render(
     bg_color: torch.Tensor,
     scaling_modifier=1.0,
     override_color=None,
+    override_opacity=None,
 ):
     """
     Render the scene.
 
     Background tensor (bg_color) must be on GPU!
+    override_opacity: optional (N, 1) tensor; if set, use instead of pc.get_opacity (e.g. to prune low-opacity floaters).
     """
 
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
@@ -91,7 +93,7 @@ def render(
 
     means3D = pc.get_xyz
     means2D = screenspace_points
-    opacity = pc.get_opacity
+    opacity = override_opacity if override_opacity is not None else pc.get_opacity
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.

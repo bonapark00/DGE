@@ -110,8 +110,20 @@ class C2W_Camera(nn.Module):
         R = c2w[:3, :3]
         T = c2w[:3, 3]
 
-        self.R = R.float()
-        self.T = T.float()
+        # Store R and T as numpy arrays for consistency with Simple_Camera
+        # Convert to numpy if tensor, otherwise keep as numpy
+        if isinstance(R, torch.Tensor):
+            self.R = R.detach().cpu().numpy().astype(np.float32)
+        else:
+            self.R = np.asarray(R, dtype=np.float32)
+        if isinstance(T, torch.Tensor):
+            self.T = T.detach().cpu().numpy().astype(np.float32)
+        else:
+            self.T = np.asarray(T, dtype=np.float32)
+        
+        # Keep tensor versions for internal computations
+        R_tensor = torch.from_numpy(self.R).float() if isinstance(self.R, np.ndarray) else R.float()
+        T_tensor = torch.from_numpy(self.T).float() if isinstance(self.T, np.ndarray) else T.float()
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_height =height
@@ -133,7 +145,7 @@ class C2W_Camera(nn.Module):
         self.trans = trans.float()
         self.scale = scale
 
-        self.world_view_transform = getWorld2View2_tensor(R, T).transpose(0, 1).float().cuda()
+        self.world_view_transform = getWorld2View2_tensor(R_tensor, T_tensor).transpose(0, 1).float().cuda()
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).float().cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0).float()
         self.camera_center = self.world_view_transform.inverse()[3, :3].float()
