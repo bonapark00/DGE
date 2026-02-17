@@ -1153,23 +1153,6 @@ class DGE(BaseLift3DSystem):
                     pass
 
 
-                # if (cur_index not in self.edit_frames or ( # 만약에 cur_index가 edit_frames에 없다면 그때 즉시 guidance 통과해서 이미지를 에디팅 해주는거임.
-                #     # edited_frames: dict{view_index: image} 형태로 저장됨.
-                #         self.cfg.per_editing_step > 0
-                #         and self.cfg.edit_begin_step
-                #         < self.global_step
-                #         < self.cfg.edit_until_step
-                #         and self.global_step % self.cfg.per_editing_step == 0
-                # )) and 'dge' not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
-                #     print(self.cfg.guidance_type)
-                #     with self._latency_logger.timeit("guidance_edit_single"): ## 여기 절대로 통과 안됨!
-                #         result = self.guidance(
-                #             images[img_index][None],
-                #             self.origin_frames[cur_index],
-                #             prompt_utils,
-                #         )
-                #     self.edit_frames[cur_index] = result["edit_images"].detach().clone()
-
             if len(gt_images) > 0: # ground truth image가 있다면 기존의 Loss를 그대로 활용
                 gt_images = torch.concatenate(gt_images, dim=0)
 
@@ -1196,17 +1179,7 @@ class DGE(BaseLift3DSystem):
                 # Direction CLIP loss
                 # images shape: (B, H, W, C) -> (B, C, H, W)로 변환 필요
                 # Prepare images for CLIP: apply mask if use_masked_image is True
-                # if self.cfg.use_masked_image:
-                #     # Apply mask to both rendered and original images
-                #     images_masked = images * mask  # (B, H, W, C)
-                #     gt_images_list = []
-                #     for idx in batch_index:
-                #         gt_images_list.append(self.origin_frames[idx])
-                #     gt_images_masked = torch.concatenate(gt_images_list, dim=0) * mask  # (B, H, W, C)
-                    
-                #     images_clip = images_masked.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
-                #     gt_images_clip = gt_images_masked.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
-                # else:
+              
                 images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
                 gt_images_list = []
                 for idx in batch_index:
