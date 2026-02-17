@@ -62,6 +62,8 @@ class DGE(BaseLift3DSystem):
         # lr
         mask_thres: float = 0.5
         mask_max_ratio: float = 0.9  # Skip views where mask covers > this fraction of image (0~1)
+        mask_min_ratio: float = 0.01  # Skip views where mask covers < this fraction (likely failed seg)
+        mask_outlier_iqr: float = 1.5  # IQR multiplier for outlier detection; exclude views outside [Q1-k*IQR, Q3+k*IQR]
         max_grad: float = 1e-7
         min_opacity: float = 0.005
         
@@ -195,7 +197,9 @@ class DGE(BaseLift3DSystem):
                 and train_dataset.colmap_cameras_for_mask is not None
             )
 
-            for id in tqdm(view_list):
+            # Pass 1: collect mask ratios for all views
+            collected = []
+            for id in tqdm(view_list, desc="update_mask pass1"):
                 cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
                 cur_path_viz = os.path.join(
                     mask_cache_dir, "viz_{:0>4d}.png".format(id)
@@ -238,13 +242,37 @@ class DGE(BaseLift3DSystem):
                         image_to_segment = self.origin_frames[id]
 
                 mask = self.text_segmentor(image_to_segment, seg_object)[0].to(get_device())
-
-                # Skip views where mask covers too much of image (likely failed segmentation)
                 mask_ratio = mask[0].float().mean().item()
+
+                # Hard bounds: skip extreme failures
                 if mask_ratio > self.cfg.mask_max_ratio:
-                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} > {self.cfg.mask_max_ratio}")
+                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} > mask_max_ratio={self.cfg.mask_max_ratio}")
+                    continue
+                if mask_ratio < self.cfg.mask_min_ratio:
+                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} < mask_min_ratio={self.cfg.mask_min_ratio}")
                     continue
 
+                collected.append((id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz))
+
+            # Outlier detection: exclude views with ratio outside [Q1 - k*IQR, Q3 + k*IQR]
+            if len(collected) >= 3:
+                ratios = np.array([r for _, _, r, _, _, _, _ in collected])
+                q1, q3 = np.percentile(ratios, [25, 75])
+                iqr = q3 - q1
+                k = self.cfg.mask_outlier_iqr
+                low = max(0.0, q1 - k * iqr)
+                high = min(1.0, q3 + k * iqr)
+                inlier_indices = [i for i, (_, _, r, _, _, _, _) in enumerate(collected) if low <= r <= high]
+                outlier_count = len(collected) - len(inlier_indices)
+                if outlier_count > 0:
+                    print(f"[update_mask] Outlier filter: Q1={q1:.3f} Q3={q3:.3f} IQR={iqr:.3f} -> [{low:.3f}, {high:.3f}], excluding {outlier_count} views")
+                    for i in range(len(collected)):
+                        if i not in inlier_indices:
+                            print(f"  - view {collected[i][0]}: ratio={collected[i][2]:.3f} (outlier)")
+                collected = [collected[i] for i in inlier_indices]
+
+            # Pass 2: apply_weights only for inlier views
+            for id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz in tqdm(collected, desc="update_mask pass2"):
                 mask_to_save = ( # todo: target_prompt에 대한 마스크는 저장할 필요 없음.
                         mask[0]
                         .cpu()  
@@ -751,6 +779,26 @@ class DGE(BaseLift3DSystem):
             name="test",
             step=self.true_global_step,
         )
+        # Save camera params for origin rendering (used by metrics GT)
+        # Use test_dataset to match test render output (it1500-test)
+        try:
+            test_ds = self.trainer.datamodule.test_dataset
+            cameras_list = []
+            indices = []
+            for i in range(len(test_ds)):
+                idx = test_ds.selected_views[i] if isinstance(test_ds.selected_views, (list, tuple)) else int(test_ds.selected_views[i].item())
+                cam = test_ds.scene.cameras[idx]
+                R = np.array(cam.R, dtype=np.float32) if not isinstance(cam.R, np.ndarray) else cam.R.astype(np.float32)
+                T = np.array(cam.T, dtype=np.float32) if not isinstance(cam.T, np.ndarray) else cam.T.astype(np.float32)
+                h = int(getattr(cam, "image_height", getattr(cam, "h", 512)))
+                w = int(getattr(cam, "image_width", getattr(cam, "w", 512)))
+                cameras_list.append({"R": R, "T": T, "FoVx": float(cam.FoVx), "FoVy": float(cam.FoVy), "h": h, "w": w})
+                indices.append(int(idx))
+            save_path = os.path.join(self.get_save_dir(), "cameras_for_origin.pt")
+            torch.save({"cameras": cameras_list, "indices": indices}, save_path)
+            print(f"[DGE] Saved {len(cameras_list)} cameras for origin rendering to {save_path}")
+        except Exception as e:
+            threestudio.warn(f"Failed to save cameras for origin: {e}")
         # save_list = []
         # # view_sorted 순서대로 저장 (순서가 저장되어 있으면 사용, 없으면 view index 오름차순)
         # if len(self.edit_frames_order) > 0:
@@ -1032,8 +1080,24 @@ class DGE(BaseLift3DSystem):
                 self.cfg.prompt_processor
             )
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds:
+            # Get or load IP2P OUTSIDE of latency measurement (exclude model loading)
+            dm = getattr(self.trainer, "datamodule", None)
+            ip2p_pipe = None
+            if dm is not None and getattr(dm, "ip2p_pipe", None) is not None:
+                ip2p_pipe = dm.ip2p_pipe
+            elif self.cfg.guidance_type == "dge-guidance":
+                from diffusers import StableDiffusionInstructPix2PixPipeline
+                threestudio.info("[DGE] Loading InstructPix2Pix (no shared pipe from lens)...")
+                ip2p_path = OmegaConf.select(self.cfg, "guidance.ip2p_name_or_path", default="timbrooks/instruct-pix2pix")
+                ip2p_pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+                    ip2p_path,
+                    torch_dtype=torch.float16,
+                    safety_checker=None,
+                ).to(get_device())
             with self._latency_logger.timeit("guidance_init"):
-                self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
+                self.guidance = threestudio.find(self.cfg.guidance_type)(
+                    self.cfg.guidance, preloaded_pipe=ip2p_pipe
+                )
                 # Set save_dir for guidance to save epipolar constraint images
                 self.guidance.save_dir = self.get_save_dir()
             
@@ -1195,7 +1259,10 @@ class DGE(BaseLift3DSystem):
                     torch.concatenate(
                         [self.origin_frames[idx] for idx in batch_index], dim=0
                     ),
-                    prompt_utils)  
+                    prompt_utils,
+                    cams=batch["camera"],
+                    latency_logger=self._latency_logger,
+                )
             loss += loss_dict["loss_sds"] * self.cfg.loss.lambda_sds 
 
         for name, value in self.cfg.loss.items():
