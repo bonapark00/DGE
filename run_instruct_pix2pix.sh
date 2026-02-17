@@ -11,6 +11,9 @@ IMAGE="/data/users/jaeyeonpark/dataset/mip-360/kitchen/images/DSCF0656.JPG"
 IMAGE="/data/users/jaeyeonpark/DGE-outputs/origin_render/0042.png"
 IMAGE="/data/users/jaeyeonpark/dataset/in2n-GSEditor/bear/images/frame_00017.jpg"
 IMAGE="/data/users/jaeyeonpark/dataset/mip-360/bicycle/images/_DSC8679.JPG"
+IMAGE="/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk/images/08.JPG"
+IMAGE="/working/style-transfer/DGE-camera-selection/t-shirt_closeup.png"
+IMAGE="/working/style-transfer/DGE-camera-selection/bear-closeup.png"
 
 PROMPT="Turn his ear into a cat's ear"
 PROMPT="Add pearl earring to his ear"
@@ -22,13 +25,16 @@ PROMPT="Turn the dozer into green"
 PROMPT="Make his mouth smile"
 PROMPT="Give the bear a pair of sunglasses"
 PROMPT="Turn the grass into flowers"
+PROMPT="Make the pooh look like a robot"
+PROMPT="Change the t-shirt's color into blue"
+PROMPT="Change the red sweater into a leather jacket"
 
 OUTPUT="./editing_image.png"   # leave empty for auto: <input_stem>_edited.<ext>
 
 # optional
-GUIDANCE_SCALE="7.5"
+GUIDANCE_SCALE="4.0" # 7.5 최초에
 NUM_STEPS="20"
-IMAGE_GUIDANCE_SCALE="1.5"
+IMAGE_GUIDANCE_SCALE="1.5" #  1.5 최초에
 DEVICE="cuda:2"
 SEED=""     # leave empty for random
 # -----------------------------------------

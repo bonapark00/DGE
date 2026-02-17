@@ -1645,6 +1645,12 @@ def main():
         help="Restrict candidates to upper hemisphere",
     )
     parser.add_argument(
+        "--cone_half_angle_deg",
+        type=float,
+        default=90.0,
+        help="Half-angle (in degrees) of the COLMAP view cone used to filter Fibonacci candidates (Step 3)",
+    )
+    parser.add_argument(
         "--use_ip2p_scoring", action="store_true",
         help="Use IP2P attention for editability scoring (slower, requires model download)",
     )
@@ -1937,7 +1943,7 @@ def main():
                     w=w,
                     hemisphere_only=args.hemisphere_only,
                     colmap_cam_centers=cam_centers,
-                    cone_half_angle_deg=90.0,
+                    cone_half_angle_deg=args.cone_half_angle_deg,
                     device=device,
                 )
     else:
@@ -1950,7 +1956,7 @@ def main():
             w=w,
             hemisphere_only=args.hemisphere_only,
             colmap_cam_centers=cam_centers,
-            cone_half_angle_deg=90.0,
+            cone_half_angle_deg=args.cone_half_angle_deg,
             device=device,
         )
 
