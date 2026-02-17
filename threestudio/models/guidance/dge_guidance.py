@@ -47,9 +47,7 @@ class DGEGuidance(BaseObject):
 
     cfg: Config
 
-    def configure(self) -> None:
-        threestudio.info(f"Loading InstructPix2Pix ...")
-
+    def configure(self, preloaded_pipe=None, **kwargs) -> None:
         self.weights_dtype = (
             torch.float16 if self.cfg.half_precision_weights else torch.float32
         )
@@ -62,9 +60,16 @@ class DGEGuidance(BaseObject):
             "cache_dir": self.cfg.cache_dir,
         }
 
-        self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
-            self.cfg.ip2p_name_or_path, **pipe_kwargs
-        ).to(self.device)
+        if preloaded_pipe is not None:
+            threestudio.info("Reusing shared InstructPix2Pix pipeline (from lens/dm)")
+            self.pipe = preloaded_pipe
+            if self.pipe.device != self.device:
+                self.pipe = self.pipe.to(self.device)
+        else:
+            threestudio.info("Loading InstructPix2Pix ...")
+            self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+                self.cfg.ip2p_name_or_path, **pipe_kwargs
+            ).to(self.device)
         self.scheduler = DDIMScheduler.from_pretrained(
             self.cfg.ddim_scheduler_name_or_path,
             subfolder="scheduler",
@@ -256,6 +261,13 @@ class DGEGuidance(BaseObject):
                                         epipolar_constrains = {}
                                         # Create directory for saving epipolar constraint images in save_dir
                                         epipolar_images_dir = os.path.join(self.save_dir, "epipolar_constraints_images")
+                                        
+                                        # Warmup: run first epipolar compute once to avoid cam_0 including CUDA init time
+                                        if torch.cuda.is_available() and key_cams:
+                                            _ = compute_epipolar_constrains(
+                                                key_cams[0], cams[b], current_H=current_H // 1, current_W=current_W // 1, downsample_factor=1
+                                            )
+                                            torch.cuda.synchronize()
                                         
                                         for down_sample_factor in [1, 2, 4, 8]:
                                             with latency_logger.timeit(f"edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}"):
@@ -459,7 +471,7 @@ class DGEGuidance(BaseObject):
 
         if self.cfg.use_sds:
             with latency_logger.timeit("edit_all_view.guidance_batch.compute_grad_sds"):
-                grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
+                grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t, cams)
             grad = torch.nan_to_num(grad)
             if self.grad_clip_val is not None:
                 grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
