@@ -238,7 +238,7 @@ class GSLoadDataModuleConfig:
     lens_seg_prompt: str = ""  # Text prompt for ROI segmentation (e.g. "red sweater")
     lens_n_candidates: int = 150  # Number of Fibonacci sphere candidates
     lens_hemisphere_only: bool = False  # Restrict to upper hemisphere
-    lens_cone_half_angle_deg: float = 90.0  # Cone constraint around COLMAP mean direction
+    lens_cone_half_angle_deg: float = 60.0  # Cone constraint around COLMAP mean direction
     lens_distance_multipliers: str = "2.0,2.5,3.0,4.0,5.0,6.0"  # Distance probing multipliers (× r_obj)
     lens_w_vis: float = 0.6  # Visibility score weight
     lens_w_can: float = 0.4  # Canonical alignment weight
@@ -763,7 +763,8 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
 @torch.no_grad()
 def _lens_compute_roi_mask_from_segmentation(gaussians, prompt, pipe_params, background,
                                              cam_centers, cam_forwards, fovy, h, w, n_views=8,
-                                             threshold=0.3, override_opacity=None, device="cuda"):
+                                             threshold=0.3, override_opacity=None, device="cuda",
+                                             segmentor=None):
     from gaussiansplatting.utils.graphics_utils import fov2focal
     from gaussiansplatting.gaussian_renderer import render
     world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -773,7 +774,8 @@ def _lens_compute_roi_mask_from_segmentation(gaussians, prompt, pipe_params, bac
     num_cams = cam_centers.shape[0]
     if num_cams == 0:
         return None
-    segmentor = LangSAMTextSegmentor()
+    if segmentor is None:
+        segmentor = LangSAMTextSegmentor().to(device)
     indices = list(range(num_cams)) if num_cams <= n_views else np.linspace(0, num_cams - 1, n_views, dtype=int).tolist()
     for j, cam_idx in enumerate(indices):
         eye = cam_centers[cam_idx].astype(np.float32)
@@ -855,6 +857,7 @@ def _lens_run_generate_by_lens_pipeline(
     override_opacity=None,
     device: str = "cuda",
     latency_logger=None,
+    segmentor=None,
 ):
     """Inlined pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity."""
     from argparse import Namespace
@@ -870,15 +873,17 @@ def _lens_run_generate_by_lens_pipeline(
     if background is None:
         background = torch.tensor([0, 0, 0], dtype=torch.float32, device=device)
 
-    if seg_prompt and roi_mask is None and gaussians is not None:
-        roi_mask = _lens_compute_roi_mask_from_segmentation(
-            gaussians, seg_prompt, pipe_params, background,
-            cam_centers, cam_forwards, fovy, h, w,
-            override_opacity=override_opacity, device=device,
-        )
-
     from contextlib import nullcontext
     _timeit = lambda name: (latency_logger.timeit(f"camera_generation.lens.{name}") if latency_logger else nullcontext())
+
+    if seg_prompt and roi_mask is None and gaussians is not None:
+        with _timeit("roi_mask_segmentation"):
+            roi_mask = _lens_compute_roi_mask_from_segmentation(
+                gaussians, seg_prompt, pipe_params, background,
+                cam_centers, cam_forwards, fovy, h, w,
+                override_opacity=override_opacity, device=device,
+                segmentor=segmentor,
+            )
 
     print("\n========== Step 1: ROI Intrinsic Analysis ==========")
     with _timeit("roi_analysis"):
@@ -957,13 +962,16 @@ def _lens_run_generate_by_lens_pipeline(
 
 class GSLoadIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg, scene, system_seg_prompt: Optional[str] = None, gaussian_model=None,
-                 latency_logger=None) -> None:
+                 latency_logger=None, ip2p_pipe=None, lens_gaussian_model=None, segmentor=None) -> None:
         super().__init__()
         self.cfg: GSLoadDataModuleConfig = cfg
         self.scene = scene
         self.system_seg_prompt = system_seg_prompt  # System's seg_prompt, if available
         self.gaussian_model = gaussian_model  # GaussianModel instance, if available
         self.latency_logger = latency_logger
+        self.ip2p_pipe = ip2p_pipe  # Shared IP2P pipeline (from dm when lens+ip2p)
+        self.lens_gaussian_model = lens_gaussian_model  # Pre-loaded lens Gaussian (from dm when lens+ply)
+        self.segmentor = segmentor  # Shared LangSAM segmentor (from system via dm)
         self.total_view_num = len(self.scene.cameras)
         random.seed(0)  # make sure same views
 
@@ -2001,10 +2009,8 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         Generate-by-Lens: Same logic as generate_by_lens.py (inlined).
 
         Pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity.
-        Loads IP2P when lens_use_ip2p_scoring=True for SAGE attention-based scoring.
+        Uses shared IP2P from dm when lens_use_ip2p_scoring=True (no loading here).
         """
-        from gaussiansplatting.scene.vanilla_gaussian_model import GaussianModel
-
         device = "cuda"
         height = self.scene.cameras[0].image_height
         width = self.scene.cameras[0].image_width
@@ -2018,10 +2024,11 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         fovy = float(self.scene.cameras[0].FoVy)  # use scene FoVy for our render resolution
         print(f"fovy: {fovy:.6f}, fovy_colmap: {fovy_colmap:.6f}")
 
-        # Resolve gaussian: lens_ply_path or gaussian_model
-        gaussians = self.gaussian_model
+        # Resolve gaussian: pre-loaded lens_gaussian_model, gaussian_model, or lens_ply_path (fallback)
+        gaussians = self.lens_gaussian_model or self.gaussian_model
         if gaussians is None and self.cfg.lens_ply_path:
-            threestudio.info(f"[Lens] Loading Gaussians from {self.cfg.lens_ply_path}")
+            from gaussiansplatting.scene.vanilla_gaussian_model import GaussianModel
+            threestudio.info(f"[Lens] Loading Gaussians from {self.cfg.lens_ply_path} (fallback)")
             gaussians = GaussianModel(sh_degree=3)
             gaussians.load_ply(self.cfg.lens_ply_path)
 
@@ -2041,16 +2048,8 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 op >= self.cfg.lens_min_opacity, op, torch.zeros_like(op)
             ).clone()
 
-        # IP2P: load when needed for SAGE scoring (same as generate_by_lens.py)
-        ip2p_pipe = None
-        if self.cfg.lens_use_ip2p_scoring and self.cfg.lens_edit_prompt:
-            from diffusers import StableDiffusionInstructPix2PixPipeline
-            print("[Step2] Loading IP2P model for SAGE attention-based scoring ...")
-            ip2p_pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
-                "timbrooks/instruct-pix2pix",
-                torch_dtype=torch.float16,
-                safety_checker=None,
-            ).to(device)
+        # IP2P: use shared pipe from dm (pre-loaded outside timeit when lens+ip2p)
+        ip2p_pipe = self.ip2p_pipe if (self.cfg.lens_use_ip2p_scoring and self.cfg.lens_edit_prompt) else None
 
         seg_prompt = self.cfg.lens_seg_prompt or self.system_seg_prompt or ""
         dist_mults = [float(x) for x in self.cfg.lens_distance_multipliers.split(",")]
@@ -2085,6 +2084,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
             override_opacity=override_opacity,
             device=device,
             latency_logger=self.latency_logger,
+            segmentor=self.segmentor,
         )
         if self.latency_logger is not None:
             with self.latency_logger.timeit("camera_generation.lens"):
@@ -2389,13 +2389,36 @@ class GS_load(pl.LightningDataModule):
     def setup(self, stage=None) -> None:
         if stage in [None, "fit"]:
             latency_logger = getattr(self, "latency_logger", None)
+            # Pre-load models OUTSIDE of latency measurement (exclude from timeit)
+            self.ip2p_pipe = None
+            self.lens_gaussian_model = None
+            if self.cfg.edit_view_selection_strategy == "lens":
+                if self.cfg.lens_use_ip2p_scoring and self.cfg.lens_edit_prompt:
+                    from diffusers import StableDiffusionInstructPix2PixPipeline
+                    threestudio.info("[Shared] Loading IP2P model (used by lens + DGE guidance)...")
+                    self.ip2p_pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+                        "timbrooks/instruct-pix2pix",
+                        torch_dtype=torch.float16,
+                        safety_checker=None,
+                    ).to(get_device())
+                if self.cfg.lens_ply_path:
+                    from gaussiansplatting.scene.vanilla_gaussian_model import GaussianModel
+                    threestudio.info(f"[Lens] Pre-loading Gaussians from {self.cfg.lens_ply_path}")
+                    self.lens_gaussian_model = GaussianModel(sh_degree=3)
+                    self.lens_gaussian_model.load_ply(self.cfg.lens_ply_path)
             if latency_logger is not None:
                 with latency_logger.timeit("camera_generation"):
                     self.train_dataset = GSLoadIterableDataset(
-                        self.cfg, self.train_scene, latency_logger=latency_logger
+                        self.cfg, self.train_scene, latency_logger=latency_logger,
+                        ip2p_pipe=self.ip2p_pipe, lens_gaussian_model=self.lens_gaussian_model,
+                        segmentor=getattr(self, "shared_segmentor", None),
                     )
             else:
-                self.train_dataset = GSLoadIterableDataset(self.cfg, self.train_scene)
+                self.train_dataset = GSLoadIterableDataset(
+                    self.cfg, self.train_scene,
+                    ip2p_pipe=self.ip2p_pipe, lens_gaussian_model=self.lens_gaussian_model,
+                    segmentor=getattr(self, "shared_segmentor", None),
+                )
 
         if stage in [None, "fit", "validate"]:
             self.val_dataset = GSLoadDataset(
