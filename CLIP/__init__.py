@@ -21,14 +21,14 @@ def compose_text_with_templates(text: str, templates=imagenet_templates) -> list
 
 def get_style_embedding(
         clip_model,
-        style_prompt,
+        style_target_prompt,
         style_image,
-        object_prompt
+        style_source_prompt
 ):
     with torch.no_grad():
         if style_image is None:
-            print(style_prompt)
-            template_text = compose_text_with_templates(style_prompt, imagenet_templates)
+            print(style_target_prompt)
+            template_text = compose_text_with_templates(style_target_prompt, imagenet_templates)
             tokens = clip.tokenize(template_text).to("cuda")
             style_features = clip_model.encode_text(tokens).detach()
             style_features = style_features.mean(axis=0, keepdim=True)
@@ -38,7 +38,7 @@ def get_style_embedding(
             style_features = clip_model.encode_image(clip_normalize(style_image))
             style_features /= (style_features.clone().norm(dim=-1, keepdim=True))
 
-        template_source = compose_text_with_templates(object_prompt, imagenet_templates)
+        template_source = compose_text_with_templates(style_source_prompt, imagenet_templates)
         tokens_source = clip.tokenize(template_source).to("cuda")
         text_source = clip_model.encode_text(tokens_source).detach()
         text_source = text_source.mean(axis=0, keepdim=True)

@@ -115,21 +115,21 @@ class CLIPDirSim():
     def __init__(self,
                  model,
                  preprocess,
-                 style_prompt=None,
+                 style_target_prompt=None,
                  style_image=None,
-                 object_prompt="a Photo",
+                 style_source_prompt="a Photo",
                  device="cuda"):
         self.model = model.to(device)
         self.preprocess = preprocess
         self.device = device
         with torch.no_grad():
-            if style_prompt is not None:
-                self.style_feat = encode_text(model, style_prompt, device)
+            if style_target_prompt is not None:
+                self.style_feat = encode_text(model, style_target_prompt, device)
             if style_image is not None:
                 self.style_feat = encode_image(
                     model, preprocess, style_image, device=device)
-            obj_feat = encode_text(model, object_prompt, device=device)
-            self.style_dir = get_direction(self.style_feat, obj_feat)
+            src_feat = encode_text(model, style_source_prompt, device=device)
+            self.style_dir = get_direction(self.style_feat, src_feat)
 
     def __call__(self, gt_image_path, render_image_path, patch=False):
         files = os.listdir(render_image_path)
@@ -197,16 +197,16 @@ class CLIPScore():
     def __init__(self,
                  model,
                  preprocess,
-                 style_prompt=None,
+                 style_target_prompt=None,
                  style_image=None,
                  device="cuda"):
         self.model = model.to(device)
         self.preprocess = preprocess
         self.device = device
         with torch.no_grad():
-            if style_prompt is not None:
+            if style_target_prompt is not None:
                 self.style_feat = encode_text(
-                    model, style_prompt, device)
+                    model, style_target_prompt, device)
             if style_image is not None:
                 self.style_feat = encode_image(
                     model, preprocess, style_image, device=device)
@@ -275,8 +275,8 @@ if __name__ == "__main__":
     parser.add_argument('--gt', type=str, default=None)
     parser.add_argument('--render', type=str, default=None)
     parser.add_argument('--style_image', type=str, default=None)
-    parser.add_argument('--style_prompt', type=str, default=None)
-    parser.add_argument("--object_prompt", type=str, default="a Photo")
+    parser.add_argument('--style_target_prompt', '--style_prompt', dest='style_target_prompt', type=str, default=None)
+    parser.add_argument("--style_source_prompt", "--object_prompt", dest="style_source_prompt", type=str, default="a Photo")
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--interval", type=int, default=1)
     args = parser.parse_args(sys.argv[1:])
@@ -284,14 +284,14 @@ if __name__ == "__main__":
     clip_model, clip_preprocess = clip.load("ViT-L/14", device=args.device)
 
     clip_similarity = CLIPDirSim(clip_model, clip_preprocess,
-                                   style_prompt=args.style_prompt,
+                                   style_target_prompt=args.style_target_prompt,
                                    style_image=args.style_image,
-                                   object_prompt=args.object_prompt,
+                                   style_source_prompt=args.style_source_prompt,
                                    device=args.device)
     clip_consistency = CLIPDirCons(clip_model, clip_preprocess, device=args.device)
     clip_f = CLIPF(clip_model, clip_preprocess, device=args.device)
     clip_score = CLIPScore(clip_model, clip_preprocess,
-                            style_prompt=args.style_prompt,
+                            style_target_prompt=args.style_target_prompt,
                             style_image=args.style_image,
                             device=args.device)
     
@@ -325,8 +325,8 @@ if __name__ == "__main__":
         f.write("=" * 50 + "\n\n")
         f.write(f"GT Directory: {args.gt}\n")
         f.write(f"Render Directory: {args.render}\n")
-        if args.style_prompt:
-            f.write(f"Style Prompt: {args.style_prompt}\n")
+        if args.style_target_prompt:
+            f.write(f"Style Target Prompt: {args.style_target_prompt}\n")
         if args.style_image:
             f.write(f"Style Image: {args.style_image}\n")
         f.write(f"Interval: {args.interval}\n")

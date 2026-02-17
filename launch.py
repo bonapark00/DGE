@@ -105,11 +105,20 @@ def main(args, extras) -> None:
     # set a different seed for each device
     pl.seed_everything(cfg.seed + get_rank(), workers=True)
 
+    # Latency logger for camera generation (runs before on_fit_start in dm.setup)
+    latency_dir = os.path.join(cfg.trial_dir, "latency")
+    os.makedirs(latency_dir, exist_ok=True)
+    from threestudio.utils.latency import LatencyLogger
+    latency_logger = LatencyLogger(latency_dir)
+
     dm = threestudio.find(cfg.data_type)(cfg.data)
+    dm.latency_logger = latency_logger
     system: BaseSystem = threestudio.find(cfg.system_type)(
         cfg.system, resumed=cfg.resume is not None
     )
+    dm.shared_segmentor = getattr(system, "text_segmentor", None)
     system.set_save_dir(os.path.join(cfg.trial_dir, "save"))
+    system._latency_logger = latency_logger
     if system.cfg.loggers.wandb.enable:
         try:
             wandb.config.update({"cfg": cfg})
