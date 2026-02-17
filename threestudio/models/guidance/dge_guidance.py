@@ -42,6 +42,7 @@ class DGEGuidance(BaseObject):
         max_step_percent: float = 0.98
         diffusion_steps: int = 20
         use_sds: bool = False
+        use_sds_dge: bool = False  # True: DGE SDS (epipolar, pivotal); False: vanilla SDS
         camera_batch_size: int = 5
         edit_view_selection_strategy: str = ""
 
@@ -127,6 +128,8 @@ class DGEGuidance(BaseObject):
                     module.use_ada_layer_norm = False
                     module.use_ada_layer_norm_zero = False
         register_extended_attention(self)
+        # Required for both edit_latents and compute_grad_sds; edit_latents overrides as needed
+        register_normal_attn_flag(self.unet, False)
 
     
     @torch.cuda.amp.autocast(enabled=False)
@@ -336,44 +339,82 @@ class DGEGuidance(BaseObject):
         latents: Float[Tensor, "B 4 DH DW"],
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
-        cams= None,
-    ):
+    ) -> Float[Tensor, "B 4 DH DW"]:
+        """Vanilla SDS: pure score distillation, no epipolar/pivotal."""
         noise = torch.randn_like(latents)
-        latents = self.scheduler.add_noise(latents, noise, t) 
+        latents = self.scheduler.add_noise(latents, noise, t)
+        positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
+        split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
+
+        # DGEBlock expects pivotal_pass; vanilla SDS uses normal attn, set False
+        register_pivotal(self.unet, False)
+
+        with torch.no_grad():
+            latent_model_input = torch.cat([latents] * 3)
+            batch_text_embeddings = torch.cat([
+                positive_text_embedding, negative_text_embedding, negative_text_embedding
+            ], dim=0)
+            batch_image_cond_latents = torch.cat([
+                split_image_cond_latents, split_image_cond_latents, zero_image_cond_latents
+            ], dim=0)
+            latent_model_input = torch.cat([latent_model_input, batch_image_cond_latents], dim=1)
+            noise_pred = self.forward_unet(latent_model_input, t, encoder_hidden_states=batch_text_embeddings)
+            noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(3)
+
+            noise_pred = (
+                noise_pred_uncond
+                + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+            )
+
+        w = (1 - self.alphas[t]).view(-1, 1, 1, 1)
+        grad = w * (noise_pred - noise)
+        return grad
+
+    def compute_grad_sds_dge(
+        self,
+        text_embeddings: Float[Tensor, "BB 77 768"],
+        latents: Float[Tensor, "B 4 DH DW"],
+        image_cond_latents: Float[Tensor, "B 4 DH DW"],
+        t: Int[Tensor, "B"],
+        cams,
+    ) -> Float[Tensor, "B 4 DH DW"]:
+        """DGE SDS: with epipolar constraints, pivotal pass, multi-view consistency."""
+        noise = torch.randn_like(latents)
+        latents = self.scheduler.add_noise(latents, noise, t)
         positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
         split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
         current_H = image_cond_latents.shape[2]
         current_W = image_cond_latents.shape[3]
         camera_batch_size = self.cfg.camera_batch_size
-        
+        effective_camera_batch_size = min(camera_batch_size, len(latents))
+
         with torch.no_grad():
             noise_pred_text = []
             noise_pred_image = []
             noise_pred_uncond = []
-            pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0,len(latents),camera_batch_size) 
-            print(pivotal_idx)
+            pivotal_idx = torch.randint(0, effective_camera_batch_size, (len(latents) // effective_camera_batch_size,), device=latents.device) + torch.arange(0, len(latents), effective_camera_batch_size, device=latents.device)
             register_pivotal(self.unet, True)
 
             latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
             pivot_text_embeddings = torch.cat([positive_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx]], dim=0)
             pivot_image_cond_latetns = torch.cat([split_image_cond_latents[pivotal_idx], split_image_cond_latents[pivotal_idx], zero_image_cond_latents[pivotal_idx]], dim=0)
             latent_model_input = torch.cat([latent_model_input, pivot_image_cond_latetns], dim=1)
-            
-            key_cams = cams[pivotal_idx]
+
+            key_cams = [cams[i] for i in pivotal_idx.cpu().tolist()]
             self.forward_unet(latent_model_input, t, encoder_hidden_states=pivot_text_embeddings)
             register_pivotal(self.unet, False)
 
-
-            for i, b in enumerate(range(0, len(latents), camera_batch_size)):
+            for i, b in enumerate(range(0, len(latents), effective_camera_batch_size)):
                 register_batch_idx(self.unet, i)
-                register_cams(self.unet, cams[b:b + camera_batch_size], pivotal_idx[i] % camera_batch_size, key_cams) 
-                
+                register_cams(self.unet, cams[b:b + effective_camera_batch_size], pivotal_idx[i].item() % effective_camera_batch_size, key_cams)
+
                 epipolar_constrains = {}
                 for down_sample_factor in [1, 2, 4, 8]:
                     H = current_H // down_sample_factor
                     W = current_W // down_sample_factor
                     epipolar_constrains[H * W] = []
-                    for cam in cams[b:b + camera_batch_size]:
+                    for cam in cams[b:b + effective_camera_batch_size]:
                         cam_epipolar_constrains = []
                         for key_cam in key_cams:
                             cam_epipolar_constrains.append(compute_epipolar_constrains(key_cam, cam, current_H=H, current_W=W))
@@ -381,9 +422,9 @@ class DGEGuidance(BaseObject):
                     epipolar_constrains[H * W] = torch.stack(epipolar_constrains[H * W], dim=0)
                 register_epipolar_constrains(self.unet, epipolar_constrains)
 
-                batch_model_input = torch.cat([latents[b:b + camera_batch_size]] * 3)
-                batch_text_embeddings = torch.cat([positive_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size]], dim=0)
-                batch_image_cond_latents = torch.cat([split_image_cond_latents[b:b + camera_batch_size], split_image_cond_latents[b:b + camera_batch_size], zero_image_cond_latents[b:b + camera_batch_size]], dim=0)
+                batch_model_input = torch.cat([latents[b:b + effective_camera_batch_size]] * 3)
+                batch_text_embeddings = torch.cat([positive_text_embedding[b:b + effective_camera_batch_size], negative_text_embedding[b:b + effective_camera_batch_size], negative_text_embedding[b:b + effective_camera_batch_size]], dim=0)
+                batch_image_cond_latents = torch.cat([split_image_cond_latents[b:b + effective_camera_batch_size], split_image_cond_latents[b:b + effective_camera_batch_size], zero_image_cond_latents[b:b + effective_camera_batch_size]], dim=0)
                 batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
                 batch_noise_pred = self.forward_unet(batch_model_input, t, encoder_hidden_states=batch_text_embeddings)
                 batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
@@ -395,7 +436,6 @@ class DGEGuidance(BaseObject):
             noise_pred_image = torch.cat(noise_pred_image, dim=0)
             noise_pred_uncond = torch.cat(noise_pred_uncond, dim=0)
 
-            # perform classifier-free guidance
             noise_pred = (
                 noise_pred_uncond
                 + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
@@ -422,7 +462,8 @@ class DGEGuidance(BaseObject):
         latency_logger=None,
         **kwargs,
     ):
-        assert cams is not None, "cams is required for dge guidance"
+        if not self.cfg.use_sds or self.cfg.use_sds_dge:
+            assert cams is not None, "cams is required for dge guidance (edit_latents or use_sds_dge)"
         batch_size, H, W, _ = rgb.shape
         factor = 512 / max(W, H)
         factor = math.ceil(min(W, H) * factor / 64) * 64 / min(W, H)
@@ -471,7 +512,10 @@ class DGEGuidance(BaseObject):
 
         if self.cfg.use_sds:
             with latency_logger.timeit("edit_all_view.guidance_batch.compute_grad_sds"):
-                grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t, cams)
+                if self.cfg.use_sds_dge:
+                    grad = self.compute_grad_sds_dge(text_embeddings, latents, cond_latents, t, cams)
+                else:
+                    grad = self.compute_grad_sds(text_embeddings, latents, cond_latents, t)
             grad = torch.nan_to_num(grad)
             if self.grad_clip_val is not None:
                 grad = grad.clamp(-self.grad_clip_val, self.grad_clip_val)
