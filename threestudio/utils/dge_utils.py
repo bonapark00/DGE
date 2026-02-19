@@ -309,6 +309,10 @@ def register_normal_attn_flag(diffusion_model, use_normal_attn):
     for _, module in diffusion_model.named_modules():
         if isinstance_str(module, "BasicTransformerBlock"):
             setattr(module, "use_normal_attn", use_normal_attn)
+            # Also propagate to attn1 so that sa_forward (register_extended_attention)
+            # can fall back to normal attention for non-3-batch layouts (e.g. Lite-ISM).
+            if hasattr(module, "attn1"):
+                setattr(module.attn1, "use_normal_attn", use_normal_attn)
 
 def register_latency_logger(diffusion_model, latency_logger):
     for _, module in diffusion_model.named_modules():
@@ -323,7 +327,18 @@ def register_extended_attention(model):
         else:
             to_out = self.to_out
         def forward(x, encoder_hidden_states=None, attention_mask=None):
-            assert encoder_hidden_states is None 
+            # Fall back to normal attention when flagged (e.g. 2-batch Lite-ISM calls)
+            if getattr(self, "use_normal_attn", False):
+                is_cross = encoder_hidden_states is not None
+                enc = encoder_hidden_states if is_cross else x
+                q = self.head_to_batch_dim(self.to_q(x))
+                k = self.head_to_batch_dim(self.to_k(enc))
+                v = self.head_to_batch_dim(self.to_v(enc))
+                attn_probs = self.get_attention_scores(q, k, attention_mask)
+                out = self.batch_to_head_dim(torch.bmm(attn_probs, v))
+                return to_out(out)
+
+            assert encoder_hidden_states is None
             batch_size, sequence_length, dim = x.shape
             h = self.heads
             n_frames = batch_size // 3
@@ -417,6 +432,19 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
             cross_attention_kwargs=None,
             class_labels=None,
         ) -> torch.Tensor:
+            # When flagged, behave like the original transformer block.
+            # This is required for non-DGE batch layouts (e.g. 2B for Lite-ISM).
+            if getattr(self, "use_normal_attn", False):
+                return block_class.forward(
+                    self,
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    encoder_hidden_states=encoder_hidden_states,
+                    encoder_attention_mask=encoder_attention_mask,
+                    timestep=timestep,
+                    cross_attention_kwargs=cross_attention_kwargs,
+                    class_labels=class_labels,
+                )
             
             # Initialize latency logger if available
             latency_logger = getattr(self, 'latency_logger', None)

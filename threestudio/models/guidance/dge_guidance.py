@@ -346,7 +346,8 @@ class DGEGuidance(BaseObject):
         positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
         split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
 
-        # DGEBlock expects pivotal_pass; vanilla SDS uses normal attn, set False
+        # Vanilla SDS uses standard attention (no DGE extended attn)
+        self.use_normal_unet()
         register_pivotal(self.unet, False)
 
         with torch.no_grad():

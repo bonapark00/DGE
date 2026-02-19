@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import math
 import random
 from re import T
 
@@ -9,6 +10,7 @@ import numpy as np
 import sys
 import shutil
 import torch
+import torch.nn.functional as F
 import threestudio
 import os
 from threestudio.systems.base import BaseLift3DSystem
@@ -28,6 +30,7 @@ from threestudio.utils.misc import get_device
 from threestudio.utils.perceptual import PerceptualLoss
 from threestudio.utils.sam import LangSAMTextSegmentor
 from threestudio.utils.latency import LatencyLogger
+from threestudio.utils.dge_utils import register_normal_attn_flag
 
 
 from CLIP.utils.image_utils import img_normalize, clip_normalize
@@ -79,6 +82,10 @@ class DGE(BaseLift3DSystem):
         cache_overwrite: bool = True
         cache_dir: str = ""
 
+
+        # DDS-lite
+        dds_t_range: Tuple[float, float] = (0.02, 0.5)  # narrower t range for stability
+        dds_cfg_scale: float = 7.5
 
         # anchor
         anchor_weight_init: float = 0.1
@@ -399,6 +406,220 @@ class DGE(BaseLift3DSystem):
         else:
             print(f"No distant floater Gaussians found to prune")
 
+    def compute_dds_loss(
+        self,
+        images: torch.Tensor,       # (B, H, W, C), rendered from current 3DGS
+        batch_index: list,           # view indices for origin_frames lookup
+    ) -> torch.Tensor:
+        """Lightweight DDS loss: single UNet call per view with cosine stabilisation.
+
+        Steps:
+            1. Encode rendered image and source image to latent space.
+            2. Sample t from a narrow range, add noise.
+            3. Batch=3 UNet call: [uncond, target_prompt, source_prompt].
+            4. delta = cfg * (eps_tgt - eps_src),  base = eps_tgt - eps_uncond.
+            5. L = w(t) * (1 - cos(delta, base)).
+        """
+        g = self.guidance  # DGEGuidance – owns vae, unet, scheduler, etc.
+        device = images.device
+
+        # --- resize & encode -------------------------------------------------
+        B, H, W, C = images.shape
+        factor = 512 / max(W, H)
+        factor = math.ceil(min(W, H) * factor / 64) * 64 / min(W, H)
+        rh = int((H * factor) // 64) * 64
+        rw = int((W * factor) // 64) * 64
+
+        rgb_BCHW = images.permute(0, 3, 1, 2)
+        rgb_rs = F.interpolate(rgb_BCHW, (rh, rw), mode="bilinear", align_corners=False)
+        latents = g.encode_images(rgb_rs)  # (B,4,h,w)  – keeps grad
+
+        # source (original) images → deterministic encode (no grad needed)
+        src_imgs = torch.cat([self.origin_frames[idx] for idx in batch_index], dim=0)
+        src_BCHW = src_imgs.permute(0, 3, 1, 2)
+        src_rs = F.interpolate(src_BCHW, (rh, rw), mode="bilinear", align_corners=False)
+        with torch.no_grad():
+            src_latents = g.encode_images(src_rs)  # (B,4,h,w)
+
+        # IP2P image conditioning: concat source image latents on channel dim
+        src_cond = src_rs * 2.0 - 1.0
+        with torch.no_grad():
+            image_cond_latents = g.vae.encode(
+                src_cond.to(g.weights_dtype)
+            ).latent_dist.mode().to(latents.dtype)  # (B,4,h,w) deterministic
+        zero_image_cond = torch.zeros_like(image_cond_latents)
+
+        # --- sample timestep --------------------------------------------------
+        t_lo = int(g.num_train_timesteps * self.cfg.dds_t_range[0])
+        t_hi = int(g.num_train_timesteps * self.cfg.dds_t_range[1])
+        t = torch.randint(t_lo, max(t_hi, t_lo + 1), (1,), device=device, dtype=torch.long).expand(B)
+
+        noise = torch.randn_like(latents)
+        z_t = g.scheduler.add_noise(latents, noise, t)
+        # Same noise for source latent so that the unconditioned noise cancels
+        z_t_src = g.scheduler.add_noise(src_latents, noise, t)
+
+        # --- text embeddings --------------------------------------------------
+        # target prompt embeddings are already in self.prompt_processor
+        prompt_utils = self.prompt_processor()
+        temp = torch.zeros(B, device=device)
+        text_emb = prompt_utils.get_text_embeddings(temp, temp, temp, False)
+        # text_emb: (2B, 77, 768) = [target, uncond]
+        tgt_emb, uncond_emb = text_emb.chunk(2)  # each (B, 77, 768)
+
+        # source prompt embeddings (lazy-cached)
+        if not hasattr(self, '_src_text_emb') or self._src_text_emb is None:
+            self._src_text_emb = self._encode_prompt(self.cfg.seg_prompt)
+        src_emb = self._src_text_emb.expand(B, -1, -1)  # (B, 77, 768)
+
+        # --- single batched UNet call: [uncond, target, source] ---------------
+        # For IP2P: model input = [noisy_latent ; image_cond] on channel dim
+        # uncond uses zero image cond; target & source use real image cond
+        z_t_batch = torch.cat([z_t, z_t, z_t_src], dim=0)  # (3B,4,h,w)
+        img_cond_batch = torch.cat([zero_image_cond, image_cond_latents, image_cond_latents], dim=0)
+        model_input = torch.cat([z_t_batch, img_cond_batch], dim=1)  # (3B,8,h,w)
+        text_batch = torch.cat([uncond_emb, tgt_emb, src_emb], dim=0)  # (3B,77,768)
+
+        # Ensure normal attention (no DGE extended attn for this lightweight call)
+        register_normal_attn_flag(g.unet, True)
+        with torch.no_grad():
+            eps_pred = g.forward_unet(model_input, t, encoder_hidden_states=text_batch)
+        register_normal_attn_flag(g.unet, False)
+
+        eps_uncond, eps_tgt, eps_src = eps_pred.chunk(3)
+
+        # --- DDS gradient with cosine stabilisation --------------------------
+        cfg_s = self.cfg.dds_cfg_scale
+        delta = cfg_s * (eps_tgt - 0.1 * eps_src)        # directional edit signal
+        base = eps_tgt - eps_uncond                 # CFG direction (stabiliser)
+
+        # Cosine weighting: scale gradient by alignment with CFG direction
+        delta_flat = delta.reshape(B, -1)
+        base_flat = base.reshape(B, -1)
+        cos_weight = F.cosine_similarity(delta_flat, base_flat, dim=1)  # (B,)
+        cos_weight = cos_weight.clamp(min=0.0).view(B, 1, 1, 1)  # ignore negative
+
+        w = (1 - g.alphas[t]).float().view(B, 1, 1, 1)
+        # DDS gradient: w(t) * cos_weight * delta
+        grad = (w * cos_weight * delta).detach()
+        grad = torch.nan_to_num(grad)
+
+        # SDS-style loss: creates gradient path back to Gaussian params
+        target = (latents - grad).detach()
+        loss_dds = 0.5 * F.mse_loss(latents, target, reduction="sum") / B
+
+        return loss_dds
+
+    def compute_lite_ism_loss(
+        self,
+        images: torch.Tensor,       # (B, H, W, C), rendered from current 3DGS
+        batch_index: list,           # view indices for origin_frames lookup
+    ) -> torch.Tensor:
+        """Lite-ISM loss: ISM (Interval Score Matching) adapted for 1-step prediction.
+
+        Compared to DDS:
+          - Removes source-prompt branch → 2-batch UNet call (33% faster).
+          - Predicts x0 directly via DDIM x0-prediction formula.
+          - Loss = MSE(latents, stop_grad(x0_pred)), pulling 3DGS toward
+            the diffusion model's one-shot denoised target (strong edit signal).
+
+        Steps:
+            1. Encode rendered image z and source image for IP2P conditioning.
+            2. Sample t, add noise → z_t.
+            3. 2-batch UNet call: [uncond, tgt] with IP2P image cond.
+            4. CFG: eps_hat = uncond + cfg_scale * (tgt - uncond).
+            5. x0_pred = (z_t - sigma_t * eps_hat) / alpha_t  (DDIM x0 formula).
+            6. loss = 0.5 * MSE(latents, stop_grad(x0_pred)) / B.
+        """
+        g = self.guidance  # DGEGuidance – owns vae, unet, scheduler, etc.
+        device = images.device
+
+        # --- resize & encode -------------------------------------------------
+        B, H, W, C = images.shape
+        factor = 512 / max(W, H)
+        factor = math.ceil(min(W, H) * factor / 64) * 64 / min(W, H)
+        rh = int((H * factor) // 64) * 64
+        rw = int((W * factor) // 64) * 64
+
+        rgb_BCHW = images.permute(0, 3, 1, 2)
+        rgb_rs = F.interpolate(rgb_BCHW, (rh, rw), mode="bilinear", align_corners=False)
+        latents = g.encode_images(rgb_rs)  # (B,4,h,w) – keeps grad
+
+        # source (original) images for IP2P conditioning (no grad)
+        src_imgs = torch.cat([self.origin_frames[idx] for idx in batch_index], dim=0)
+        src_BCHW = src_imgs.permute(0, 3, 1, 2)
+        src_rs = F.interpolate(src_BCHW, (rh, rw), mode="bilinear", align_corners=False)
+        src_cond = src_rs * 2.0 - 1.0
+        with torch.no_grad():
+            image_cond_latents = g.vae.encode(
+                src_cond.to(g.weights_dtype)
+            ).latent_dist.mode().to(latents.dtype)  # (B,4,h,w) deterministic
+        zero_image_cond = torch.zeros_like(image_cond_latents)
+
+        # --- sample timestep --------------------------------------------------
+        t_lo = int(g.num_train_timesteps * self.cfg.dds_t_range[0])
+        t_hi = int(g.num_train_timesteps * self.cfg.dds_t_range[1])
+        t = torch.randint(t_lo, max(t_hi, t_lo + 1), (1,), device=device, dtype=torch.long).expand(B)
+
+        noise = torch.randn_like(latents)
+        z_t = g.scheduler.add_noise(latents, noise, t)
+
+        # --- text embeddings: 2-batch [uncond, tgt] ---------------------------
+        prompt_utils = self.prompt_processor()
+        temp = torch.zeros(B, device=device)
+        text_emb = prompt_utils.get_text_embeddings(temp, temp, temp, False)
+        tgt_emb, uncond_emb = text_emb.chunk(2)  # each (B, 77, 768)
+
+        # --- 2-batch UNet call: [uncond, tgt] (no src branch) -----------------
+        # IP2P: model input = concat(noisy_latent, image_cond) on channel dim
+        z_t_batch = torch.cat([z_t, z_t], dim=0)                                       # (2B,4,h,w)
+        img_cond_batch = torch.cat([zero_image_cond, image_cond_latents], dim=0)        # (2B,4,h,w)
+        model_input = torch.cat([z_t_batch, img_cond_batch], dim=1)                    # (2B,8,h,w)
+        text_batch = torch.cat([uncond_emb, tgt_emb], dim=0)                           # (2B,77,768)
+
+        register_normal_attn_flag(g.unet, True)
+        with torch.no_grad():
+            eps_pred = g.forward_unet(model_input, t, encoder_hidden_states=text_batch)
+        register_normal_attn_flag(g.unet, False)
+
+        eps_uncond, eps_tgt = eps_pred.chunk(2)
+
+        # --- CFG noise prediction ---------------------------------------------
+        cfg_s = self.cfg.dds_cfg_scale
+        eps_hat = eps_uncond + cfg_s * (eps_tgt - eps_uncond)  # (B,4,h,w)
+        eps_hat = torch.nan_to_num(eps_hat)
+
+        # --- x0 prediction (DDIM formula) -------------------------------------
+        # alphas_cumprod[t] = alpha_t^2  →  alpha_t = sqrt(alphas[t])
+        # sigma_t = sqrt(1 - alphas[t])
+        alpha_t = g.alphas[t].float().sqrt().view(B, 1, 1, 1)   # sqrt(ᾱ_t)
+        sigma_t = (1.0 - g.alphas[t]).float().sqrt().view(B, 1, 1, 1)  # sqrt(1-ᾱ_t)
+
+        # x0_pred = (z_t - sigma_t * eps_hat) / alpha_t
+        x0_pred = (z_t - sigma_t * eps_hat) / (alpha_t + 1e-8)
+        x0_pred = x0_pred.detach()  # stop gradient through diffusion model
+
+        # --- ISM loss: 3DGS latents → x0_pred target -------------------------
+        loss_ism = 0.5 * F.mse_loss(latents, x0_pred, reduction="sum") / B
+
+        return loss_ism
+
+    @torch.no_grad()
+    def _encode_prompt(self, prompt: str) -> torch.Tensor:
+        """Encode a single prompt string using the guidance pipeline's text encoder.
+        Returns (1, 77, 768) text embeddings cached on device."""
+        pipe = self.guidance.pipe
+        tok = pipe.tokenizer(
+            [prompt],
+            padding="max_length",
+            max_length=pipe.tokenizer.model_max_length,
+            truncation=True,
+            return_tensors="pt",
+        )
+        with torch.no_grad():
+            emb = pipe.text_encoder(tok.input_ids.to(self.guidance.device))[0]
+        return emb  # (1, 77, 768)
+
     def on_validation_epoch_end(self):
         pass
 
@@ -479,7 +700,8 @@ class DGE(BaseLift3DSystem):
         with torch.no_grad():
             for id in tqdm(range(self.trainer.datamodule.train_dataset.total_view_num)):
                 cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
-                if not os.path.exists(cur_path) or self.cfg.cache_overwrite:
+                need_render = not os.path.exists(cur_path) or self.cfg.cache_overwrite
+                if need_render:
                     cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
                     cur_batch = {
                         "index": id,
@@ -493,7 +715,29 @@ class DGE(BaseLift3DSystem):
                     ).astype(np.uint8)
                     out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
                     cv2.imwrite(cur_path, out_to_save)
-                cached_image = cv2.cvtColor(cv2.imread(cur_path), cv2.COLOR_BGR2RGB)
+                img_bgr = cv2.imread(cur_path)
+                if img_bgr is None or img_bgr.size == 0:
+                    # Corrupted or missing PNG (e.g. parallel write collision): re-render
+                    if os.path.exists(cur_path):
+                        try:
+                            os.remove(cur_path)
+                        except OSError:
+                            pass
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index": id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width": self.trainer.datamodule.train_dataset.width,
+                    }
+                    out = self(cur_batch)["comp_rgb"]
+                    out_to_save = (
+                            out[0].cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                    ).astype(np.uint8)
+                    out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
+                    cv2.imwrite(cur_path, out_to_save)
+                    img_bgr = cv2.imread(cur_path)
+                cached_image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
                 self.origin_frames[id] = torch.tensor(
                     cached_image / 255, device="cuda", dtype=torch.float32
                 )[None]
@@ -1079,7 +1323,7 @@ class DGE(BaseLift3DSystem):
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
                 self.cfg.prompt_processor
             )
-        if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds:
+        if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds or self.cfg.loss.lambda_dds > 0 or self.cfg.loss.lambda_ism > 0:
             # Get or load IP2P OUTSIDE of latency measurement (exclude model loading)
             dm = getattr(self.trainer, "datamodule", None)
             ip2p_pipe = None
@@ -1153,39 +1397,49 @@ class DGE(BaseLift3DSystem):
                     pass
 
 
+            loss_dict = {}
+            ## L1 + Perceptual loss 
             if len(gt_images) > 0: # ground truth image가 있다면 기존의 Loss를 그대로 활용
                 gt_images = torch.concatenate(gt_images, dim=0)
 
                 if self.cfg.use_masked_image:
                     print("use masked image")
-                    loss_dict = {
-                    "loss_l1": torch.nn.functional.l1_loss(images * mask, gt_images * mask),
-                    "loss_p": self.perceptual_loss(
+                    loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images * mask, gt_images * mask)
+                    loss_dict["loss_p"] = self.perceptual_loss(
                         (images * mask).permute(0, 3, 1, 2).contiguous(),
-                        (gt_images * mask ).permute(0, 3, 1, 2).contiguous(),
-                    ).sum(),
-                    }
+                        (gt_images * mask).permute(0, 3, 1, 2).contiguous(),
+                    ).sum()
                 else:
-                    loss_dict = {
-                        "loss_l1": torch.nn.functional.l1_loss(images, gt_images),
-                        "loss_p": self.perceptual_loss(
-                            images.permute(0, 3, 1, 2).contiguous(),
-                            gt_images.permute(0, 3, 1, 2).contiguous(),
-                        ).sum(),
-                    }
+                    loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images, gt_images)
+                    loss_dict["loss_p"] = self.perceptual_loss(
+                        images.permute(0, 3, 1, 2).contiguous(),
+                        gt_images.permute(0, 3, 1, 2).contiguous(),
+                    ).sum()
 
-                
-            else:
+            ## Lite-ISM loss
+            if self.cfg.loss.lambda_ism > 0:
+                # Lite-ISM: 2-batch UNet, x0-prediction target, strong edit signal
+                loss_ism = self.compute_lite_ism_loss(images, batch_index)
+                loss_dict["loss_ism"] = loss_ism
+
+            ## DDS-lite loss
+            if self.cfg.loss.lambda_dds > 0:
+                # DDS-lite: lightweight distillation for views without edit_frames
+                loss_dds = self.compute_dds_loss(images, batch_index)
+                loss_dict["loss_dds"] = loss_dds
+
+            ## Directional CLIP loss
+            if self.cfg.loss.lambda_d > 0:
                 # Direction CLIP loss
                 # images shape: (B, H, W, C) -> (B, C, H, W)로 변환 필요
                 # Prepare images for CLIP: apply mask if use_masked_image is True
-              
+
                 images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
                 gt_images_list = []
                 for idx in batch_index:
                     gt_images_list.append(self.origin_frames[idx])
                 gt_images_clip = torch.concatenate(gt_images_list, dim=0).permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
-            
+
                 render_features = clip_model.encode_image(
                     clip_normalize(images_clip))
                 source_features = clip_model.encode_image(
@@ -1211,8 +1465,15 @@ class DGE(BaseLift3DSystem):
 
                 loss_d = (1 - torch.cosine_similarity(img_direction,
                         style_dir, dim=1)).mean()
-                
-                loss_dict = {"loss_d": loss_d}
+
+                loss_dict["loss_d"] = loss_d
+
+            # novel views에 대해서 DDS, CLIP 모두 적용하지 않은 경우 (0이어도 graph에 연결해 backward() 가능하게)
+            else:
+                z = (images * 0).sum()
+                loss_dict = {"loss_l1": z, "loss_p": z}
+
+
 
             for name, value in loss_dict.items():
                 self.log(f"train/{name}", value)
