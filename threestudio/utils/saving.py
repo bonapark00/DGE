@@ -119,7 +119,7 @@ class SaverMixin:
     ):
         img = self.get_rgb_image_(img, data_format, data_range)
         cv2.imwrite(filename, img)
-        if name and self._wandb_logger:
+        if name and self._wandb_logger and wandb.run is not None:
             wandb.log(
                 {
                     name: wandb.Image(self.get_save_path(filename)),
@@ -231,7 +231,7 @@ class SaverMixin:
     ):
         img = self.get_grayscale_image_(img, data_range, cmap)
         cv2.imwrite(filename, img)
-        if name and self._wandb_logger:
+        if name and self._wandb_logger and wandb.run is not None:
             wandb.log(
                 {
                     name: wandb.Image(self.get_save_path(filename)),
@@ -323,7 +323,7 @@ class SaverMixin:
             img = np.asarray(img)
 
         cv2.imwrite(save_path, img)
-        if name and self._wandb_logger:
+        if name and self._wandb_logger and wandb.run is not None and getattr(wandb.run, "id", None) is not None:
             wandb.log({name: wandb.Image(save_path), "trainer/global_step": step})
 
         return save_path
@@ -422,7 +422,7 @@ class SaverMixin:
         elif save_format == "mp4":
             imgs = [cv2.cvtColor(i, cv2.COLOR_BGR2RGB) for i in imgs]
             imageio.mimsave(save_path, imgs, fps=fps)
-        if name and self._wandb_logger:
+        if name and self._wandb_logger and wandb.run is not None:
             wandb.log(
                 {
                     name: wandb.Video(save_path, format="mp4"),

@@ -58,15 +58,20 @@ def main(args, extras) -> None:
         # CUDA_VISIBLE_DEVICES was set already, e.g. within SLURM srun or higher-level script.
         n_gpus = len(env_gpus)
     else:
-        selected_gpus = list(args.gpu.split(","))
+        selected_gpus = [s.strip() for s in args.gpu.split(",")]
         n_gpus = len(selected_gpus)
-        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+        # This codebase does not support DDP (multi-GPU per run). Use only the first GPU.
+        if n_gpus > 1:
+            print(f"[WARN] Multi-GPU ({n_gpus}) not supported; using first GPU only: {selected_gpus[0]}")
+            selected_gpus = [selected_gpus[0]]
+            n_gpus = 1
+        os.environ["CUDA_VISIBLE_DEVICES"] = ",".join(selected_gpus)
 
     import pytorch_lightning as pl
     import torch
     from pytorch_lightning import Trainer
     from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-    from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
+    from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger, WandbLogger
     from pytorch_lightning.utilities.rank_zero import rank_zero_only
 
     if args.typecheck:
@@ -132,6 +137,7 @@ def main(args, extras) -> None:
             )
             wandb.config.update({"cfg": cfg})
             # wandb.run.log_code(".")
+            system._wandb_logger = None  # prevent wandb.log() in saving.py
     if args.gradio:
         fh = logging.FileHandler(os.path.join(cfg.trial_dir, "logs"))
         fh.setLevel(logging.INFO)
@@ -175,10 +181,13 @@ def main(args, extras) -> None:
         rank_zero_only(
             lambda: os.makedirs(os.path.join(cfg.trial_dir, "tb_logs"), exist_ok=True)
         )()
+        system_loggers = system.get_loggers()
+        if not system.cfg.loggers.wandb.enable:
+            system_loggers = [l for l in system_loggers if not isinstance(l, WandbLogger)]
         loggers += [
             TensorBoardLogger(cfg.trial_dir, name="tb_logs"),
             CSVLogger(cfg.trial_dir, name="csv_logs"),
-        ] + system.get_loggers()
+        ] + system_loggers
         rank_zero_only(
             lambda: write_to_text(
                 os.path.join(cfg.trial_dir, "cmd.txt"),

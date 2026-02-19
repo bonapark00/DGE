@@ -3,6 +3,7 @@ import sys
 import re
 import random
 from argparse import ArgumentParser
+from tqdm import tqdm
 from PIL import Image
 import torch
 import clip
@@ -132,12 +133,12 @@ class CLIPDirSim():
             self.style_dir = get_direction(self.style_feat, src_feat)
 
     def __call__(self, gt_image_path, render_image_path, patch=False):
-        files = os.listdir(render_image_path)
-        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
         scores_sum = 0
         images = 0
         with torch.no_grad():
-            for filename in files:
+            for filename in tqdm(files, desc="CLIP directional similarity", unit="img"):
                 gt_filename = convert_render_filename_to_gt(filename, gt_image_path)
                 gt_path = os.path.join(gt_image_path, gt_filename)
                 render_path = os.path.join(render_image_path, filename)
@@ -163,12 +164,12 @@ class CLIPDirCons():
         self.device = device
 
     def __call__(self, gt_image_path, render_image_path, k=1, patch=False):
-        files = os.listdir(render_image_path)
-        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
         scores_sum = 0
         images = 0
         with torch.no_grad():
-            for i, _ in enumerate(files):
+            for i, _ in tqdm(enumerate(files), total=len(files), desc="CLIP directional consistency", unit="img"):
                 if i < len(files) - k:
                     gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
                     gt_filename_next = convert_render_filename_to_gt(files[i+k], gt_image_path)
@@ -212,12 +213,12 @@ class CLIPScore():
                     model, preprocess, style_image, device=device)
 
     def __call__(self, render_image_path, patch=False):
-        files = os.listdir(render_image_path)
-        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
         scores_sum = 0
         images = 0
         with torch.no_grad():
-            for filename in files:
+            for filename in tqdm(files, desc="CLIP Score", unit="img"):
                 render_path = os.path.join(render_image_path, filename)
                 render_feat = encode_image(
                     self.model, self.preprocess, render_path, patch, device=self.device)
@@ -237,13 +238,13 @@ class CLIPF():
         self.device = device
 
     def __call__(self, gt_image_path, render_image_path, patch=False):
-        files = os.listdir(render_image_path)
-        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
         scores_sum_render = 0
         scores_sum_gt = 0
         images = 0
         with torch.no_grad():
-            for i, _ in enumerate(files):
+            for i, _ in tqdm(enumerate(files), total=len(files), desc="CLIP F", unit="img"):
                 if i < len(files) - 1:
                     gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
                     gt_filename_next = convert_render_filename_to_gt(files[i+1], gt_image_path)
