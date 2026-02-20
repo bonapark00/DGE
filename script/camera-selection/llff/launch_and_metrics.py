@@ -1,0 +1,423 @@
+#!/usr/bin/env python3
+"""
+Launch training and compute metrics in batch mode.
+Combines launch_and_metrics.sh and launch_and_metrics_batch.sh functionality.
+"""
+
+import os
+import sys
+import subprocess
+import re
+import tempfile
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, List, Tuple
+
+# ==========================
+# Configuration
+# ==========================
+
+
+# Training config
+CONFIG = "configs/dge_camera-selection.yaml"
+GPU = "3"
+
+# Batch settings
+NUM_RUNS = 2  # Number of times to run launch + metrics
+
+# Task-specific overrides
+# PROMPT = "Turn him into spider man with a mask"
+DATA_NAME = "horns"
+PROMPT = "Make the skeleton fluffy"
+PROMPT = "Turn the skeleton into robotic style”"
+PROMPT = "Turn the skeleton look like make of diamond”"
+SEG_PROMPT = "skeleton"
+MMR_SEG_PROMPT = "skeleton"  # for text-based segmentation
+TARGET_PROMPT = "A fluffy skeleton"
+TARGET_PROMPT = "A robotic skeleton"
+TARGET_PROMPT = "A skeleton made of diamond"
+
+DATA_SOURCE = f"/data/users/jaeyeonpark/dataset/nerf_llff_data/{DATA_NAME}/"
+GS_SOURCE = f"/data/users/jaeyeonpark/3dgs-trained/llff/{DATA_NAME}/point_cloud/iteration_30000/point_cloud.ply"
+LAMBDA_D = "0.0"
+EDIT_VIEW_SELECTION_STRATEGY = "random"  # row, quadrant, manual-20, manual-15, random, depth
+
+
+
+GUIDANCE_SCALE = "12.5"
+MASK_THRES = "0.6"
+MAX_VIEW_NUM = "25"
+MAX_EDIT_VIEW_NUM = "20"
+CAMERA_UPDATE_PER_STEP = "1500"
+MASK_UPDATE_AT_STEP = "-1" # -1: wo-MaskUpdate, 400: w-MaskUpdate
+PRUNE_FLOATER_AT_STEP = "600"  # -1: disabled, otherwise prune at this step
+NAME = f"camera-selection/wo-MaskUpdate/iter1/lambda_d{LAMBDA_D}/{EDIT_VIEW_SELECTION_STRATEGY}/llff/{DATA_NAME}"
+
+# Metrics config
+GT_DIR = f"/data/users/jaeyeonpark/3dgs-trained/llff/{DATA_NAME}/train/ours_30000/renders"
+STYLE_TARGET_PROMPT = TARGET_PROMPT  # 목표 스타일 (편집 후); leave empty "" to disable
+# STYLE_TARGET_PROMPT = "A man with fashion sunglasses"  # leave empty "" to disable
+# STYLE_TARGET_PROMPT = "A man with a leather jacket"  # leave empty "" to disable
+# STYLE_TARGET_PROMPT = "A man looking like Vincent Van Gogh"  # leave empty "" to disable
+# STYLE_TARGET_PROMPT = "A Tolkien Elf"  # leave empty "" to disable
+
+STYLE_IMAGE = ""  # set to an image path to use style image instead of text
+STYLE_SOURCE_PROMPT = "A Man without fashion sunglasses"   # 편집 전/원본; default: "a Photo"
+# STYLE_SOURCE_PROMPT = "A man with a fleece jacket"   # default: "a Photo"
+# STYLE_SOURCE_PROMPT = "A man"
+# STYLE_SOURCE_PROMPT = SEG_PROMPT
+
+INTERVAL = 1  # temporal interval k for consistency metrics
+DEVICE = "cuda"  # cuda or cpu
+MAX_STEPS = "1500"
+
+# Log directory for batch runs
+BATCH_LOG_DIR = "nohups/batch_runs"
+
+# ==========================
+
+
+def get_script_dir() -> Path:
+    """Get the directory where this script is located."""
+    return Path(__file__).parent.absolute()
+
+
+def get_root_dir() -> Path:
+    """Get the project root directory (three levels up from script)."""
+    return get_script_dir().parent.parent.parent
+
+
+def build_launch_cmd() -> List[str]:
+    """Build the launch.py command."""
+    return [
+        "python", "launch.py",
+        "--config", CONFIG,
+        "--train",
+        "--gpu", GPU,
+        f"trainer.max_steps={MAX_STEPS}",
+        f"system.prompt_processor.prompt={PROMPT}",
+        f"data.source={DATA_SOURCE}",
+        f"system.guidance.guidance_scale={GUIDANCE_SCALE}",
+        f"system.gs_source={GS_SOURCE}",
+        f"system.seg_prompt={SEG_PROMPT}",
+        f"data.mmr_seg_prompt={MMR_SEG_PROMPT}",
+        f"system.target_prompt={TARGET_PROMPT}",
+        f"system.mask_thres={MASK_THRES}",
+        f"system.loss.lambda_d={LAMBDA_D}",
+        f"data.max_view_num={MAX_VIEW_NUM}",
+        f"data.max_edit_view_num={MAX_EDIT_VIEW_NUM}",
+        f"data.edit_view_selection_strategy={EDIT_VIEW_SELECTION_STRATEGY}",
+        f"system.guidance.edit_view_selection_strategy={EDIT_VIEW_SELECTION_STRATEGY}",
+        f"system.camera_update_per_step={CAMERA_UPDATE_PER_STEP}",
+        f"system.mask_update_at_step={MASK_UPDATE_AT_STEP}",
+        f"system.prune_floater_at_step={PRUNE_FLOATER_AT_STEP}",
+        f"name={NAME}",
+    ]
+
+
+def find_save_directory(output: str) -> Optional[Path]:
+    """Find the save directory from launch.py output."""
+    # Look for "Test results saved to ..." pattern
+    pattern = r"Test results saved to (.+)"
+    matches = re.findall(pattern, output)
+    
+    if matches:
+        save_dir = Path(matches[-1].strip())
+        if save_dir.exists() and save_dir.is_dir():
+            return save_dir
+    
+    # Fallback: try to find latest directory based on config
+    exp_root_dir = Path("/data/users/jaeyeonpark/DGE-outputs")
+    exp_dir = exp_root_dir / NAME / str(MAX_VIEW_NUM)
+    
+    if exp_dir.exists():
+        # Find latest trial directory (with @timestamp pattern)
+        trial_dirs = sorted(
+            [d for d in exp_dir.iterdir() if d.is_dir() and "@" in d.name],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+        if trial_dirs:
+            save_dir = trial_dirs[0] / "save"
+            if save_dir.exists():
+                return save_dir
+    
+    # Try without MAX_VIEW_NUM
+    exp_dir = exp_root_dir / NAME
+    if exp_dir.exists():
+        trial_dirs = sorted(
+            [d for d in exp_dir.iterdir() if d.is_dir() and "@" in d.name],
+            key=lambda x: x.stat().st_mtime,
+            reverse=True
+        )
+        if trial_dirs:
+            save_dir = trial_dirs[0] / "save"
+            if save_dir.exists():
+                return save_dir
+    
+    return None
+
+
+def find_render_directory(save_dir: Path) -> Optional[Path]:
+    """Find the test render directory."""
+    render_dir = save_dir / f"it{MAX_STEPS}-test"
+    if render_dir.exists():
+        return render_dir
+    
+    # Try to find any it*-test directory
+    test_dirs = list(save_dir.glob("it*-test"))
+    if test_dirs:
+        return test_dirs[0]
+    
+    return None
+
+
+def build_metrics_cmd(render_dir: Path) -> List[str]:
+    """Build the metrics.py command."""
+    # Set device with GPU number if using CUDA
+    device = DEVICE
+    if device == "cuda":
+        device = f"cuda:{GPU}"
+    
+    cmd = [
+        "python", "metrics.py",
+        "--gt", GT_DIR,
+        "--render", str(render_dir),
+        "--device", device,
+        "--interval", str(INTERVAL),
+        "--style_source_prompt", STYLE_SOURCE_PROMPT,
+    ]
+    
+    if STYLE_IMAGE:
+        cmd.extend(["--style_image", STYLE_IMAGE])
+    elif STYLE_TARGET_PROMPT:
+        cmd.extend(["--style_target_prompt", STYLE_TARGET_PROMPT])
+    
+    return cmd
+
+
+def run_single_iteration(run_num: int, total_runs: int, log_file: Optional[Path] = None) -> Tuple[bool, str]:
+    """Run a single iteration of launch + metrics."""
+    root_dir = get_root_dir()
+    os.chdir(root_dir)
+    
+    print(f"\n{'='*50}")
+    print(f"[Run {run_num}/{total_runs}] Starting...")
+    print(f"{'='*50}")
+    print(f"Start time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print()
+    
+    # Step 1: Launch training
+    print(f"{'='*50}")
+    print("[1/3] Launch training...")
+    print(f"{'='*50}")
+    
+    launch_cmd = build_launch_cmd()
+    print(f"Running: {' '.join(launch_cmd)}")
+    print()
+    
+    launch_output = ""
+    try:
+        # Use Popen for real-time output streaming
+        process = subprocess.Popen(
+            launch_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+            universal_newlines=True
+        )
+        
+        # Stream output in real-time
+        output_lines = []
+        if log_file:
+            log_f = open(log_file, "a", encoding="utf-8")
+            log_f.write("=== LAUNCH OUTPUT ===\n")
+        
+        try:
+            for line in process.stdout:
+                print(line, end='', flush=True)  # Print immediately
+                output_lines.append(line)
+                if log_file:
+                    log_f.write(line)
+                    log_f.flush()
+        finally:
+            if log_file:
+                log_f.write("\n")
+                log_f.close()
+        
+        process.wait()
+        launch_output = ''.join(output_lines)
+        
+        if process.returncode != 0:
+            print("\nTraining failed. Check the output above.")
+            return False, launch_output
+        
+        print("\nTraining completed successfully.")
+    except Exception as e:
+        print(f"\nError running launch.py: {e}")
+        return False, str(e)
+    
+    # Step 2: Discover render directory
+    print()
+    print(f"{'='*50}")
+    print("[2/3] Discover render directory from output...")
+    print(f"{'='*50}")
+    
+    save_dir = find_save_directory(launch_output)
+    if not save_dir:
+        print("Error: Could not find save directory.")
+        print("Expected pattern: [INFO] Test results saved to <path>")
+        return False, "Could not find save directory"
+    
+    print(f"Found save directory: {save_dir}")
+    
+    render_dir = find_render_directory(save_dir)
+    if not render_dir:
+        print(f"Error: Could not find test render directory in {save_dir}")
+        print(f"Expected: {save_dir}/it{MAX_STEPS}-test or similar")
+        return False, "Could not find render directory"
+    
+    print(f"Using render directory: {render_dir}")
+    print()
+    
+    # Validate directories
+    if not Path(GT_DIR).exists():
+        print(f"Error: GT_DIR not found: {GT_DIR}")
+        return False, f"GT_DIR not found: {GT_DIR}"
+    
+    if not render_dir.exists():
+        print(f"Error: RENDER_DIR not found: {render_dir}")
+        return False, f"RENDER_DIR not found: {render_dir}"
+    
+    # Step 3: Run metrics
+    print(f"{'='*50}")
+    print("[3/3] Run metrics...")
+    print(f"{'='*50}")
+    
+    metrics_cmd = build_metrics_cmd(render_dir)
+    print(f"Running: {' '.join(metrics_cmd)}")
+    print()
+    
+    try:
+        # Use Popen for real-time output streaming
+        process = subprocess.Popen(
+            metrics_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+            universal_newlines=True
+        )
+        
+        # Stream output in real-time
+        output_lines = []
+        if log_file:
+            log_f = open(log_file, "a", encoding="utf-8")
+            log_f.write("=== METRICS OUTPUT ===\n")
+        
+        try:
+            for line in process.stdout:
+                print(line, end='', flush=True)  # Print immediately
+                output_lines.append(line)
+                if log_file:
+                    log_f.write(line)
+                    log_f.flush()
+        finally:
+            if log_file:
+                log_f.write("\n")
+                log_f.close()
+        
+        process.wait()
+        metrics_output = ''.join(output_lines)
+        
+        if process.returncode != 0:
+            print("\nMetrics calculation failed.")
+            return False, metrics_output
+        
+        print()
+        print(f"{'='*50}")
+        print("Done!")
+        print(f"{'='*50}")
+        
+        return True, ""
+    except Exception as e:
+        print(f"\nError running metrics.py: {e}")
+        return False, str(e)
+
+
+def main():
+    """Main function to run batch iterations."""
+    # Create log directory (use absolute path to avoid issues with working directory changes)
+    root_dir = get_root_dir()
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    batch_log_base = root_dir / BATCH_LOG_DIR / timestamp
+    batch_log_base.mkdir(parents=True, exist_ok=True)
+    
+    print("="*50)
+    print("Batch Run Configuration")
+    print("="*50)
+    print(f"Number of runs: {NUM_RUNS}")
+    print(f"Config: {CONFIG}")
+    print(f"GPU: {GPU}")
+    print(f"Max steps: {MAX_STEPS}")
+    print(f"Name: {NAME}")
+    print(f"Log directory: {batch_log_base}")
+    print("="*50)
+    print()
+    
+    # Track results
+    success_count = 0
+    fail_count = 0
+    failed_runs = []
+    
+    # Run each iteration
+    for run in range(1, NUM_RUNS + 1):
+        log_file = batch_log_base / f"run_{run}.log"
+        
+        success, error_msg = run_single_iteration(run, NUM_RUNS, log_file)
+        
+        if success:
+            success_count += 1
+            print(f"\n[Run {run}/{NUM_RUNS}] ✓ Completed successfully")
+        else:
+            fail_count += 1
+            failed_runs.append(run)
+            print(f"\n[Run {run}/{NUM_RUNS}] ✗ Failed")
+            if error_msg:
+                print(f"Error: {error_msg}")
+        
+        print(f"End time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print()
+        
+        # Add a small delay between runs
+        if run < NUM_RUNS:
+            print("Waiting 5 seconds before next run...")
+            import time
+            time.sleep(5)
+    
+    # Print summary
+    print()
+    print("="*50)
+    print("Batch Run Summary")
+    print("="*50)
+    print(f"Total runs: {NUM_RUNS}")
+    print(f"Successful: {success_count}")
+    print(f"Failed: {fail_count}")
+    print()
+    
+    if fail_count > 0:
+        print(f"Failed runs: {failed_runs}")
+        print()
+        print(f"Check logs in: {batch_log_base}")
+        sys.exit(1)
+    else:
+        print("All runs completed successfully!")
+        print()
+        print(f"All logs saved in: {batch_log_base}")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
+
