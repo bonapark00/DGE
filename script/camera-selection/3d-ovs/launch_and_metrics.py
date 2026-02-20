@@ -76,6 +76,16 @@ DATA_SOURCE = f"/working/style-transfer/DGE-camera-selection/output/orbit_colmap
 DATA_SOURCE = f"/data/users/jaeyeonpark/dataset/{DATA_TYPE}/{DATA_NAME}"
 GS_SOURCE = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/point_cloud/iteration_30000/point_cloud.ply"
 LAMBDA_D = "0.0"
+LAMBDA_DDS = "0.0"
+DDS_T_RANGE = "0.02,0.5"
+DDS_CFG_SCALE = "7.5"
+LAMBDA_ISM = "0.0001"
+USE_SDS = False
+USE_SDS_DGE = False
+LAMBDA_SDS = "0.0"
+USE_WARP_REFINE = True
+WARP_REFINE_COLOR_FIT_STEPS = "100"
+
 EDIT_VIEW_SELECTION_STRATEGY = "lens"  # row, quadrant, manual-20, manual-15, random, depth, lens
 
 LENS_USE_IP2P_SCORING = "true"  # match generate_by_lens: use IP2P for SAGE probing
@@ -84,6 +94,8 @@ LENS_IP2P_GUIDANCE_SCALE = "12.5"  # IP2P guidance_scale for SAGE probing
 LENS_IP2P_IMAGE_GUIDANCE_SCALE = "1.5"  # IP2P image_guidance_scale for SAGE probing
 LENS_DISTANCE_MULTIPLIERS = "2.0,2.5,3.0,4.0,5.0,6.0"  # match run_generate_by_lens.sh
 LENS_CONE_HALF_ANGLE_DEG = "60"  # Cone constraint around COLMAP mean direction (default 60)
+LENS_LAMBDA_LEAK = "1.5"
+LENS_LAMBDA_ENT = "15.0"
 
 GUIDANCE_SCALE = "10.5" # original: 12.5
 MASK_THRES = "0.8"
@@ -147,6 +159,15 @@ def build_launch_cmd() -> List[str]:
         f"system.mask_min_ratio={MASK_MIN_RATIO}",
         f"system.mask_outlier_iqr={MASK_OUTLIER_IQR}",
         f"system.loss.lambda_d={LAMBDA_D}",
+        f"system.loss.lambda_dds={LAMBDA_DDS}",
+        f"system.dds_t_range=[{DDS_T_RANGE}]",
+        f"system.dds_cfg_scale={DDS_CFG_SCALE}",
+        f"system.loss.lambda_ism={LAMBDA_ISM}",
+        f"system.loss.use_sds={str(USE_SDS).lower()}",
+        f"system.guidance.use_sds_dge={str(USE_SDS_DGE).lower()}",
+        f"system.loss.lambda_sds={LAMBDA_SDS}",
+        f"system.warp_refine_color_fit_steps={WARP_REFINE_COLOR_FIT_STEPS}",
+        f"system.use_warp_refine={str(USE_WARP_REFINE).lower()}",
         f"data.max_view_num={MAX_VIEW_NUM}",
         f"data.max_edit_view_num={MAX_EDIT_VIEW_NUM}",
         f"data.edit_view_selection_strategy={EDIT_VIEW_SELECTION_STRATEGY}",
@@ -159,6 +180,8 @@ def build_launch_cmd() -> List[str]:
         f"data.lens_ip2p_image_guidance_scale={LENS_IP2P_IMAGE_GUIDANCE_SCALE}",
         f"data.lens_distance_multipliers={LENS_DISTANCE_MULTIPLIERS}",
         f"data.lens_cone_half_angle_deg={LENS_CONE_HALF_ANGLE_DEG}",
+        f"data.lens_lambda_leak={LENS_LAMBDA_LEAK}",
+        f"data.lens_lambda_ent={LENS_LAMBDA_ENT}",
         f"system.guidance.edit_view_selection_strategy={EDIT_VIEW_SELECTION_STRATEGY}",
         f"system.camera_update_per_step={CAMERA_UPDATE_PER_STEP}",
         f"system.mask_update_at_step={MASK_UPDATE_AT_STEP}",

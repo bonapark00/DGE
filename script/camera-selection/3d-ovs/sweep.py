@@ -20,7 +20,7 @@ Usage:
   python script/camera-selection/in2n/sweep.py --agent --sweep_id <ID> --gpu 0
   python script/camera-selection/in2n/sweep.py --agent --sweep_id <ID> --gpu 0,1,2
 
-  # Run multiple agents in parallel (one process per GPU, single command):
+  # Run multiple agents in parallel (one process per GPU, single command): ## 이거로!!!
   python script/camera-selection/in2n/sweep.py --agent --sweep_id <ID> --gpus 0,1,2
 
   # Or manually in separate terminals:
@@ -91,7 +91,8 @@ LENS_LAMBDA_ENT = "15.0"
 
 ORIGIN_RENDER_BASE = "/data/users/jaeyeonpark/DGE-outputs/origin_render"
 EDIT_VIEW_SELECTION_STRATEGY_DEFAULT = "lens"
-GT_DIR = f"{ORIGIN_RENDER_BASE}/{DATA_TYPE}/{DATA_NAME}/{EDIT_VIEW_SELECTION_STRATEGY_DEFAULT}"
+GT_DIR = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/train/ours_30000/renders"
+
 
 STYLE_TARGET_PROMPT = "A man with a leather jacket"
 STYLE_SOURCE_PROMPT = SEG_PROMPT
@@ -165,19 +166,19 @@ TASKS = [
         "STYLE_SOURCE_PROMPT": "head of the pooh",
         "STYLE_TARGET_PROMPT": "pooh wearing sunglasses",
     },
-    # 7) Change the bear's sweater's color into blue
+    # 7) Change the pooh's sweater color to blue
     {
         "name": "sweater_blue",
-        "PROMPT": "Change the bear's sweater's color into blue",
+        "PROMPT": "Change the pooh's sweater color to blue",
         "SEG_PROMPT": "red sweater of the pooh",
-        "TARGET_PROMPT": "blue t-shirt",
+        "TARGET_PROMPT": "blue sweater of the pooh",
         "STYLE_SOURCE_PROMPT": "red sweater of the pooh",
         "STYLE_TARGET_PROMPT": "blue sweater of the pooh",
     },
-    # 8) Add flower pattern to the bear's sweater
+    # 8) Add flower pattern to the pooh's sweater
     {
         "name": "sweater_flower",
-        "PROMPT": "Add flower pattern to the bear's sweater",
+        "PROMPT": "Add flower pattern to the pooh's sweater",
         "SEG_PROMPT": "red sweater of the pooh",
         "TARGET_PROMPT": "sweater of the pooh with flower pattern",
         "STYLE_SOURCE_PROMPT": "red sweater of the pooh",
@@ -245,6 +246,7 @@ SWEEP_CONFIG = {
         # Warp-refine 사용 여부 (True: warp-refine 브랜치, False: 기존 DGE guidance)
         "use_warp_refine": {
             "values": [True, False],
+            # "values": [False],
         },
         "task": {
             "values": [t["name"] for t in TASKS],
@@ -453,12 +455,14 @@ def train_and_evaluate():
     print(f"[Sweep] Render dir: {render_dir}")
 
     # ---- Run metrics ----
+    # GT dir must match this run's strategy (lens vs random); path must exist with pre-generated origin renders
+    gt_dir = GT_DIR
     # Use first GPU in list for metrics (e.g. "0,1" -> cuda:0)
     gpu_id = gpu.split(",")[0].strip()
     device = f"cuda:{gpu_id}"
     metrics_cmd = [
         "python", "metrics.py",
-        "--gt", GT_DIR,
+        "--gt", gt_dir,
         "--render", str(render_dir),
         "--device", device,
         "--interval", str(INTERVAL),

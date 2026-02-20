@@ -5,8 +5,8 @@ import os
 import sys
 import wandb
 
-# Apply huggingface_hub compatibility patch
-import hf_hub_patch
+# Apply huggingface_hub compatibility patch (optional if package missing)
+import hf_hub_patch  # noqa: F401
 
 
 class ColoredFilter(logging.Filter):

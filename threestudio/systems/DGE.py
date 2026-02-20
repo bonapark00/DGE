@@ -110,10 +110,11 @@ class DGE(BaseLift3DSystem):
         # Warp-and-Refine (propagate_and_refine_views) settings
         use_warp_refine: bool = False  # If True, use warp-and-refine instead of DGE guidance
         warp_refine_color_fit_steps: int = 100  # Color-only fitting steps per anchor
-        warp_refine_ip2p_strength: float = 0.5  # SDEdit strength for refinement (0~1)
-        warp_refine_ip2p_steps: int = 20  # Number of IP2P inference steps
-        warp_refine_image_guidance_scale: float = 1.5  # IP2P image guidance scale
-        warp_refine_text_guidance_scale: float = 7.5  # IP2P text guidance scale
+        warp_refine_anchor_ip2p_steps: int = 50  # IP2P steps for anchor view (stronger edit → increase)
+        warp_refine_ip2p_strength: float = 0.75  # Blend: IP2P vs warped for non-anchor (stronger → 0.75~1.0)
+        warp_refine_ip2p_steps: int = 20  # IP2P steps for propagate-and-refine views
+        warp_refine_image_guidance_scale: float = 1.5  # Lower = stronger edit (e.g. 1.2, 1.0)
+        warp_refine_text_guidance_scale: float = 7.5  # Higher = stronger edit (e.g. 9.0, 10.0)
         warp_refine_color_lr: float = 5e-3  # LR for color-only fitting
 
     cfg: Config
@@ -1345,8 +1346,8 @@ class DGE(BaseLift3DSystem):
         """
         from PIL import Image as PILImage
 
-        # Base seed for IP2P calls (for deterministic multi-view behaviour).
-        base_seed = int(seed) if seed is not None else 0
+        # Same seed for all views (deterministic, same edit style across views).
+        ip2p_seed = int(seed) if seed is not None else 42
 
         # ------------------------------------------------------------------ #
         # 1. Colour fitting                                                   #
@@ -1396,11 +1397,8 @@ class DGE(BaseLift3DSystem):
                 anchor_np  = (edited_anchor_image.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
                 anchor_pil = PILImage.fromarray(anchor_np)
 
-                # Vanilla IP2P img2img with a deterministic per-view seed
-                view_seed = base_seed * 1000 + idx if base_seed != 0 else None
-                generator = None
-                if view_seed is not None:
-                    generator = torch.Generator(device=str(exec_device)).manual_seed(view_seed)
+                # Same seed for all views
+                generator = torch.Generator(device=str(exec_device)).manual_seed(ip2p_seed)
                 out_pil = ip2p_pipe(
                     prompt=prompt,
                     image=warped_pil,
@@ -1495,6 +1493,7 @@ class DGE(BaseLift3DSystem):
             mid_idx   = len(view_sorted) // 2
             anchor_vid = view_sorted[mid_idx]
             anchor_cam = cams_sorted[mid_idx]
+            print(f"[warp-refine] Anchor view index: {anchor_vid} (mid_idx={mid_idx}, total_views={len(view_sorted)})")
 
             with self._latency_logger.timeit("edit_all_view_wr.anchor_render"):
                 with torch.no_grad():
@@ -1511,7 +1510,9 @@ class DGE(BaseLift3DSystem):
                     anchor_edited_pil = ip2p_pipe(
                         prompt=prompt,
                         image=anchor_rendered_pil,
-                        num_inference_steps=50,
+                        num_inference_steps=getattr(
+                            self.cfg, "warp_refine_anchor_ip2p_steps", 50
+                        ),
                         image_guidance_scale=self.cfg.warp_refine_image_guidance_scale,
                         guidance_scale=self.cfg.warp_refine_text_guidance_scale,
                     ).images[0]
@@ -1559,7 +1560,8 @@ class DGE(BaseLift3DSystem):
                 self.save_image_grid(
                     "edited_images_wr.png", save_list, name="edited_images_wr", step=self.true_global_step
                 )
-        print("[warp-refine] edited images saved")
+        print("[warp-refine] edited images saved to:", self.get_save_path("edited_images_wr.png"))
+        return
 
     def sort_the_cameras_idx(self, cams):
         # 각도 기반 원형 정렬 (한 방향으로만, 방향 전환 없이) - 벡터화 최적화
@@ -1651,9 +1653,9 @@ class DGE(BaseLift3DSystem):
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
                 self.cfg.prompt_processor
             )
+        dm = getattr(self.trainer, "datamodule", None)
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds or self.cfg.loss.lambda_dds > 0 or self.cfg.loss.lambda_ism > 0:
             # Get or load IP2P OUTSIDE of latency measurement (exclude model loading)
-            dm = getattr(self.trainer, "datamodule", None)
             ip2p_pipe = None
             if dm is not None and getattr(dm, "ip2p_pipe", None) is not None:
                 ip2p_pipe = dm.ip2p_pipe
@@ -1817,12 +1819,11 @@ class DGE(BaseLift3DSystem):
 
                 loss_dict["loss_d"] = loss_d
 
-            # novel views에 대해서 DDS, CLIP 모두 적용하지 않은 경우 (0이어도 graph에 연결해 backward() 가능하게)
-            else:
+            # novel views에 대해서 DDS, CLIP 모두 적용하지 않은 경우에만 dummy로 graph 연결 (기존 loss_dict 덮어쓰지 않음)
+            if self.cfg.loss.lambda_d <= 0 and len(loss_dict) == 0:
                 z = (images * 0).sum()
-                loss_dict = {"loss_l1": z, "loss_p": z}
-
-
+                loss_dict["loss_l1"] = z
+                loss_dict["loss_p"] = z
 
             for name, value in loss_dict.items():
                 self.log(f"train/{name}", value)
