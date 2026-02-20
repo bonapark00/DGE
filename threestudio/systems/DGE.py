@@ -4,6 +4,7 @@ import random
 from re import T
 
 from PIL import Image, ImageDraw, ImageFont
+import PIL.Image as PILImage
 from tqdm import tqdm
 import cv2
 import numpy as np
@@ -105,6 +106,15 @@ class DGE(BaseLift3DSystem):
         mask_update_at_step: int = 500 ## BONA
         # number of novel views used when updating mask at mask_update_at_step
         mask_update_view_num: int = 10
+
+        # Warp-and-Refine (propagate_and_refine_views) settings
+        use_warp_refine: bool = False  # If True, use warp-and-refine instead of DGE guidance
+        warp_refine_color_fit_steps: int = 100  # Color-only fitting steps per anchor
+        warp_refine_ip2p_strength: float = 0.5  # SDEdit strength for refinement (0~1)
+        warp_refine_ip2p_steps: int = 20  # Number of IP2P inference steps
+        warp_refine_image_guidance_scale: float = 1.5  # IP2P image guidance scale
+        warp_refine_text_guidance_scale: float = 7.5  # IP2P text guidance scale
+        warp_refine_color_lr: float = 5e-3  # LR for color-only fitting
 
     cfg: Config
 
@@ -1233,6 +1243,324 @@ class DGE(BaseLift3DSystem):
         print("edited images saved")
 
 
+    @torch.no_grad()
+    def _render_single(self, cam) -> torch.Tensor:
+        """Render a single camera view. Returns [H, W, C] float32 tensor in [0,1]."""
+        render_pkg = render(cam, self.gaussian, self.pipe, self.background_tensor)
+        return render_pkg["render"].permute(1, 2, 0)  # [H, W, 3]
+
+    def _color_fit_to_anchor(
+        self,
+        anchor_cam,
+        edited_anchor_image: torch.Tensor,  # [H, W, C] float32 [0,1]
+    ):
+        """
+        Freeze geometry; optimise SH colour params to overfit to edited_anchor_image.
+        Saves and restores original SH values afterwards so the caller may proceed
+        with the fitted colours.
+
+        Returns: (fitted_features_dc, fitted_features_rest) – detached clones.
+        """
+        # ------------------------------------------------------------------
+        # 1. Save originals
+        # ------------------------------------------------------------------
+        orig_features_dc   = self.gaussian._features_dc.data.clone()
+        orig_features_rest = self.gaussian._features_rest.data.clone()
+
+        # ------------------------------------------------------------------
+        # 2. Build a colour-only Adam optimiser (no optimizer state pollution)
+        # ------------------------------------------------------------------
+        color_lr = self.cfg.warp_refine_color_lr
+        color_params = [
+            {"params": [self.gaussian._features_dc],   "lr": color_lr,        "name": "f_dc"},
+            {"params": [self.gaussian._features_rest],  "lr": color_lr / 20.0, "name": "f_rest"},
+        ]
+        color_optimizer = torch.optim.Adam(color_params, lr=0.0, eps=1e-15)
+
+        # Target: [1, C, H, W] for easy perceptual loss; also keep HWC for L1
+        target_hwc = edited_anchor_image.to(self.gaussian._features_dc.device)
+        target_bchw = target_hwc.permute(2, 0, 1).unsqueeze(0)  # [1, C, H, W]
+
+        # ------------------------------------------------------------------
+        # 3. Fitting loop – geometry gradients are not computed (no_grad on others)
+        # ------------------------------------------------------------------
+        for _ in range(self.cfg.warp_refine_color_fit_steps):
+            color_optimizer.zero_grad()
+
+            render_pkg = render(anchor_cam, self.gaussian, self.pipe, self.background_tensor)
+            rendered = render_pkg["render"].permute(1, 2, 0)  # [H, W, C]
+
+            loss = F.l1_loss(rendered, target_hwc)
+            loss += self.perceptual_loss(
+                rendered.permute(2, 0, 1).unsqueeze(0).contiguous(),
+                target_bchw.contiguous(),
+            ).sum() * 0.1
+
+            loss.backward()
+
+            # Zero out gradients for geometry parameters to be safe
+            for pname in ["_xyz", "_scaling", "_rotation", "_opacity"]:
+                p = getattr(self.gaussian, pname)
+                if p.grad is not None:
+                    p.grad.zero_()
+
+            color_optimizer.step()
+
+        # ------------------------------------------------------------------
+        # 4. Snapshot fitted colours then restore originals
+        # ------------------------------------------------------------------
+        fitted_dc   = self.gaussian._features_dc.data.clone()
+        fitted_rest = self.gaussian._features_rest.data.clone()
+
+        self.gaussian._features_dc.data.copy_(orig_features_dc)
+        self.gaussian._features_rest.data.copy_(orig_features_rest)
+
+        del color_optimizer
+        return fitted_dc, fitted_rest
+
+    def propagate_and_refine_views(
+        self,
+        anchor_cam,
+        edited_anchor_image: torch.Tensor,  # [H, W, C] float32 [0,1]
+        target_cams: list,
+        ip2p_pipe,
+        prompt: str,
+        seed: Optional[int] = None,
+    ) -> list:
+        """
+        Warp-and-Refine: propagate the edited appearance from anchor_cam to
+        target_cams via 3DGS geometry, then refine with vanilla IP2P SDEdit.
+
+        Steps
+        -----
+        1. Colour-only fitting: overfit SH colours to edited_anchor_image at
+           anchor_cam without touching geometry.
+        2. Render target views with the fitted colours → warped images.
+        3. Restore original colours.
+        4. IP2P SDEdit refinement on each warped image (low strength).
+
+        Returns
+        -------
+        List of [H, W, C] float32 tensors (one per target cam).
+        """
+        from PIL import Image as PILImage
+
+        # Base seed for IP2P calls (for deterministic multi-view behaviour).
+        base_seed = int(seed) if seed is not None else 0
+
+        # ------------------------------------------------------------------ #
+        # 1. Colour fitting                                                   #
+        # ------------------------------------------------------------------ #
+        fitted_dc, fitted_rest = self._color_fit_to_anchor(
+            anchor_cam, edited_anchor_image
+        )
+
+        # ------------------------------------------------------------------ #
+        # 2. Render target views with fitted colours                          #
+        # ------------------------------------------------------------------ #
+        orig_dc   = self.gaussian._features_dc.data.clone()
+        orig_rest = self.gaussian._features_rest.data.clone()
+
+        self.gaussian._features_dc.data.copy_(fitted_dc)
+        self.gaussian._features_rest.data.copy_(fitted_rest)
+
+        warped_images = []  # list of [H, W, C] tensors
+        with torch.no_grad():
+            for cam in target_cams:
+                warped = self._render_single(cam)  # [H, W, C]
+                warped_images.append(warped)
+
+        # Restore originals immediately
+        self.gaussian._features_dc.data.copy_(orig_dc)
+        self.gaussian._features_rest.data.copy_(orig_rest)
+
+        # ------------------------------------------------------------------ #
+        # 3. IP2P refinement (vanilla InstructPix2Pix, optional blend)       #
+        # ------------------------------------------------------------------ #
+        strength     = self.cfg.warp_refine_ip2p_strength  # used as blend factor between warped & edited
+        num_steps    = self.cfg.warp_refine_ip2p_steps
+        img_guidance = self.cfg.warp_refine_image_guidance_scale
+        txt_guidance = self.cfg.warp_refine_text_guidance_scale
+
+        refined = []
+        # Prepare execution device for diffusers generator
+        exec_device = getattr(ip2p_pipe, "_execution_device", None) or ip2p_pipe.unet.device
+        with torch.no_grad():
+            for idx, warped_hwc in enumerate(warped_images):
+                # Convert to PIL for the diffusers pipeline
+                warped_np  = (warped_hwc.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+                warped_pil = PILImage.fromarray(warped_np)
+                H, W       = warped_np.shape[:2]
+
+                # Anchor edit as the "original" image condition for IP2P
+                anchor_np  = (edited_anchor_image.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+                anchor_pil = PILImage.fromarray(anchor_np)
+
+                # Vanilla IP2P img2img with a deterministic per-view seed
+                view_seed = base_seed * 1000 + idx if base_seed != 0 else None
+                generator = None
+                if view_seed is not None:
+                    generator = torch.Generator(device=str(exec_device)).manual_seed(view_seed)
+                out_pil = ip2p_pipe(
+                    prompt=prompt,
+                    image=warped_pil,
+                    num_inference_steps=num_steps,
+                    image_guidance_scale=img_guidance,
+                    guidance_scale=txt_guidance,
+                    generator=generator,
+                ).images[0]
+
+                # Back to float tensor [H, W, C]
+                out_np = np.array(out_pil.resize((W, H))).astype(np.float32) / 255.0
+                # Optional SDEdit-style blend with warped input using strength in [0,1]
+                if 0.0 < float(strength) < 1.0:
+                    warped_f = warped_np.astype(np.float32) / 255.0
+                    alpha = float(strength)
+                    out_np = alpha * out_np + (1.0 - alpha) * warped_f
+                refined.append(torch.from_numpy(out_np).to(warped_hwc.device))
+
+        return refined  # List of [H, W, C] float32 tensors
+
+    def edit_all_view_warp_refine(
+        self,
+        original_render_name: str,
+        cache_name: str,
+        ip2p_pipe,
+        update_camera: bool = False,
+        global_step: int = 0,
+    ):
+        """
+        Alternative to edit_all_view that uses Warp-and-Refine propagation
+        instead of the DGE attention-based guidance.
+
+        For each camera-update cycle:
+          1. Edit the first (anchor) view with vanilla IP2P.
+          2. Propagate & refine to all remaining views via propagate_and_refine_views.
+          3. Store results in self.edit_frames.
+        """
+        if update_camera:
+            with self._latency_logger.timeit("edit_all_view_wr.update_editing_cameras"):
+                self.trainer.datamodule.train_dataset.update_editing_cameras(
+                    random_seed=global_step + 1
+                )
+                self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+                sorted_train_view_list = sorted(self.edit_view_index)
+                selected_views = torch.linspace(
+                    0,
+                    len(sorted_train_view_list) - 1,
+                    self.trainer.datamodule.val_dataset.n_views,
+                    dtype=torch.int,
+                )
+                self.trainer.datamodule.val_dataset.selected_views = [
+                    sorted_train_view_list[idx] for idx in selected_views
+                ]
+
+        print(f"{self.true_global_step}th step [warp-refine], Camera view index: {self.edit_view_index}")
+
+        self.edit_frames = {}
+        self.edit_frames_order = []
+        cache_dir               = os.path.join(self.cache_dir, cache_name)
+        original_render_cache   = os.path.join(self.cache_dir, original_render_name)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # ------------------------------------------------------------------ #
+        # Collect & sort cameras (same ordering as edit_all_view)             #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_all_view_wr.collect_and_sort_cameras"):
+            cameras = [
+                self.trainer.datamodule.train_dataset.scene.cameras[i]
+                for i in self.edit_view_index
+            ]
+            sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+            view_sorted  = [self.edit_view_index[i] for i in sorted_cam_idx]
+            cams_sorted  = [cameras[i]              for i in sorted_cam_idx]
+
+        # Reload origin frames
+        with self._latency_logger.timeit("edit_all_view_wr.reload_origin_frames"):
+            with torch.no_grad():
+                for vid in view_sorted:
+                    orig_path = os.path.join(original_render_cache, "{:0>4d}.png".format(vid))
+                    assert os.path.exists(orig_path), f"Missing origin render: {orig_path}"
+                    img_bgr = cv2.imread(orig_path)
+                    cached  = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+                    self.origin_frames[vid] = torch.tensor(
+                        cached / 255, device="cuda", dtype=torch.float32
+                    )[None]
+
+        # ------------------------------------------------------------------ #
+        # Anchor view: edit with vanilla IP2P (full-strength)                 #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_all_view_wr.anchor_total"):
+            # Use the middle view in the sorted circular ordering as the anchor (\"central\" view)
+            mid_idx   = len(view_sorted) // 2
+            anchor_vid = view_sorted[mid_idx]
+            anchor_cam = cams_sorted[mid_idx]
+
+            with self._latency_logger.timeit("edit_all_view_wr.anchor_render"):
+                with torch.no_grad():
+                    anchor_rendered_hwc = self._render_single(anchor_cam)  # [H, W, C]
+
+            with self._latency_logger.timeit("edit_all_view_wr.anchor_ip2p"):
+                anchor_rendered_np  = (anchor_rendered_hwc.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
+                anchor_rendered_pil = PILImage.fromarray(anchor_rendered_np)
+                H, W = anchor_rendered_np.shape[:2]
+
+                prompt = self.cfg.target_prompt
+
+                with torch.no_grad():
+                    anchor_edited_pil = ip2p_pipe(
+                        prompt=prompt,
+                        image=anchor_rendered_pil,
+                        num_inference_steps=50,
+                        image_guidance_scale=self.cfg.warp_refine_image_guidance_scale,
+                        guidance_scale=self.cfg.warp_refine_text_guidance_scale,
+                    ).images[0]
+
+                anchor_edited_np  = np.array(anchor_edited_pil.resize((W, H))).astype(np.float32) / 255.0
+                anchor_edited_hwc = torch.from_numpy(anchor_edited_np).to("cuda")
+
+            # Store anchor edit
+            self.edit_frames[anchor_vid] = anchor_edited_hwc.unsqueeze(0).detach().clone()
+            self.edit_frames_order.append(anchor_vid)
+
+        # ------------------------------------------------------------------ #
+        # Target views: warp-and-refine                                       #
+        # ------------------------------------------------------------------ #
+        target_vids  = view_sorted[1:]
+        target_cams  = cams_sorted[1:]
+
+        if len(target_cams) > 0:
+            with self._latency_logger.timeit("edit_all_view_wr.propagate_and_refine"):
+                refined_list = self.propagate_and_refine_views(
+                    anchor_cam=anchor_cam,
+                    edited_anchor_image=anchor_edited_hwc,
+                    target_cams=target_cams,
+                    ip2p_pipe=ip2p_pipe,
+                    prompt=prompt,
+                )
+
+            with self._latency_logger.timeit("edit_all_view_wr.assign_refined"):
+                for vid, refined_hwc in zip(target_vids, refined_list):
+                    self.edit_frames[vid] = refined_hwc.unsqueeze(0).detach().clone()
+                    self.edit_frames_order.append(vid)
+
+        # ------------------------------------------------------------------ #
+        # Save grid for inspection                                             #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_all_view_wr.save_grid"):
+            save_list = []
+            for vid in self.edit_frames_order:
+                if vid in self.edit_frames:
+                    img_with_idx = self._add_index_to_image(self.edit_frames[vid][0], vid)
+                    save_list.append(
+                        {"type": "rgb", "img": img_with_idx, "kwargs": {"data_format": "HWC"}}
+                    )
+            if save_list:
+                self.save_image_grid(
+                    "edited_images_wr.png", save_list, name="edited_images_wr", step=self.true_global_step
+                )
+        print("[warp-refine] edited images saved")
+
     def sort_the_cameras_idx(self, cams):
         # 각도 기반 원형 정렬 (한 방향으로만, 방향 전환 없이) - 벡터화 최적화
         # 전방 벡터와 카메라 중심 추출 (벡터화)
@@ -1344,6 +1672,17 @@ class DGE(BaseLift3DSystem):
                 )
                 # Set save_dir for guidance to save epipolar constraint images
                 self.guidance.save_dir = self.get_save_dir()
+
+        # Load vanilla IP2P for warp-and-refine (separate from DGE guidance)
+        if self.cfg.use_warp_refine:
+            from diffusers import StableDiffusionInstructPix2PixPipeline
+            threestudio.info("[DGE] Loading vanilla InstructPix2Pix for warp-and-refine...")
+            ip2p_path = OmegaConf.select(self.cfg, "guidance.ip2p_name_or_path", default="timbrooks/instruct-pix2pix")
+            self._warp_refine_ip2p = StableDiffusionInstructPix2PixPipeline.from_pretrained(
+                ip2p_path,
+                torch_dtype=torch.float16,
+                safety_checker=None,
+            ).to(get_device())
             
         self.style_direction = CLIP.get_style_embedding(
             clip_model,
@@ -1353,9 +1692,19 @@ class DGE(BaseLift3DSystem):
         )
 
     def training_step(self, batch, batch_idx):
-        if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
+        if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_warp_refine:
+            # Warp-and-Refine branch: vanilla IP2P propagation (no DGE attention)
+            with self._latency_logger.timeit("edit_all_view_warp_refine"):
+                self.edit_all_view_warp_refine(
+                    original_render_name='origin_render',
+                    cache_name="edited_views_wr",
+                    ip2p_pipe=self._warp_refine_ip2p,
+                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                    global_step=self.true_global_step,
+                )
+        elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("edit_all_view"):
-                self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step) 
+                self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step)
         
         if self.true_global_step == self.cfg.mask_update_at_step and len(self.cfg.target_prompt) > 0:
             with self._latency_logger.timeit(f"update_mask at step {self.true_global_step}"):
