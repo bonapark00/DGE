@@ -107,6 +107,13 @@ class DGE(BaseLift3DSystem):
         # number of novel views used when updating mask at mask_update_at_step
         mask_update_view_num: int = 10
 
+        # Gaussian-Provenance Sparse Cross-View Attention (Version B)
+        use_gaussian_provenance: bool = False  # If True, use GP sparse attention instead of epipolar DGE
+        gp_K: int = 2            # top-K gaussians per pixel
+        gp_M_half: int = 1       # half-window size → M=(2*M_half+1)^2 neighbours
+        gp_vis_eps: float = 0.05 # depth tolerance for visibility test
+        gp_alpha_tau: float = 0.4  # scale for alpha gating (top-1 weight / tau)
+
         # Warp-and-Refine (propagate_and_refine_views) settings
         use_warp_refine: bool = False  # If True, use warp-and-refine instead of DGE guidance
         warp_refine_color_fit_steps: int = 100  # Color-only fitting steps per anchor
@@ -1563,6 +1570,259 @@ class DGE(BaseLift3DSystem):
         print("[warp-refine] edited images saved to:", self.get_save_path("edited_images_wr.png"))
         return
 
+    # ---------------------------------------------------------------------- #
+    # Version B: Gaussian-Provenance Sparse Cross-View Attention editing      #
+    # ---------------------------------------------------------------------- #
+
+    def build_gp_cache(
+        self,
+        cams_sorted: list,
+        key_cam_indices: list,
+        scales: list = None,
+        K: int = 2,
+        M_half: int = 1,
+        vis_eps: float = 0.05,
+        alpha_tau: float = 0.4,
+    ):
+        """
+        Build and store the gaussian-provenance attention cache used by
+        edit_all_view_gaussian_provenance.
+
+        Should be called once before the diffusion loop (or whenever the
+        camera set / edit_view_index changes).  The cache is geometry-static
+        so it is safe to reuse across diffusion steps as long as Gaussian
+        positions are not updated between editing rounds.
+
+        Args:
+            cams_sorted      : Sorted list of camera objects (all edit views).
+            key_cam_indices  : Indices into cams_sorted that are the key/pivotal
+                               views (e.g. [0] or [0, n//2]).
+            scales           : List of (H, W) tuples matching UNet latent scales.
+                               Defaults to [(64,64), (32,32), (16,16), (8,8)].
+            K, M_half, vis_eps, alpha_tau : passed through to
+                               build_gaussian_provenance_cache.
+        """
+        from threestudio.utils.dge_utils import build_gaussian_provenance_cache
+
+        if scales is None:
+            scales = [(64, 64), (32, 32), (16, 16), (8, 8)]
+
+        with self._latency_logger.timeit("build_gp_cache"):
+            self._gp_cache = build_gaussian_provenance_cache(
+                gaussian         = self.gaussian,
+                cams             = cams_sorted,
+                key_cam_indices  = key_cam_indices,
+                scales           = scales,
+                K                = K,
+                M_half           = M_half,
+                vis_eps          = vis_eps,
+                alpha_tau        = alpha_tau,
+            )
+
+        print(f"[GP-cache] built for {len(cams_sorted)} views, "
+              f"{len(key_cam_indices)} key views, scales={scales}, K={K}, L={K*(2*M_half+1)**2}")
+
+    def edit_all_view_gaussian_provenance(
+        self,
+        original_render_name: str,
+        cache_name: str,
+        update_camera: bool = False,
+        global_step: int = 0,
+        gp_K: int = 2,
+        gp_M_half: int = 1,
+        gp_vis_eps: float = 0.05,
+        gp_alpha_tau: float = 0.4,
+        gp_scales: list = None,
+    ):
+        """
+        Alternative to edit_all_view that replaces the O(HW²) epipolar
+        similarity search with O(HW·K·M) sparse cross-view attention guided
+        by 3DGS gaussian provenance.
+
+        Key differences from edit_all_view:
+          - No epipolar constraint precomputation (epipolar_constrains).
+          - No dense einsum similarity matrix.
+          - Uses gaussian projection to find candidate correspondences.
+          - Per-pixel confidence gating via alpha (top-1 gaussian weight).
+
+        The pivotal/key-view pass is identical to edit_all_view: the DGE
+        guidance runs its normal extended-attention UNet forward for key views
+        (their attention output is cached as kf_attn_output).  For non-key
+        views the cached kf_attn_output is gathered with sparse_xview_attn
+        using the pre-built idx_map / cand_valid / alpha tensors.
+        """
+        from threestudio.utils.dge_utils import (
+            register_gp_cache,
+            unregister_gp_cache,
+            sparse_xview_attn,
+        )
+
+        if gp_scales is None:
+            gp_scales = [(64, 64), (32, 32), (16, 16), (8, 8)]
+
+        # ------------------------------------------------------------------ #
+        # Camera update (identical to edit_all_view)                          #
+        # ------------------------------------------------------------------ #
+        if update_camera:
+            with self._latency_logger.timeit("edit_gp.update_editing_cameras"):
+                self.trainer.datamodule.train_dataset.update_editing_cameras(
+                    random_seed=global_step + 1
+                )
+                self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+                sorted_train_view_list = sorted(self.edit_view_index)
+                selected_views = torch.linspace(
+                    0,
+                    len(sorted_train_view_list) - 1,
+                    self.trainer.datamodule.val_dataset.n_views,
+                    dtype=torch.int,
+                )
+                self.trainer.datamodule.val_dataset.selected_views = [
+                    sorted_train_view_list[idx] for idx in selected_views
+                ]
+
+        print(f"{self.true_global_step}th step [gp], Camera view index: {self.edit_view_index}")
+
+        self.edit_frames       = {}
+        self.edit_frames_order = []
+        cache_dir              = os.path.join(self.cache_dir, cache_name)
+        original_render_cache  = os.path.join(self.cache_dir, original_render_name)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # ------------------------------------------------------------------ #
+        # Collect & sort cameras                                              #
+        # ------------------------------------------------------------------ #
+        cameras = [
+            self.trainer.datamodule.train_dataset.scene.cameras[i]
+            for i in self.edit_view_index
+        ]
+        sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+        view_sorted    = [self.edit_view_index[i] for i in sorted_cam_idx]
+        cams_sorted    = [cameras[i]              for i in sorted_cam_idx]
+
+        n_views  = len(cams_sorted)
+        # Key view(s): first camera in the sorted order (and optionally the
+        # midpoint, mirroring DGE's 1- or 2-key-view logic).
+        # Use a single key view to keep it simple; caller can override via
+        # gp_K if needed.
+        key_cam_indices = [0]
+        if n_views > 2:
+            key_cam_indices.append(n_views // 2)
+
+        # ------------------------------------------------------------------ #
+        # Load max_step schedule (same as edit_all_view)                      #
+        # ------------------------------------------------------------------ #
+        t_max_step = self.cfg.added_noise_schedule
+        self.guidance.max_step = t_max_step[
+            min(len(t_max_step) - 1,
+                self.true_global_step // self.cfg.camera_update_per_step)
+        ]
+
+        # ------------------------------------------------------------------ #
+        # Build gaussian-provenance cache (1 per camera-update cycle)        #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_gp.build_gp_cache"):
+            self.build_gp_cache(
+                cams_sorted      = cams_sorted,
+                key_cam_indices  = key_cam_indices,
+                scales           = gp_scales,
+                K                = gp_K,
+                M_half           = gp_M_half,
+                vis_eps          = gp_vis_eps,
+                alpha_tau        = gp_alpha_tau,
+            )
+
+        gp_cache = self._gp_cache
+
+        # ------------------------------------------------------------------ #
+        # Render all views & load original frames                             #
+        # ------------------------------------------------------------------ #
+        images         = []
+        original_frames = []
+
+        with torch.no_grad():
+            with self._latency_logger.timeit("edit_gp.render_and_load"):
+                for id in view_sorted:
+                    orig_path = os.path.join(
+                        original_render_cache, "{:0>4d}.png".format(id)
+                    )
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index":  id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width":  self.trainer.datamodule.train_dataset.width,
+                    }
+                    out_pkg = self(cur_batch)
+                    out     = out_pkg["comp_rgb"]
+                    if self.cfg.use_masked_image:
+                        out = out * out_pkg["masks"].unsqueeze(-1)
+                    images.append(out)
+
+                    assert os.path.exists(orig_path), f"Missing origin render: {orig_path}"
+                    cached_image = cv2.cvtColor(cv2.imread(orig_path), cv2.COLOR_BGR2RGB)
+                    self.origin_frames[id] = torch.tensor(
+                        cached_image / 255, device="cuda", dtype=torch.float32
+                    )[None]
+                    original_frames.append(self.origin_frames[id])
+
+            images          = torch.cat(images,          dim=0)   # [N, H, W, 3]
+            original_frames = torch.cat(original_frames, dim=0)   # [N, H, W, 3]
+
+        # ------------------------------------------------------------------ #
+        # Run DGE guidance with GP-cache injected into DGEBlocks              #
+        #                                                                      #
+        # The guidance.__call__ internally iterates batches and calls         #
+        # edit_latents which:                                                  #
+        #   1. register_pivotal(True)  → key views → kf_attn_output cached   #
+        #   2. register_pivotal(False) → non-key views                        #
+        #      → DGEBlock reads gp_idx_map / gp_cand_valid / gp_alpha and    #
+        #        calls sparse_xview_attn instead of the dense einsum          #
+        #                                                                      #
+        # We pass gp_cache through a new keyword so guidance can forward it   #
+        # to each DGEBlock via the existing register_* mechanism.             #
+        # ------------------------------------------------------------------ #
+        with torch.no_grad():
+            with self._latency_logger.timeit("edit_gp.guidance_batch"):
+                edited_images = self.guidance(
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
+                    cams            = cams_sorted,
+                    latency_logger  = self._latency_logger,
+                    gp_cache        = gp_cache,          # new: GP provenance cache
+                    key_cam_indices = key_cam_indices,   # new: which views are pivotal
+                )
+
+        # ------------------------------------------------------------------ #
+        # Store results (identical to edit_all_view)                          #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_gp.assign_outputs"):
+            self.edit_frames_order = view_sorted.copy()
+            for vi, vid in enumerate(view_sorted):
+                self.edit_frames[vid] = (
+                    edited_images['edit_images'][vi].unsqueeze(0).detach().clone()
+                )
+
+        # ------------------------------------------------------------------ #
+        # Save grid                                                           #
+        # ------------------------------------------------------------------ #
+        save_list = []
+        for vid in self.edit_frames_order:
+            if vid in self.edit_frames:
+                img_with_idx = self._add_index_to_image(self.edit_frames[vid][0], vid)
+                save_list.append(
+                    {"type": "rgb", "img": img_with_idx, "kwargs": {"data_format": "HWC"}}
+                )
+        if save_list:
+            self.save_image_grid(
+                "edited_images_gp.png",
+                save_list,
+                name="edited_images_gp",
+                step=self.true_global_step,
+            )
+        print("[gp] edited images saved to:", self.get_save_path("edited_images_gp.png"))
+        a = 1
+
     def sort_the_cameras_idx(self, cams):
         # 각도 기반 원형 정렬 (한 방향으로만, 방향 전환 없이) - 벡터화 최적화
         # 전방 벡터와 카메라 중심 추출 (벡터화)
@@ -1703,6 +1963,19 @@ class DGE(BaseLift3DSystem):
                     ip2p_pipe=self._warp_refine_ip2p,
                     update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
                     global_step=self.true_global_step,
+                )
+        elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_gaussian_provenance and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
+            # Version B: Gaussian-Provenance Sparse Cross-View Attention
+            with self._latency_logger.timeit("edit_all_view_gaussian_provenance"):
+                self.edit_all_view_gaussian_provenance(
+                    original_render_name='origin_render',
+                    cache_name="edited_views_gp",
+                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                    global_step=self.true_global_step,
+                    gp_K=self.cfg.gp_K,
+                    gp_M_half=self.cfg.gp_M_half,
+                    gp_vis_eps=self.cfg.gp_vis_eps,
+                    gp_alpha_tau=self.cfg.gp_alpha_tau,
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("edit_all_view"):

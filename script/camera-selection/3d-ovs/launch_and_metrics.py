@@ -86,6 +86,13 @@ LAMBDA_SDS = "0.0"
 USE_WARP_REFINE = True
 WARP_REFINE_COLOR_FIT_STEPS = "100"
 
+# Gaussian-Provenance Sparse Cross-View Attention (Version B)
+USE_GAUSSIAN_PROVENANCE = False  # True: GP sparse attention 사용 (epipolar 대체)
+GP_K = "2"            # 픽셀당 top-K gaussian 수
+GP_M_HALF = "1"       # 주변 윈도우 반경 (M=(2*M_half+1)^2, 기본 3x3=9)
+GP_VIS_EPS = "0.05"   # 가시성 판단 depth 허용 오차
+GP_ALPHA_TAU = "0.4"  # alpha gating 스케일 (top-1 가중치 / tau)
+
 EDIT_VIEW_SELECTION_STRATEGY = "lens"  # row, quadrant, manual-20, manual-15, random, depth, lens
 
 LENS_USE_IP2P_SCORING = "true"  # match generate_by_lens: use IP2P for SAGE probing
@@ -168,6 +175,11 @@ def build_launch_cmd() -> List[str]:
         f"system.loss.lambda_sds={LAMBDA_SDS}",
         f"system.warp_refine_color_fit_steps={WARP_REFINE_COLOR_FIT_STEPS}",
         f"system.use_warp_refine={str(USE_WARP_REFINE).lower()}",
+        f"system.use_gaussian_provenance={str(USE_GAUSSIAN_PROVENANCE).lower()}",
+        f"system.gp_K={GP_K}",
+        f"system.gp_M_half={GP_M_HALF}",
+        f"system.gp_vis_eps={GP_VIS_EPS}",
+        f"system.gp_alpha_tau={GP_ALPHA_TAU}",
         f"data.max_view_num={MAX_VIEW_NUM}",
         f"data.max_edit_view_num={MAX_EDIT_VIEW_NUM}",
         f"data.edit_view_selection_strategy={EDIT_VIEW_SELECTION_STRATEGY}",
