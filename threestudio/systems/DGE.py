@@ -1253,7 +1253,7 @@ class DGE(BaseLift3DSystem):
                 name="edited_images",
                 step=self.true_global_step,
             )
-        print("edited images saved")
+        print("edited images saved to:", self.get_save_path("edited_images.png"))
 
     def edit_multiview(self, original_render_name, cache_name, update_camera=False, global_step=0, num_key_views=None):
         """
@@ -1296,6 +1296,7 @@ class DGE(BaseLift3DSystem):
         num_key_views = min(num_key_views, n_views)
         key_indices = torch.linspace(0, n_views - 1, num_key_views, dtype=torch.long).tolist()
         key_indices = [int(i) for i in key_indices]
+        key_view_camera_ids = [view_sorted[i] for i in key_indices]
 
         images = []
         original_frames = []
@@ -1337,6 +1338,7 @@ class DGE(BaseLift3DSystem):
                     gaussian=self.gaussian,
                     pipe=self.pipe,
                     key_indices=key_indices,
+                    key_view_camera_ids=key_view_camera_ids,
                     prompt_text=getattr(self.cfg, "target_prompt", "") or "",
                 )
 
