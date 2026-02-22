@@ -1,0 +1,302 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "DGE: camera-selection-lens",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_camera-selection.yaml",
+                "--train", 
+                "--gpu", "0",
+                "trainer.max_steps=1500",
+
+                // --- Task Prompts & Data ---
+                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                "system.seg_prompt=pooh",
+                "data.mmr_seg_prompt=pooh",
+                "system.target_prompt=robot",
+                "data.lens_edit_prompt=Make the pooh look like a robot",
+
+                // "system.prompt_processor.prompt=Make the pooh look like a panda",
+                // "system.seg_prompt=pooh",
+                // "data.mmr_seg_prompt=pooh",
+                // "system.target_prompt=panda",
+                // "data.lens_edit_prompt=Make the pooh look like a panda",
+
+
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+
+                // --- Loss & Guidance Settings ---
+                "system.guidance.guidance_scale=12.5",
+                "system.mask_thres=0.6",
+                "system.mask_max_ratio=0.6",
+                "system.mask_min_ratio=0.01",
+                "system.mask_outlier_iqr=1.5",
+                "system.loss.lambda_d=0.0",
+                "system.loss.lambda_dds=0.001",
+                "system.dds_t_range=[0.02,0.5]",
+                "system.dds_cfg_scale=7.5",
+                "system.loss.lambda_ism=0.0001",
+                "system.loss.use_sds=false",
+                "system.guidance.use_sds_dge=false",
+                "system.loss.lambda_sds=0.0",
+                "system.warp_refine_color_fit_steps=100",
+                "system.use_warp_refine=false",
+
+                "system.use_gaussian_provenance=true",
+                "system.gp_K=2",
+                "system.gp_M_half=1",
+                "system.gp_vis_eps=0.05",
+                "system.gp_alpha_tau=0.4",
+
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+                // "data.edit_view_selection_strategy=random",
+                // "system.guidance.edit_view_selection_strategy=random",
+                "data.edit_view_selection_strategy=lens",
+                "system.guidance.edit_view_selection_strategy=lens",
+                
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_seg_prompt=pooh",
+                "data.lens_use_ip2p_scoring=true",
+                "data.lens_ip2p_steps=5",
+                "data.lens_ip2p_guidance_scale=12.5",
+                "data.lens_ip2p_image_guidance_scale=1.5",
+                "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+                "data.lens_cone_half_angle_deg=60",
+                "data.lens_lambda_leak=1.5",
+                "data.lens_lambda_ent=15.0",
+
+                // --- Update Steps & Pruning ---
+                "system.camera_update_per_step=1500",
+                "system.mask_update_at_step=600",
+                "system.mask_update_view_num=5",
+                "system.prune_floater_at_step=-1",
+
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens/3d-ovs/covered_desk"
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+
+        {
+            "name": "DGE: camera-selection-lens-multiview",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_camera-selection.yaml",
+                "--train",
+                "--gpu", "1",
+                "trainer.max_steps=1500",
+
+                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                "system.seg_prompt=pooh",
+                "data.mmr_seg_prompt=pooh",
+                "system.target_prompt=robot",
+                "data.lens_edit_prompt=Make the pooh look like a robot",
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
+                "data.lens_seg_prompt=pooh",
+
+                // "system.prompt_processor.prompt=Turn the man into a clown",
+                // "system.seg_prompt=man",
+                // "data.mmr_seg_prompt=man",
+                // "data.lens_seg_prompt=man",
+                // "system.target_prompt=clown",
+                // "data.lens_edit_prompt=Turn the man into a clown",
+                // "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face",
+
+                "system.guidance.guidance_scale=12.5",
+                "system.mask_thres=0.6",
+                "system.mask_max_ratio=0.6",
+                "system.mask_min_ratio=0.01",
+                "system.mask_outlier_iqr=1.5",
+                "system.loss.lambda_d=0.0",
+                "system.loss.lambda_dds=0.0",
+                "system.dds_t_range=[0.02,0.5]",
+                "system.dds_cfg_scale=7.5",
+                "system.loss.lambda_ism=0.0",
+                "system.loss.use_sds=false",
+                "system.guidance.use_sds_dge=false",
+                "system.loss.lambda_sds=0.0",
+
+                "system.use_multiview_edit=true",
+                "system.multiview_num_key_views=4",
+                "system.use_warp_refine=false",
+                "system.use_gaussian_provenance=false",
+
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+                "data.edit_view_selection_strategy=lens",
+                // "data.edit_view_selection_strategy=random",
+                // "system.guidance.edit_view_selection_strategy=random",
+                
+                "system.guidance.edit_view_selection_strategy=lens",
+                "data.lens_use_ip2p_scoring=true",
+                "data.lens_ip2p_steps=5",
+                "data.lens_ip2p_guidance_scale=12.5",
+                "data.lens_ip2p_image_guidance_scale=1.5",
+                "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+                // "data.lens_distance_multipliers=0.5,1.0,1.5,2.0,2.5,3.0",
+                "data.lens_cone_half_angle_deg=60",
+                "data.lens_lambda_leak=1.5",
+                "data.lens_lambda_ent=15.0",
+
+                "system.camera_update_per_step=1500",
+                "system.mask_update_at_step=600",
+                "system.mask_update_view_num=5",
+                "system.prune_floater_at_step=-1",
+
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+
+        {
+            "name": "DGE: camera-selection",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_camera-selection.yaml",
+                "--train", 
+                "--gpu", "2",
+                "trainer.max_steps=1500",
+
+                // "system.prompt_processor.prompt=Turn the man into a clown",
+                "system.prompt_processor.prompt=Make the man wear black sunglasses",
+                "system.seg_prompt=head",
+                "data.mmr_seg_prompt=head",
+                "system.target_prompt=A man wearing black sunglasses",
+
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.mask_thres=0.6",
+                "data.max_view_num=25",
+                "system.camera_update_per_step=1500",
+                "system.loss.lambda_d=10.0",
+                "data.max_edit_view_num=20",
+                "system.mask_update_at_step=400",
+
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d10.0/mmr",
+                "data.edit_view_selection_strategy=mmr",
+                "system.guidance.edit_view_selection_strategy=mmr",
+
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: reduce-time",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_main.yaml",
+                "--train", 
+                "--gpu", "2",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=a man",
+                "system.mask_thres=0.6",
+                "data.max_view_num=25",
+                "system.camera_update_per_step=1500",
+                "system.target_prompt=A clown",
+                "system.loss.lambda_d=10.0",
+                "data.max_edit_view_num=20",
+                "data.edit_view_selection_strategy=manual-20",
+                "system.guidance.edit_view_selection_strategy=manual-20",
+                "system.mask_update_at_step=400",
+                "name=reduce-time/w-MaskUpdate/iter1/lambda_d10.0/manual-20"
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: main",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_main.yaml",
+                "--train", 
+                "--gpu", "2",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=a man",
+                "system.mask_thres=0.6",
+                "data.max_view_num=25",
+                "system.camera_update_per_step=500",
+                "name=main/iter1"
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: Man2Clown Training",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_clip-loss.yaml",
+                "--train", "--gpu", "0",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=man",
+                "system.target_prompt=clown",
+                "system.mask_thres=0.6",
+                "system.loss.lambda_d=100.0",
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+                "system.camera_update_per_step=1500",
+                "system.mask_update_at_step=-1",
+                "name=clip-loss/wo-MaskUpdate/iter1/lambda_d100.0"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "2"
+            },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        }
+    ]
+}

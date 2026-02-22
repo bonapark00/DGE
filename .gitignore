@@ -6,7 +6,7 @@ __pycache__/
 
 # /script
 /configs
-/.vscode
+#/.vscode
 /mds
 /output
 /wandb
