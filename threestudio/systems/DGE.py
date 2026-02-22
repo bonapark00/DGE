@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 import math
 import random
 from re import T
@@ -113,6 +114,10 @@ class DGE(BaseLift3DSystem):
         gp_M_half: int = 1       # half-window size → M=(2*M_half+1)^2 neighbours
         gp_vis_eps: float = 0.05 # depth tolerance for visibility test
         gp_alpha_tau: float = 0.4  # scale for alpha gating (top-1 weight / tau)
+
+        # Multiview edit (key-view cross-attn + inverse-render + consistent map for target views)
+        use_multiview_edit: bool = False  # If True, use edit_multiview instead of edit_all_view
+        multiview_num_key_views: Optional[int] = None  # Key views count (default: min(4, n_views//4))
 
         # Warp-and-Refine (propagate_and_refine_views) settings
         use_warp_refine: bool = False  # If True, use warp-and-refine instead of DGE guidance
@@ -1250,6 +1255,111 @@ class DGE(BaseLift3DSystem):
             )
         print("edited images saved")
 
+    def edit_multiview(self, original_render_name, cache_name, update_camera=False, global_step=0, num_key_views=None):
+        """
+        Multiview edit: key views edited with cross-view (pivotal) attention; cross-attention
+        from key views is inverse-rendered to 3D and re-rendered to consistent 2D maps;
+        target views use these consistent maps in UNet upsampling cross-attention.
+        """
+        if getattr(self, "pipe", None) is None:
+            self.parser = ArgumentParser(description="Training script parameters")
+            self.pipe = PipelineParams(self.parser)
+        if update_camera:
+            with self._latency_logger.timeit("edit_multiview.update_editing_cameras"):
+                self.trainer.datamodule.train_dataset.update_editing_cameras(random_seed=global_step + 1)
+                self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+                sorted_train_view_list = sorted(self.edit_view_index)
+                selected_views = torch.linspace(
+                    0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
+                )
+                self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
+
+        print(f"{self.true_global_step}th step, Camera view index: {self.edit_view_index}")
+
+        self.edit_frames = {}
+        self.edit_frames_order = []
+        cache_dir = os.path.join(self.cache_dir, cache_name)
+        original_render_cache_dir = os.path.join(self.cache_dir, original_render_name)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cameras = []
+        for id in self.edit_view_index:
+            cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
+        sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+        view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
+        cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
+
+        camera_batch_size = getattr(self.cfg.guidance, "camera_batch_size", 5)
+        n_views = len(view_sorted)
+        if num_key_views is None:
+            num_key_views = max(1, min(4, n_views // 4))
+        num_key_views = min(num_key_views, n_views)
+        key_indices = torch.linspace(0, n_views - 1, num_key_views, dtype=torch.long).tolist()
+        key_indices = [int(i) for i in key_indices]
+
+        images = []
+        original_frames = []
+        t_max_step = self.cfg.added_noise_schedule
+        self.guidance.max_step = t_max_step[min(len(t_max_step) - 1, self.true_global_step // self.cfg.camera_update_per_step)]
+        with torch.no_grad():
+            with self._latency_logger.timeit("edit_multiview.render_and_load_originals"):
+                for id in view_sorted:
+                    cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
+                    original_image_path = os.path.join(original_render_cache_dir, "{:0>4d}.png".format(id))
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index": id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width": self.trainer.datamodule.train_dataset.width,
+                    }
+                    out_pkg = self(cur_batch)
+                    out = out_pkg["comp_rgb"]
+                    if self.cfg.use_masked_image:
+                        out = out * out_pkg["masks"].unsqueeze(-1)
+                    images.append(out)
+                    assert os.path.exists(original_image_path)
+                    cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
+                    self.origin_frames[id] = torch.tensor(cached_image / 255, device="cuda", dtype=torch.float32)[None]
+                    original_frames.append(self.origin_frames[id])
+            with self._latency_logger.timeit("edit_multiview.concat_batch"):
+                images = torch.cat(images, dim=0)
+                original_frames = torch.cat(original_frames, dim=0)
+
+            with self._latency_logger.timeit("edit_multiview.guidance_batch"):
+                edited_images = self.guidance(
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
+                    cams=cams_sorted,
+                    latency_logger=self._latency_logger,
+                    use_multiview=True,
+                    gaussian=self.gaussian,
+                    pipe=self.pipe,
+                    key_indices=key_indices,
+                    prompt_text=getattr(self.cfg, "target_prompt", "") or "",
+                )
+
+            with self._latency_logger.timeit("edit_multiview.assign_outputs"):
+                self.edit_frames_order = view_sorted.copy()
+                for view_index_tmp in range(len(self.edit_view_index)):
+                    self.edit_frames[view_sorted[view_index_tmp]] = edited_images["edit_images"][view_index_tmp].unsqueeze(0).detach().clone()
+
+        with self._latency_logger.timeit("edit_multiview.build_save_list"):
+            save_list = []
+            if len(self.edit_frames_order) > 0:
+                for index in self.edit_frames_order:
+                    if index in self.edit_frames:
+                        img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+                        save_list.append({"type": "rgb", "img": img_with_index, "kwargs": {"data_format": "HWC"}})
+            else:
+                for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
+                    img_with_index = self._add_index_to_image(image[0], index)
+                    save_list.append({"type": "rgb", "img": img_with_index, "kwargs": {"data_format": "HWC"}})
+        if len(save_list) > 0:
+            with self._latency_logger.timeit("edit_multiview.save_image_grid"):
+                self.save_image_grid("edited_images_multiview.png", save_list, name="edited_images_multiview", step=self.true_global_step)
+        print("multiview edited images saved to:", self.get_save_path("edited_images_multiview.png"))
 
     @torch.no_grad()
     def _render_single(self, cam) -> torch.Tensor:
@@ -1823,6 +1933,309 @@ class DGE(BaseLift3DSystem):
         print("[gp] edited images saved to:", self.get_save_path("edited_images_gp.png"))
         a = 1
 
+    # ---------------------------------------------------------------------- #
+    # Version C: Multi-View Diffusion Attention Warping (AttentionWarpManager)#
+    # ---------------------------------------------------------------------- #
+
+    def edit_all_view_attn_warp(
+        self,
+        original_render_name: str,
+        cache_name: str,
+        update_camera: bool = False,
+        global_step: int = 0,
+        key_view_num: int = 4,
+        add_noise_t: int = 500,
+        inject_until_t: float = 0.5,
+        occlusion_threshold: float = 0.05,
+    ):
+        """
+        Multi-view attention warping alternative to edit_all_view.
+
+        Unlike the epipolar / GP approaches that operate inside the DGEBlock
+        on every timestep, this method:
+
+          1. Pre-computes Self-Attention K/V features from N key views using a
+             single UNet forward pass per key view  (AttentionWarpManager.
+             extract_and_store_features).
+          2. For each target view, back-projects the 3-D geometry (via 2DGS
+             depth) and blends the key-view K/V features weighted by:
+               • Visibility   (occlusion check via depth comparison)
+               • Angular sim  (cosine similarity between viewing directions)
+               • Confidence   (normal-dot-viewdir if normals are available)
+          3. Injects the blended K_merged / V_merged into every UNet
+             self-attention layer during denoising via a custom AttnProcessor
+             with a timestep-based linear decay schedule.
+
+        Parameters
+        ----------
+        original_render_name : subdirectory name under self.cache_dir that
+            holds the pre-rendered original (unedited) PNG frames.
+        cache_name           : subdirectory name for saving edited frames.
+        update_camera        : whether to re-sample the editing camera set.
+        global_step          : current training step (used for camera update
+            random seed and noise schedule).
+        key_view_num         : how many key views to use for feature extraction
+            (uniformly sampled from the sorted camera set).
+        add_noise_t          : forward-process timestep used when running the
+            UNet forward pass to extract K/V features.
+        inject_until_t       : fraction of denoising steps over which injection
+            weight linearly decays from 1→0.
+        occlusion_threshold  : relative depth tolerance for the visibility
+            check (see AttentionWarpManager).
+        """
+        from threestudio.utils.attention_warp import AttentionWarpManager
+        from gaussiansplatting.gaussian_renderer import render as gs_render
+
+        # ------------------------------------------------------------------ #
+        # Camera update (identical to edit_all_view)                          #
+        # ------------------------------------------------------------------ #
+        if update_camera:
+            with self._latency_logger.timeit("edit_aw.update_editing_cameras"):
+                self.trainer.datamodule.train_dataset.update_editing_cameras(
+                    random_seed=global_step + 1
+                )
+                self.edit_view_index = (
+                    self.trainer.datamodule.train_dataset.edit_view_index
+                )
+                sorted_train_view_list = sorted(self.edit_view_index)
+                selected_views = torch.linspace(
+                    0,
+                    len(sorted_train_view_list) - 1,
+                    self.trainer.datamodule.val_dataset.n_views,
+                    dtype=torch.int,
+                )
+                self.trainer.datamodule.val_dataset.selected_views = [
+                    sorted_train_view_list[idx] for idx in selected_views
+                ]
+
+        print(
+            f"{self.true_global_step}th step [attn-warp], "
+            f"Camera view index: {self.edit_view_index}"
+        )
+
+        self.edit_frames = {}
+        self.edit_frames_order = []
+        cache_dir             = os.path.join(self.cache_dir, cache_name)
+        original_render_cache = os.path.join(self.cache_dir, original_render_name)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # ------------------------------------------------------------------ #
+        # Collect & sort cameras                                              #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_aw.collect_and_sort"):
+            cameras = [
+                self.trainer.datamodule.train_dataset.scene.cameras[i]
+                for i in self.edit_view_index
+            ]
+            sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+            view_sorted  = [self.edit_view_index[i] for i in sorted_cam_idx]
+            cams_sorted  = [cameras[i]              for i in sorted_cam_idx]
+
+        n_views = len(cams_sorted)
+
+        # ------------------------------------------------------------------ #
+        # Noise schedule (same as edit_all_view)                              #
+        # ------------------------------------------------------------------ #
+        t_max_step = self.cfg.added_noise_schedule
+        self.guidance.max_step = t_max_step[
+            min(len(t_max_step) - 1,
+                self.true_global_step // self.cfg.camera_update_per_step)
+        ]
+
+        # ------------------------------------------------------------------ #
+        # Step 1: Render all views + collect depth maps                       #
+        # ------------------------------------------------------------------ #
+        rendered_images: list = []   # list of (1, H, W, C) tensors  [0,1]
+        depth_maps:      list = []   # list of (H_img, W_img) tensors
+        original_frames: list = []
+
+        with torch.no_grad():
+            with self._latency_logger.timeit("edit_aw.render_all"):
+                for vid in view_sorted:
+                    cam = self.trainer.datamodule.train_dataset.scene.cameras[vid]
+                    cur_batch = {
+                        "index":  vid,
+                        "camera": [cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width":  self.trainer.datamodule.train_dataset.width,
+                    }
+                    out_pkg = self(cur_batch)
+                    rgb = out_pkg["comp_rgb"]  # (1, H, W, C)
+                    if self.cfg.use_masked_image:
+                        rgb = rgb * out_pkg["masks"].unsqueeze(-1)
+                    rendered_images.append(rgb)
+
+                    # Render depth from 2DGS
+                    render_pkg = gs_render(
+                        cam, self.gaussian, self.pipe, self.background_tensor
+                    )
+                    # "depth" key: (1, H, W) or (H, W) depending on version
+                    depth_raw = render_pkg.get("depth", render_pkg.get("surf_depth", None))
+                    if depth_raw is not None:
+                        depth_hw = depth_raw.squeeze()  # (H, W)
+                    else:
+                        # Fallback: uniform depth (disables geometry-aware blending)
+                        H_img = int(cam.image_height)
+                        W_img = int(cam.image_width)
+                        depth_hw = torch.ones(H_img, W_img, device="cuda")
+                    depth_maps.append(depth_hw)
+
+                    # Load original frame
+                    orig_path = os.path.join(
+                        original_render_cache, "{:0>4d}.png".format(vid)
+                    )
+                    assert os.path.exists(orig_path), \
+                        f"Missing original render: {orig_path}"
+                    cached_img = cv2.cvtColor(
+                        cv2.imread(orig_path), cv2.COLOR_BGR2RGB
+                    )
+                    self.origin_frames[vid] = torch.tensor(
+                        cached_img / 255, device="cuda", dtype=torch.float32
+                    )[None]
+                    original_frames.append(self.origin_frames[vid])
+
+        # ------------------------------------------------------------------ #
+        # Step 2: Select key views (uniformly sampled from sorted set)        #
+        # ------------------------------------------------------------------ #
+        key_view_num = min(key_view_num, n_views)
+        key_indices  = torch.linspace(0, n_views - 1, key_view_num,
+                                      dtype=torch.long).tolist()
+        key_indices  = [int(i) for i in key_indices]
+
+        key_images_for_extract = [
+            rendered_images[i].permute(0, 3, 1, 2)  # (1, C, H, W)
+            for i in key_indices
+        ]
+        key_cams_for_extract   = [cams_sorted[i] for i in key_indices]
+        key_depths_for_extract = [depth_maps[i]  for i in key_indices]
+
+        print(
+            f"[attn-warp] Using {key_view_num} key views at sorted indices "
+            f"{key_indices} out of {n_views} total views."
+        )
+
+        # ------------------------------------------------------------------ #
+        # Step 3: Build AttentionWarpManager & extract features               #
+        # ------------------------------------------------------------------ #
+        with self._latency_logger.timeit("edit_aw.build_manager"):
+            diffusion_steps = self.guidance.cfg.diffusion_steps
+            aw_manager = AttentionWarpManager(
+                unet                   = self.guidance.unet,
+                vae                    = self.guidance.vae,
+                scheduler              = self.guidance.scheduler,
+                weights_dtype          = self.guidance.weights_dtype,
+                total_denoising_steps  = diffusion_steps,
+                inject_until_t         = inject_until_t,
+                occlusion_threshold    = occlusion_threshold,
+            )
+
+        with self._latency_logger.timeit("edit_aw.extract_features"):
+            # Get text embeddings from the prompt processor
+            prompt_utils = self.prompt_processor()
+            # text_embeddings shape from DGE: (3*B, 77, 768) – use the first slice
+            text_emb_all = prompt_utils.get_text_embeddings(
+                elevation_deg=torch.zeros(1),
+                azimuth_deg=torch.zeros(1),
+                camera_distances=torch.ones(1),
+                use_local_text_embeddings=False,
+            )  # (3, 77, 768)
+            # Use positive text embedding for feature extraction
+            text_emb_pos = text_emb_all[0:1]  # (1, 77, 768)
+
+            aw_manager.extract_and_store_features(
+                key_images       = key_images_for_extract,
+                key_cams         = key_cams_for_extract,
+                key_depths       = key_depths_for_extract,
+                key_normals      = None,  # normals not used by default
+                text_embeddings  = text_emb_pos,
+                add_noise_t      = add_noise_t,
+            )
+
+        # Register custom AttnProcessors on the UNet
+        with self._latency_logger.timeit("edit_aw.apply_to_unet"):
+            aw_manager.apply_to_unet()
+
+        # ------------------------------------------------------------------ #
+        # Step 4: Denoise each target view individually                       #
+        # ------------------------------------------------------------------ #
+        images_batched  = torch.cat(rendered_images,  dim=0)  # (N, H, W, C)
+        orig_batched    = torch.cat(original_frames,  dim=0)  # (N, H, W, C)
+
+        edited_results = {}  # vid → (1, H, W, C) tensor
+
+        with torch.no_grad():
+            for view_i, (vid, tgt_cam, tgt_depth) in enumerate(
+                zip(view_sorted, cams_sorted, depth_maps)
+            ):
+                with self._latency_logger.timeit(f"edit_aw.denoise_view_{view_i}"):
+                    # Set the target view for geometry-aware K/V blending
+                    aw_manager.set_target_view(tgt_cam, tgt_depth)
+                    # Reset per-step decay counters
+                    aw_manager.reset_step_counters()
+
+                    # Single-view tensors for guidance
+                    single_img = images_batched[view_i:view_i+1]  # (1, H, W, C)
+                    single_orig = orig_batched[view_i:view_i+1]   # (1, H, W, C)
+
+                    # Run DGE guidance for this single view
+                    # We use use_normal_unet=True (no epipolar) since AttnProcessors
+                    # now handle the cross-view injection.
+                    from threestudio.utils.dge_utils import (
+                        register_normal_attn_flag,
+                        register_pivotal,
+                    )
+                    register_normal_attn_flag(self.guidance.unet, True)
+                    register_pivotal(self.guidance.unet, False)
+
+                    edited_out = self.guidance(
+                        single_img,
+                        single_orig,
+                        self.prompt_processor(),
+                        cams=[tgt_cam],
+                        latency_logger=self._latency_logger,
+                    )
+                    edited_results[vid] = (
+                        edited_out["edit_images"][0].unsqueeze(0).detach().clone()
+                    )
+
+        # Restore original attention processors
+        with self._latency_logger.timeit("edit_aw.remove_from_unet"):
+            aw_manager.remove_from_unet()
+        # Restore normal-attn flag
+        register_normal_attn_flag(self.guidance.unet, False)
+
+        # ------------------------------------------------------------------ #
+        # Step 5: Store results & save grid                                   #
+        # ------------------------------------------------------------------ #
+        self.edit_frames_order = view_sorted.copy()
+        for vid in view_sorted:
+            self.edit_frames[vid] = edited_results[vid]
+
+        save_list = []
+        for vid in self.edit_frames_order:
+            if vid in self.edit_frames:
+                img_with_idx = self._add_index_to_image(
+                    self.edit_frames[vid][0], vid
+                )
+                save_list.append(
+                    {
+                        "type": "rgb",
+                        "img": img_with_idx,
+                        "kwargs": {"data_format": "HWC"},
+                    }
+                )
+        if save_list:
+            self.save_image_grid(
+                "edited_images_aw.png",
+                save_list,
+                name="edited_images_aw",
+                step=self.true_global_step,
+            )
+        print(
+            "[attn-warp] edited images saved to:",
+            self.get_save_path("edited_images_aw.png"),
+        )
+
     def sort_the_cameras_idx(self, cams):
         # 각도 기반 원형 정렬 (한 방향으로만, 방향 전환 없이) - 벡터화 최적화
         # 전방 벡터와 카메라 중심 추출 (벡터화)
@@ -1976,6 +2389,15 @@ class DGE(BaseLift3DSystem):
                     gp_M_half=self.cfg.gp_M_half,
                     gp_vis_eps=self.cfg.gp_vis_eps,
                     gp_alpha_tau=self.cfg.gp_alpha_tau,
+                )
+        elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_multiview_edit and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
+            with self._latency_logger.timeit("edit_multiview"):
+                self.edit_multiview(
+                    original_render_name='origin_render',
+                    cache_name="edited_views_multiview",
+                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                    global_step=self.true_global_step,
+                    num_key_views=self.cfg.multiview_num_key_views,
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("edit_all_view"):

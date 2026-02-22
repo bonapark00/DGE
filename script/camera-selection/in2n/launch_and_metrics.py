@@ -20,7 +20,7 @@ from typing import Optional, List, Tuple
 
 # Training config
 CONFIG = "configs/dge_camera-selection.yaml"
-GPU = "3"
+GPU = "2"
 
 # Batch settings
 NUM_RUNS = 1  # Number of times to run launch + metrics
@@ -35,15 +35,16 @@ DATA_NAME = "face"
 # PROMPT = "Make the man wear black sunglasses"
 # PROMPT = "Make his mouth smile"
 # PROMPT = "Give him a mustache"
-PROMPT = "Change the fleece jacket into a leather jacket"
+# PROMPT = "Change the fleece jacket into a leather jacket"
 # PROMPT = "Turn him into a Mondigliani painting"
 # PROMPT = "Turn the man into a stylized 3D Pixar-like character."
+PROMPT = "Turn the man into a clown."
 
 
 
 # SEG_PROMPT = "face"
-SEG_PROMPT = "fleece jacket"
-# SEG_PROMPT = "man"
+# SEG_PROMPT = "fleece jacket"
+SEG_PROMPT = "man"
 
 MMR_SEG_PROMPT = SEG_PROMPT  # for text-based segmentation
 
@@ -53,11 +54,12 @@ MMR_SEG_PROMPT = SEG_PROMPT  # for text-based segmentation
 TARGET_PROMPT = "Leather jacket"
 # TARGET_PROMPT = "man with a leather jacket"
 # TARGET_PROMPT = "man styled as Mondigliani painting"
+TARGET_PROMPT = "clown"
 
 DATA_SOURCE = f"/data/users/jaeyeonpark/dataset/{DATA_TYPE}/{DATA_NAME}/"
 GS_SOURCE = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/point_cloud/iteration_30000/point_cloud.ply"
 
-LAMBDA_D = "5.0"
+LAMBDA_D = "0.0"
 
 LAMBDA_DDS = "0.0"  # DDS-lite weight (when edit_frames empty, use_sds=false)
 DDS_T_RANGE = "0.02,0.5"  # t range for DDS (narrower for stability)
@@ -69,7 +71,7 @@ LAMBDA_ISM = "0.0"  # Lite-ISM weight; >0 for stronger edit signal (x0-predictio
 USE_SDS = False  # SDS loss for direct gradient-based editing
 USE_SDS_DGE = False  # True: DGE SDS (epipolar, pivotal); False: vanilla SDS
 LAMBDA_SDS = "0.0"  # SDS loss weight
-EDIT_VIEW_SELECTION_STRATEGY = "lens"  # row, quadrant, manual-20, manual-15, random, depth, lens
+EDIT_VIEW_SELECTION_STRATEGY = "random"  # row, quadrant, manual-20, manual-15, random, depth, lens
 
 LENS_USE_IP2P_SCORING = "true"  # match generate_by_lens: use IP2P for SAGE probing
 LENS_IP2P_STEPS = "5"  # IP2P num_inference_steps for SAGE probing (기존은 20임)
@@ -95,8 +97,12 @@ MASK_OUTLIER_IQR = "1.5"  # 작으면 허용 구간이 좁아짐 → 더 많은 
 MASK_UPDATE_VIEW_NUM = "5"  # MAX_VIEW_NUM - MAX_EDIT_VIEW_NUM 보다는 작아야함
 PRUNE_FLOATER_AT_STEP = "600"  # -1: disabled, otherwise prune at this step
 
+# Multiview edit (key-view cross-attn + inverse-render + consistent map for target views)
+USE_MULTIVIEW_EDIT = True  # True: edit_multiview (key views + 3D consistent cross-attn); False: use edit_all_view or warp_refine
+MULTIVIEW_NUM_KEY_VIEWS = ""  # Key view count; empty = auto (min(4, n_views//4)); e.g. "4"
+
 # Warp-and-Refine settings (use_warp_refine=True → vanilla IP2P propagation, no DGE attention)
-USE_WARP_REFINE = True  # True: warp-and-refine branch; False: DGE guidance branch
+USE_WARP_REFINE = False  # True: warp-and-refine branch; False: DGE guidance branch (or multiview if USE_MULTIVIEW_EDIT)
 WARP_REFINE_COLOR_FIT_STEPS = "100"   # SH color-only fitting iterations per anchor view
 WARP_REFINE_IP2P_STRENGTH = "0.85"     # SDEdit strength for target-view refinement (0~1)
 WARP_REFINE_IP2P_STEPS = "20"         # IP2P inference steps for refinement
@@ -118,7 +124,7 @@ STYLE_IMAGE = ""  # set to an image path to use style image instead of text
 # STYLE_TARGET_PROMPT = "A Tolkien Elf"  # leave empty "" to disable
 STYLE_TARGET_PROMPT = "A man with a leather jacket"  # 목표 스타일 (편집 후); leave empty "" to disable
 # STYLE_TARGET_PROMPT = "A man with fashion sunglasses"  # leave empty "" to disable
-# STYLE_TARGET_PROMPT = TARGET_PROMPT  # leave empty "" to disable
+STYLE_TARGET_PROMPT = TARGET_PROMPT  # leave empty "" to disable
 
 # STYLE_SOURCE_PROMPT = "A Man without fashion sunglasses"   # default: "a Photo"
 STYLE_SOURCE_PROMPT = "A man with a fleece jacket"   # 편집 전/원본; default: "a Photo"
@@ -197,6 +203,7 @@ def build_launch_cmd() -> List[str]:
         f"system.mask_update_at_step={MASK_UPDATE_AT_STEP}",
         f"system.mask_update_view_num={MASK_UPDATE_VIEW_NUM}",
         f"system.prune_floater_at_step={PRUNE_FLOATER_AT_STEP}",
+        f"system.use_multiview_edit={str(USE_MULTIVIEW_EDIT).lower()}",
         f"system.use_warp_refine={str(USE_WARP_REFINE).lower()}",
         f"system.warp_refine_color_fit_steps={WARP_REFINE_COLOR_FIT_STEPS}",
         f"system.warp_refine_ip2p_strength={WARP_REFINE_IP2P_STRENGTH}",
@@ -204,6 +211,9 @@ def build_launch_cmd() -> List[str]:
         f"system.warp_refine_image_guidance_scale={WARP_REFINE_IMAGE_GUIDANCE_SCALE}",
         f"system.warp_refine_text_guidance_scale={WARP_REFINE_TEXT_GUIDANCE_SCALE}",
         f"system.warp_refine_color_lr={WARP_REFINE_COLOR_LR}",
+    ] + (
+        [f"system.multiview_num_key_views={MULTIVIEW_NUM_KEY_VIEWS}"] if MULTIVIEW_NUM_KEY_VIEWS else []
+    ) + [
         f"name={NAME}",
         f"system.loggers.wandb.enable={str(WANDB_ENABLE).lower()}",
         f"system.loggers.wandb.project={WANDB_PROJECT}",

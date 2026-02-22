@@ -525,50 +525,58 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                             idx1.append(sim_max[1])
 
                         with latency_logger.timeit('edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.unet_forward.dge_block.epipolar_constraints') if latency_logger else nullcontext():
-                            if len(batch_idxs) == 2:
-                                idx1 = []
-                                idx2 = []
-                                pivot_this_batch = self.pivot_this_batch
+                            if sequence_length in getattr(self, "epipolar_constrains", {}):
+                                if len(batch_idxs) == 2:
+                                    idx1 = []
+                                    idx2 = []
+                                    pivot_this_batch = self.pivot_this_batch
 
-                                ## EPIPOLAR CONSTRAINT가 활용되는 부분
-                                idx1_epipolar, idx2_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda().chunk(2, dim=1)
-                                idx1_epipolar = idx1_epipolar.reshape(n_frames, sequence_length, sequence_length)
+                                    ## EPIPOLAR CONSTRAINT가 활용되는 부분
+                                    idx1_epipolar, idx2_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda().chunk(2, dim=1)
+                                    idx1_epipolar = idx1_epipolar.reshape(n_frames, sequence_length, sequence_length)
 
-                                idx1_epipolar[pivot_this_batch, ...] = False
-                                idx2_epipolar = idx2_epipolar.reshape(n_frames, sequence_length, sequence_length)
+                                    idx1_epipolar[pivot_this_batch, ...] = False
+                                    idx2_epipolar = idx2_epipolar.reshape(n_frames, sequence_length, sequence_length)
 
-                                idx1_epipolar = idx1_epipolar.reshape(n_frames * sequence_length, sequence_length)
-                                idx2_epipolar = idx2_epipolar.reshape(n_frames * sequence_length, sequence_length)
-                                idx2_sum = idx2_epipolar.sum(dim=-1)
-                                idx1_sum = idx1_epipolar.sum(dim=-1)
+                                    idx1_epipolar = idx1_epipolar.reshape(n_frames * sequence_length, sequence_length)
+                                    idx2_epipolar = idx2_epipolar.reshape(n_frames * sequence_length, sequence_length)
+                                    idx2_sum = idx2_epipolar.sum(dim=-1)
+                                    idx1_sum = idx1_epipolar.sum(dim=-1)
 
-                                idx1_epipolar[idx1_sum == sequence_length, :] = False
-                                idx2_epipolar[idx2_sum == sequence_length, :] = False
-                                sim1[idx1_epipolar] = 0
-                                sim2[idx2_epipolar] = 0
+                                    idx1_epipolar[idx1_sum == sequence_length, :] = False
+                                    idx2_epipolar[idx2_sum == sequence_length, :] = False
+                                    sim1[idx1_epipolar] = 0
+                                    sim2[idx2_epipolar] = 0
 
-                                sim1_max = sim1.max(dim=-1)
-                                sim2_max = sim2.max(dim=-1)
-                                idx1.append(sim1_max[1])
-                                idx2.append(sim2_max[1])
+                                    sim1_max = sim1.max(dim=-1)
+                                    sim2_max = sim2.max(dim=-1)
+                                    idx1.append(sim1_max[1])
+                                    idx2.append(sim2_max[1])
 
 
+                                else:
+                                    idx1 = []
+                                    pivot_this_batch = self.pivot_this_batch
+
+                                    # 마스크 불러오기
+                                    idx1_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda()
+
+                                    idx1_epipolar = idx1_epipolar.view(n_frames, -1, sequence_length)
+                                    idx1_epipolar[pivot_this_batch, ...] = False
+
+                                    idx1_epipolar = idx1_epipolar.view(n_frames * sequence_length, sequence_length)
+                                    idx1_sum = idx1_epipolar.sum(dim=-1)
+                                    idx1_epipolar[idx1_sum == sequence_length, :] = False
+                                    sim[idx1_epipolar] = 0 # geometry 적으로 맞지 않는 픽셀의 similarity 값을 0으로 만듦.
+                                    sim_max = sim.max(dim=-1) # 각 픽셀에서 가장 유사한 key-view 픽셀 index 를 찾음.
+                                    idx1.append(sim_max[1]) # 이 index 를 기준으로 나중에 attention 결과를 gather 함.
                             else:
-                                idx1 = []
-                                pivot_this_batch = self.pivot_this_batch
-
-                                # 마스크 불러오기
-                                idx1_epipolar = self.epipolar_constrains[sequence_length].gather(dim=1, index=closest_cam[:, :, None, None].expand(-1, -1, self.epipolar_constrains[sequence_length].shape[2], self.epipolar_constrains[sequence_length].shape[3])).cuda()
-
-                                idx1_epipolar = idx1_epipolar.view(n_frames, -1, sequence_length)
-                                idx1_epipolar[pivot_this_batch, ...] = False
-
-                                idx1_epipolar = idx1_epipolar.view(n_frames * sequence_length, sequence_length)
-                                idx1_sum = idx1_epipolar.sum(dim=-1)
-                                idx1_epipolar[idx1_sum == sequence_length, :] = False
-                                sim[idx1_epipolar] = 0 # geometry 적으로 맞지 않는 픽셀의 similarity 값을 0으로 만듦.
-                                sim_max = sim.max(dim=-1) # 각 픽셀에서 가장 유사한 key-view 픽셀 index 를 찾음.
-                                idx1.append(sim_max[1]) # 이 index 를 기준으로 나중에 attention 결과를 gather 함.
+                                # No epipolar constraints (e.g. multiview target_denoise_loop with epipolar disabled): use similarity max only.
+                                if len(batch_idxs) == 2:
+                                    idx1 = [sim1_max[1]]
+                                    idx2 = [sim2_max[1]]
+                                else:
+                                    idx1 = [sim_max[1]]
 
                         idx1 = torch.stack(idx1 * 3, dim=0) # 3, n_frames * seq_len
                         idx1 = idx1.squeeze(1)
@@ -695,7 +703,7 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
             
             with latency_logger.timeit('edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.unet_forward.dge_block.residual_connection') if latency_logger else nullcontext():
                 hidden_states = hidden_states.reshape(batch_size, sequence_length, dim)  # 3 * n_frames, seq_len, dim
-                hidden_states =  attn_output + hidden_states * 0.2
+                hidden_states =  attn_output + hidden_states
                 hidden_states = hidden_states.to(self.norm2.weight.dtype)
             
             if self.attn2 is not None:

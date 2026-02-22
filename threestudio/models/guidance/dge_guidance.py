@@ -17,6 +17,138 @@ from threestudio.utils.typing import *
 
 
 from threestudio.utils.dge_utils import register_pivotal, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image, register_gp_cache, unregister_gp_cache
+from collections import defaultdict
+from contextlib import nullcontext
+from typing import List, Optional, Dict, Any, Tuple
+
+
+def _get_valid_token_indices(pipe, prompt: str) -> List[int]:
+    """Valid content token indices (vcedit-style): skip BOS, EOS, padding."""
+    tokenizer = pipe.tokenizer
+    tokens = tokenizer(prompt, return_tensors="pt", padding=False)
+    input_ids = tokens["input_ids"][0].tolist()
+    bos_id = getattr(tokenizer, "bos_token_id", 49406)
+    eos_id = getattr(tokenizer, "eos_token_id", 49407)
+    pad_id = getattr(tokenizer, "pad_token_id", None)
+    indices = []
+    for i, tid in enumerate(input_ids):
+        if tid in (bos_id, eos_id, pad_id):
+            continue
+        indices.append(i)
+    return indices if indices else list(range(1, min(len(input_ids) - 1, 10)))
+
+
+class CrossAttentionStoreProcessor:
+    """Stores cross-attention probs at any spatial resolution (H*W) where cross-attn runs, valid tokens only."""
+
+    def __init__(self, valid_token_indices: List[int], target_resolutions: Tuple[int, ...] = (32 * 32, 64 * 64)):
+        self.valid_token_indices = valid_token_indices
+        self.attn_len = len(valid_token_indices)
+        self.target_resolutions = target_resolutions
+        # Allow any resolution: store at every spatial size the UNet actually produces
+        self.maps: Dict[int, List[torch.Tensor]] = defaultdict(list)
+
+    def reset(self):
+        self.maps.clear()
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
+        residual = hidden_states
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+        # For cross-attn storage we need spatial resolution (query length), not text length
+        seq_spatial = hidden_states.shape[1]
+        attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+        query = attn.to_q(hidden_states)
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+        attention_probs = attn.get_attention_scores(query, key, attention_mask)
+        # Store at any spatial resolution (UNet may use 64*64, 32*32, 16*16, 8*8, etc. depending on input)
+        probs = attention_probs.detach().float()
+        valid = [i for i in self.valid_token_indices if i < probs.shape[-1]]
+        if valid:
+            probs_valid = probs[:, :, valid]
+            self.maps[seq_spatial].append(probs_valid)
+        hidden_states = torch.bmm(attention_probs, value)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+        hidden_states = hidden_states / attn.rescale_output_factor
+        return hidden_states
+
+
+class ConsistentCrossAttnProcessor:
+    """Uses precomputed consistent cross-attention map when set on attn module."""
+
+    def __init__(self, backup_processor=None):
+        self.backup_processor = backup_processor
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None, attention_mask=None, temb=None):
+        data = getattr(attn, "_consistent_attn_map_current", None)
+        if data is None:
+            if self.backup_processor is not None:
+                return self.backup_processor(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+            return self._default_forward(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+        residual = hidden_states
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+        batch_size, sequence_length, channel = hidden_states.shape
+        height = width = int(sequence_length ** 0.5) if sequence_length > 0 else 0
+        attn_len = data.get("attn_len")
+        consistent_map = data.get(sequence_length)
+        if attn_len is None or consistent_map is None or consistent_map.shape[0] != batch_size:
+            if self.backup_processor is not None:
+                return self.backup_processor(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+            return self._default_forward(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+        if encoder_hidden_states is not None and attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+        value = attn.head_to_batch_dim(value)
+        value_valid = value[:, :attn_len]
+        consistent_map = consistent_map.to(value.device).to(value.dtype)
+        if consistent_map.dim() == 2:
+            consistent_map = consistent_map.unsqueeze(0).expand(batch_size, -1, -1)
+        hidden_states = torch.bmm(consistent_map, value_valid)
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+        hidden_states = hidden_states / attn.rescale_output_factor
+        return hidden_states
+
+    def _default_forward(self, attn, hidden_states, encoder_hidden_states, attention_mask, temb):
+        if getattr(self, "backup_processor", None) is not None:
+            return self.backup_processor(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+        raise RuntimeError("ConsistentCrossAttnProcessor has no backup and no consistent map set")
+
 
 @threestudio.register("dge-guidance")
 class DGEGuidance(BaseObject):
@@ -143,14 +275,17 @@ class DGEGuidance(BaseObject):
         latents: Float[Tensor, "..."],
         t: Float[Tensor, "..."],
         encoder_hidden_states: Float[Tensor, "..."],
+        cross_attention_kwargs: Optional[dict] = None,
     ) -> Float[Tensor, "..."]:
         input_dtype = latents.dtype
-
-
-        return self.unet( 
+        kwargs = {}
+        if cross_attention_kwargs is not None:
+            kwargs["cross_attention_kwargs"] = cross_attention_kwargs
+        return self.unet(
             latents.to(self.weights_dtype),
             t.to(self.weights_dtype),
             encoder_hidden_states=encoder_hidden_states.to(self.weights_dtype),
+            **kwargs,
         ).sample.to(input_dtype)
 
     @torch.cuda.amp.autocast(enabled=False)
@@ -340,6 +475,264 @@ class DGEGuidance(BaseObject):
                             latents = self.scheduler.step(noise_pred, t, latents).prev_sample
                         
         print("Editing finished.")
+        return latents
+
+    def edit_latents_multiview(
+        self,
+        text_embeddings: Float[Tensor, "BB 77 768"],
+        latents: Float[Tensor, "B 4 DH DW"],
+        image_cond_latents: Float[Tensor, "B 4 DH DW"],
+        t: Int[Tensor, "B"],
+        cams: list,
+        key_indices: List[int],
+        gaussian,
+        pipe,
+        prompt_text: str,
+        latency_logger=None,
+    ) -> Float[Tensor, "B 4 DH DW"]:
+        """
+        Multiview edit: key views with cross-view attention; collect cross-attn from key views,
+        inverse-render to 3D, render to consistent 2D maps; target views use consistent map in upsampling.
+        """
+        with latency_logger.timeit("edit_multiview.guidance_batch.setup") if latency_logger else nullcontext():
+            self.scheduler.config.num_train_timesteps = t.item() if len(t.shape) < 1 else t[0].item()
+            self.scheduler.set_timesteps(self.cfg.diffusion_steps)
+            current_H = image_cond_latents.shape[2]
+            current_W = image_cond_latents.shape[3]
+            camera_batch_size = self.cfg.camera_batch_size
+            device = latents.device
+            n_views = latents.shape[0]
+            target_resolutions = (32 * 32, 64 * 64)
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.valid_token_indices") if latency_logger else nullcontext():
+            valid_indices = _get_valid_token_indices(self.pipe, prompt_text)
+        attn_len = len(valid_indices)
+        if attn_len == 0:
+            return self.edit_latents(text_embeddings, latents, image_cond_latents, t, cams, latency_logger=latency_logger)
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.install_store_processor") if latency_logger else nullcontext():
+            storing_processor = CrossAttentionStoreProcessor(valid_indices, target_resolutions)
+            original_attn2_processors = {}
+            for name, mod in self.unet.named_modules():
+                if name.endswith(".attn2") and hasattr(mod, "processor"):
+                    original_attn2_processors[name] = mod.processor
+                    mod.processor = storing_processor
+
+        positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
+        split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
+        key_cams = [cams[i] for i in key_indices]
+        n_key = len(key_indices)
+        print(f"[edit_latents_multiview] key view indices: {key_indices}")
+
+        with torch.no_grad():
+            with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop") if latency_logger else nullcontext():
+                with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop.init") if latency_logger else nullcontext():
+                    noise = torch.randn_like(latents)
+                    latents_key = self.scheduler.add_noise(latents[key_indices], noise[key_indices], t[key_indices])
+                for t_step in self.scheduler.timesteps:
+                    with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop.per_step_setup") if latency_logger else nullcontext():
+                        if t_step < 100:
+                            self.use_normal_unet()
+                        else:
+                            register_normal_attn_flag(self.unet, False)
+                        register_pivotal(self.unet, True)
+                        pivot_text = torch.cat([
+                            positive_text_embedding[key_indices], negative_text_embedding[key_indices], negative_text_embedding[key_indices]
+                        ], dim=0)
+                        pivot_image_cond = torch.cat([
+                            split_image_cond_latents[key_indices], split_image_cond_latents[key_indices], zero_image_cond_latents[key_indices]
+                        ], dim=0)
+                        latent_model_input = torch.cat([latents_key] * 3)
+                        latent_model_input = torch.cat([latent_model_input, pivot_image_cond], dim=1)
+                        t_exp = t_step.unsqueeze(0).expand(n_key * 3).to(device)
+                    with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop.forward_unet") if latency_logger else nullcontext():
+                        noise_pred = self.forward_unet(latent_model_input, t_exp, encoder_hidden_states=pivot_text)
+                    with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop.guidance_and_step") if latency_logger else nullcontext():
+                        noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(3)
+                        noise_pred_key = (
+                            noise_pred_uncond
+                            + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                            + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+                        )
+                        latents_key = self.scheduler.step(noise_pred_key, t_step, latents_key).prev_sample
+                with latency_logger.timeit("edit_multiview.guidance_batch.key_view_denoise_loop.finalize") if latency_logger else nullcontext():
+                    register_pivotal(self.unet, False)
+                    key_edited = latents_key
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.restore_attn2_processors") if latency_logger else nullcontext():
+            for name, mod in self.unet.named_modules():
+                if name in original_attn2_processors:
+                    mod.processor = original_attn2_processors[name]
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.build_key_cross_attn_by_res") if latency_logger else nullcontext():
+            key_cross_attn_by_res: Dict[int, Float[Tensor, "n_key H*W attn_len"]] = {}
+            for res, list_maps in storing_processor.maps.items():
+                if not list_maps:
+                    continue
+                stacked = torch.stack(list_maps, dim=0)
+                # Stored shape is (batch*heads, Hw, C) per step -> stack gives (L, batch*heads, Hw, C) = 4D
+                if stacked.ndim == 4:
+                    L, batch_heads, Hw, C = stacked.shape
+                    num_heads = batch_heads // (n_key * 3)
+                    stacked = stacked.view(L, n_key * 3, num_heads, Hw, C).mean(dim=(0, 2))
+                else:
+                    T, B, heads, Hw, C = stacked.shape[0], stacked.shape[1], stacked.shape[2], stacked.shape[3], stacked.shape[4]
+                    stacked = stacked.mean(dim=(0, 2))
+                if stacked.shape[0] >= 3 * n_key:
+                    stacked = stacked[n_key:2 * n_key]
+                else:
+                    stacked = stacked.unsqueeze(0).expand(n_key, -1, -1)
+                key_cross_attn_by_res[res] = stacked.float().to(device)
+            collected_resolutions = list(key_cross_attn_by_res.keys())
+
+        if not key_cross_attn_by_res:
+            print("No key cross-attention found, falling back to single-view editing")
+            return self.edit_latents(text_embeddings, latents, image_cond_latents, t, cams, latency_logger=latency_logger)
+
+        def _camera_at_res(cam, h, w):
+            if hasattr(cam, "HW_scale"):
+                return cam.HW_scale(h, w)
+            from gaussiansplatting.scene.cameras import MiniCam
+            return MiniCam(w, h, cam.FoVy, cam.FoVx, getattr(cam, "znear", 0.01), getattr(cam, "zfar", 100.0),
+                          cam.world_view_transform, cam.full_proj_transform)
+
+        from gaussiansplatting.gaussian_renderer import render as gs_render
+        N = gaussian.get_xyz.shape[0]
+        bg = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32, device=device)
+        with latency_logger.timeit("edit_multiview.guidance_batch.inverse_render_2d_to_3d") if latency_logger else nullcontext():
+            M_3d_by_res: Dict[int, Float[Tensor, "N attn_len"]] = {}
+            for res in key_cross_attn_by_res:
+                side = int(res ** 0.5)
+                H, W = side, side
+                weights = torch.zeros(N, attn_len, device=device, dtype=torch.float32)
+                weights_cnt = torch.zeros(N, device=device, dtype=torch.int32)
+                for v_idx, cam in enumerate(key_cams):
+                    cam_low = _camera_at_res(cam, H, W)
+                    M_v = key_cross_attn_by_res[res][v_idx]
+                    if M_v.dim() == 2:
+                        M_v = M_v.view(H, W, attn_len)
+                    for c in range(attn_len):
+                        img_w = M_v[:, :, c].unsqueeze(0)
+                        gaussian.apply_weights(cam_low, weights[:, c:c + 1], weights_cnt, img_w)
+                M_3d_by_res[res] = weights / (weights_cnt.unsqueeze(1).float().clamp(min=1) + 1e-7)
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.render_consistent_maps") if latency_logger else nullcontext():
+            M_con_by_view_res: Dict[int, Dict[int, Float[Tensor, "H W attn_len"]]] = {}
+            all_cams_list = cams
+            for view_idx in range(n_views):
+                M_con_by_view_res[view_idx] = {}
+                cam = all_cams_list[view_idx]
+                for res in M_3d_by_res:
+                    side = int(res ** 0.5)
+                    M_3d = M_3d_by_res[res]
+                    cam_low = _camera_at_res(cam, side, side)
+                    maps_c = []
+                    for c in range(attn_len):
+                        color_c = M_3d[:, c].unsqueeze(-1).expand(-1, 3)
+                        pkg = gs_render(cam_low, gaussian, pipe, bg, override_color=color_c)
+                        maps_c.append(pkg["render"][0])
+                    M_con_by_view_res[view_idx][res] = torch.stack(maps_c, dim=-1)
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.install_consistent_processor") if latency_logger else nullcontext():
+            consistent_processor = ConsistentCrossAttnProcessor(backup_processor=None)
+            for name, mod in self.unet.named_modules():
+                if name.endswith(".attn2") and hasattr(mod, "processor"):
+                    consistent_processor.backup_processor = mod.processor
+                    break
+            for name, mod in self.unet.named_modules():
+                if name.endswith(".attn2") and hasattr(mod, "processor"):
+                    mod.processor = ConsistentCrossAttnProcessor(backup_processor=original_attn2_processors.get(name, mod.processor))
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.noise_and_init_latents") if latency_logger else nullcontext():
+            noise = torch.randn_like(latents)
+            latents = self.scheduler.add_noise(latents, noise, t)
+            latents[key_indices] = key_edited
+            positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
+            split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop") if latency_logger else nullcontext():
+            for t_step in self.scheduler.timesteps:
+                with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop.per_timestep_setup") if latency_logger else nullcontext():
+                    if t_step < 100:
+                        self.use_normal_unet()
+                    else:
+                        register_normal_attn_flag(self.unet, False)
+                    num_batches = (n_views + camera_batch_size - 1) // camera_batch_size
+                    pivotal_idx = torch.randint(camera_batch_size, (num_batches,), device=device) + torch.arange(0, n_views, camera_batch_size, device=device)[:num_batches]
+                    if pivotal_idx.shape[0] == 0:
+                        pivotal_idx = torch.tensor(key_indices[:1], device=device) if key_indices else torch.arange(min(camera_batch_size, n_views), device=device)
+                    register_pivotal(self.unet, True)
+                    key_cams_batch = [cams[i] for i in pivotal_idx.cpu().tolist()]
+                    latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
+                    pivot_text_embeddings = torch.cat([
+                        positive_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx]
+                    ], dim=0)
+                    pivot_image_cond_latents = torch.cat([
+                        split_image_cond_latents[pivotal_idx], split_image_cond_latents[pivotal_idx], zero_image_cond_latents[pivotal_idx]
+                    ], dim=0)
+                    latent_model_input = torch.cat([latent_model_input, pivot_image_cond_latents], dim=1)
+                # with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop.pivotal_forward") if latency_logger else nullcontext():
+                #     self.forward_unet(latent_model_input, t_step.unsqueeze(0).expand(len(pivotal_idx) * 3).to(device), encoder_hidden_states=pivot_text_embeddings)
+                register_pivotal(self.unet, False)
+                noise_pred_text = []
+                noise_pred_image = []
+                noise_pred_uncond = []
+                for b in range(0, n_views, camera_batch_size):
+                    batch_slice = slice(b, min(b + camera_batch_size, n_views))
+                    batch_indices = list(range(b, min(b + camera_batch_size, n_views)))
+                    is_target_batch = any(i not in key_indices for i in batch_indices)
+                    with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop.batch_prep") if latency_logger else nullcontext():
+                        data = {"attn_len": attn_len}
+                        if is_target_batch:
+                            for res in collected_resolutions:
+                                maps_batch = []
+                                for i in batch_indices:
+                                    if i < len(M_con_by_view_res) and res in M_con_by_view_res.get(i, {}):
+                                        m = M_con_by_view_res[i][res]
+                                        maps_batch.append(m.reshape(-1, attn_len))
+                                if maps_batch:
+                                    data[res] = torch.stack(maps_batch, dim=0).to(device)
+                        for name, mod in self.unet.named_modules():
+                            if name.endswith(".attn2"):
+                                setattr(mod, "_consistent_attn_map_current", data if (is_target_batch and data.get("attn_len") and any(k in data for k in collected_resolutions)) else None)
+                        register_batch_idx(self.unet, b // camera_batch_size)
+                        register_cams(self.unet, cams[batch_slice], pivotal_idx[b // camera_batch_size] % camera_batch_size if b < len(pivotal_idx) else 0, key_cams_batch)
+                        # Epipolar constraints disabled in multiview target_denoise_loop (use consistent attention only).
+                        register_epipolar_constrains(self.unet, {})
+                        batch_model_input = torch.cat([latents[batch_slice]] * 3)
+                        batch_text_embeddings = torch.cat([
+                            positive_text_embedding[batch_slice], negative_text_embedding[batch_slice], negative_text_embedding[batch_slice]
+                        ], dim=0)
+                        batch_image_cond_latents = torch.cat([
+                            split_image_cond_latents[batch_slice], split_image_cond_latents[batch_slice], zero_image_cond_latents[batch_slice]
+                        ], dim=0)
+                        batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
+                    with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop.batch_forward") if latency_logger else nullcontext():
+                        batch_noise_pred = self.forward_unet(batch_model_input, t_step.unsqueeze(0).expand(len(batch_indices) * 3).to(device), encoder_hidden_states=batch_text_embeddings)
+                    batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
+                    noise_pred_text.append(batch_noise_pred_text)
+                    noise_pred_image.append(batch_noise_pred_image)
+                    noise_pred_uncond.append(batch_noise_pred_uncond)
+                with latency_logger.timeit("edit_multiview.guidance_batch.target_denoise_loop.merge_and_step") if latency_logger else nullcontext():
+                    for name, mod in self.unet.named_modules():
+                        if name.endswith(".attn2"):
+                            setattr(mod, "_consistent_attn_map_current", None)
+                    noise_pred_text = torch.cat(noise_pred_text, dim=0)
+                    noise_pred_image = torch.cat(noise_pred_image, dim=0)
+                    noise_pred_uncond = torch.cat(noise_pred_uncond, dim=0)
+                    noise_pred = (
+                        noise_pred_uncond
+                        + self.cfg.guidance_scale * (noise_pred_text - noise_pred_image)
+                        + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
+                    )
+                    latents = self.scheduler.step(noise_pred, t_step, latents).prev_sample
+                    latents[key_indices] = key_edited
+
+        with latency_logger.timeit("edit_multiview.guidance_batch.restore_attn2_final") if latency_logger else nullcontext():
+            for name, mod in self.unet.named_modules():
+                if name.endswith(".attn2") and name in original_attn2_processors:
+                    mod.processor = original_attn2_processors[name]
+        print("Multiview editing finished.")
         return latents
 
     def compute_grad_sds(
@@ -538,13 +931,27 @@ class DGEGuidance(BaseObject):
                 "max_step": self.max_step,
             }
         else:
-            gp_cache        = kwargs.get("gp_cache", None)
-            key_cam_indices = kwargs.get("key_cam_indices", None)
-            with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents"):
-                edit_latents = self.edit_latents(
-                    text_embeddings, latents, cond_latents, t, cams, latency_logger,
-                    gp_cache=gp_cache, key_cam_indices=key_cam_indices,
-                )
+            use_multiview = kwargs.get("use_multiview", False)
+            gaussian = kwargs.get("gaussian", None)
+            # pipe is also a __call__ parameter; kwargs.get("pipe", None) would be None when passed as pipe=...
+            pipe = kwargs.get("pipe", pipe)
+            key_indices = kwargs.get("key_indices", None)
+            prompt_text = kwargs.get("prompt_text", "") or getattr(prompt_utils, "prompt", "")
+            if use_multiview and gaussian is not None and pipe is not None and key_indices is not None and len(key_indices) > 0:
+                with latency_logger.timeit("edit_multiview"):
+                    edit_latents = self.edit_latents_multiview(
+                        text_embeddings, latents, cond_latents, t, cams,
+                        key_indices=key_indices, gaussian=gaussian, pipe=pipe, prompt_text=prompt_text,
+                        latency_logger=latency_logger,
+                    )
+            else:
+                gp_cache = kwargs.get("gp_cache", None)
+                key_cam_indices = kwargs.get("key_cam_indices", None)
+                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents"):
+                    edit_latents = self.edit_latents(
+                        text_embeddings, latents, cond_latents, t, cams, latency_logger,
+                        gp_cache=gp_cache, key_cam_indices=key_cam_indices,
+                    )
             with latency_logger.timeit("edit_all_view.guidance_batch.decode_latents"):
                 edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
