@@ -16,7 +16,7 @@ from threestudio.utils.misc import C, parse_version
 from threestudio.utils.typing import *
 
 
-from threestudio.utils.dge_utils import register_pivotal, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image, register_gp_cache, unregister_gp_cache
+from threestudio.utils.dge_utils import register_pivotal, register_store_kf_attn_output, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image, register_gp_cache, unregister_gp_cache
 from collections import defaultdict
 from contextlib import nullcontext
 from typing import List, Optional, Dict, Any, Tuple
@@ -432,7 +432,7 @@ class DGEGuidance(BaseObject):
                                 with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops"):
                                     with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_batch_idx"):
                                         register_batch_idx(self.unet, i)
-                                    
+
                                     with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_cams"):
                                         register_cams(self.unet, cams[b:b+camera_batch_size], pivotal_idx[i] % camera_batch_size, key_cams) 
                                     
@@ -580,6 +580,8 @@ class DGEGuidance(BaseObject):
 
         with torch.no_grad():
             with latency_logger.timeit(f"{_p}.key_view_denoise_loop") if latency_logger else nullcontext():
+                # Key denoise never uses kf_attn_output; skip storing to save memory/copy.
+                register_store_kf_attn_output(self.unet, False)
                 with latency_logger.timeit(f"{_p}.key_view_denoise_loop.init") if latency_logger else nullcontext():
                     noise = torch.randn_like(latents)
                     latents_key = self.scheduler.add_noise(latents[key_indices], noise[key_indices], t[key_indices])
@@ -617,6 +619,7 @@ class DGEGuidance(BaseObject):
                         latents_key = self.scheduler.step(noise_pred_key, t_step, latents_key).prev_sample
                 with latency_logger.timeit(f"{_p}.key_view_denoise_loop.finalize") if latency_logger else nullcontext():
                     register_pivotal(self.unet, False)
+                    register_store_kf_attn_output(self.unet, True)  # target phase will use pivotal cache
                     key_edited = latents_key
 
         with latency_logger.timeit(f"{_p}.restore_attn2_processors") if latency_logger else nullcontext():

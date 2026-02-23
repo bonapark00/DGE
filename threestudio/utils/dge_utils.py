@@ -252,7 +252,15 @@ def register_pivotal(diffusion_model, is_pivotal):
         # If for some reason this has a different name, create an issue and I'll fix it
         if isinstance_str(module, "BasicTransformerBlock"):
             setattr(module, "pivotal_pass", is_pivotal)
-            
+
+
+def register_store_kf_attn_output(diffusion_model, store: bool):
+    """When False, pivotal pass does not write kf_attn_output (e.g. key denoise in edit_multiview)."""
+    for _, module in diffusion_model.named_modules():
+        if isinstance_str(module, "BasicTransformerBlock"):
+            setattr(module, "store_kf_attn_output", store)
+
+
 def register_batch_idx(diffusion_model, batch_idx):
     for _, module in diffusion_model.named_modules():
         # If for some reason this has a different name, create an issue and I'll fix it
@@ -512,15 +520,15 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
 
                         if len(batch_idxs) == 2:
                             sim1, sim2 = sim.chunk(2, dim=1)
-                            sim1 = sim1.view(-1, sequence_length)
-                            sim2 = sim2.view(-1, sequence_length)
+                            sim1 = sim1.reshape(-1, sequence_length)
+                            sim2 = sim2.reshape(-1, sequence_length)
                             sim1_max = sim1.max(dim=-1)
                             sim2_max = sim2.max(dim=-1)
                             idx1.append(sim1_max[1])
                             idx2.append(sim2_max[1])
 
                         else:
-                            sim = sim.view(-1, sequence_length)
+                            sim = sim.reshape(-1, sequence_length)
                             sim_max = sim.max(dim=-1)
                             idx1.append(sim_max[1])
 
@@ -606,8 +614,9 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                                 encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,
                                 **cross_attention_kwargs,
                             )
-                        # 3, n_frames * seq_len, dim - > 3 * n_frames, seq_len, dim
-                        self.kf_attn_output = self.attn_output
+                        # Only cache for target-phase pivotal pass; skip in key denoise (edit_multiview).
+                        if getattr(self, "store_kf_attn_output", True):
+                            self.kf_attn_output = self.attn_output
 
                     else:
                         batch_kf_size, _, _ = self.kf_attn_output.shape

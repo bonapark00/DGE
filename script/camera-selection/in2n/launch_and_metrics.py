@@ -100,7 +100,6 @@ PRUNE_FLOATER_AT_STEP = "600"  # -1: disabled, otherwise prune at this step
 # Multiview edit (key-view cross-attn + inverse-render + consistent map for target views)
 USE_MULTIVIEW_EDIT = True  # True: edit_multiview (key views + 3D consistent cross-attn); False: use edit_all_view or warp_refine
 MULTIVIEW_NUM_KEY_VIEWS = ""  # Key view count; empty = auto (min(4, n_views//4)); e.g. "4"
-
 # Warp-and-Refine settings (use_warp_refine=True → vanilla IP2P propagation, no DGE attention)
 USE_WARP_REFINE = False  # True: warp-and-refine branch; False: DGE guidance branch (or multiview if USE_MULTIVIEW_EDIT)
 WARP_REFINE_COLOR_FIT_STEPS = "100"   # SH color-only fitting iterations per anchor view
