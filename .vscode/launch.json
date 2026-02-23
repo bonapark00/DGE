@@ -94,14 +94,26 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "2",
+                "--gpu", "1",
                 "trainer.max_steps=1500",
 
-                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                // "system.prompt_processor.prompt=Make the pooh look like a robot",
+                // "data.lens_edit_prompt=Make the pooh look like a robot",
+                // "system.seg_prompt=pooh",
+                // "data.mmr_seg_prompt=pooh",
+                // "system.target_prompt=robot",
+
+                "system.prompt_processor.prompt=Make the pooh wear sunglasses on his face",
+                "data.lens_edit_prompt=Make the pooh wear sunglasses on his face",
+                // "system.seg_prompt=head of the pooh",
+                // "data.mmr_seg_prompt=head of the pooh",
                 "system.seg_prompt=pooh",
                 "data.mmr_seg_prompt=pooh",
-                "system.target_prompt=robot",
-                "data.lens_edit_prompt=Make the pooh look like a robot",
+                // "system.target_prompt=sunglasses of the pooh",
+                "system.target_prompt=red nose of the pooh",
+                "data.lens_edit_prompt=Change the color of the pooh's nose into red",
+                
+                
                 "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
                 "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
                 "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
