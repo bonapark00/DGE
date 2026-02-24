@@ -118,6 +118,8 @@ class DGE(BaseLift3DSystem):
         # Multiview edit (key-view cross-attn + inverse-render + consistent map for target views)
         use_multiview_edit: bool = False  # If True, use edit_multiview instead of edit_all_view
         multiview_num_key_views: Optional[int] = None  # Key views count (default: min(4, n_views//4))
+        # Key view selection: "uniform" = linspace; "uniform_random" = one random per interval; "lens_fps" = LENS Step 5 energy-weighted FPS
+        multiview_edit_key_selection_strategy: str = "uniform"
 
         # Warp-and-Refine (propagate_and_refine_views) settings
         use_warp_refine: bool = False  # If True, use warp-and-refine instead of DGE guidance
@@ -1290,13 +1292,42 @@ class DGE(BaseLift3DSystem):
         cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
 
         camera_batch_size = getattr(self.cfg.guidance, "camera_batch_size", 5)
-        n_views = len(view_sorted)
-        if num_key_views is None:
-            num_key_views = max(1, min(4, n_views // 4))
-        num_key_views = min(num_key_views, n_views)
-        key_indices = torch.linspace(0, n_views - 1, num_key_views, dtype=torch.long).tolist()
-        key_indices = [int(i) for i in key_indices]
-        key_view_camera_ids = [view_sorted[i] for i in key_indices]
+        # n_views = len(view_sorted)
+        # if num_key_views is None:
+        #     num_key_views = max(1, min(4, n_views // 4))
+        # num_key_views = min(num_key_views, n_views)
+        key_selection = getattr(self.cfg, "multiview_edit_key_selection_strategy", "uniform")
+        # if key_selection == "lens_fps" and self.gaussian is not None and n_views >= num_key_views:
+        #     from threestudio.data.gs_load import select_key_views_by_lens_fps
+        #     with self._latency_logger.timeit("edit_multiview.key_selection_lens_fps"):
+        #         key_indices = select_key_views_by_lens_fps(
+        #             self.gaussian,
+        #             cams_sorted,
+        #             n_key=num_key_views,
+        #             top_fraction=0.20,
+        #             w_vis=0.6,
+        #             w_can=0.4,
+        #             device="cuda",
+        #         )
+        #     key_indices = [int(i) for i in key_indices]
+        # elif key_selection == "uniform_random":
+        #     # 구간을 num_key_views개로 나누고, 각 구간에서 랜덤으로 하나씩 선택
+        #     segment_size = n_views / num_key_views
+        #     key_indices = []
+        #     for i in range(num_key_views):
+        #         start = int(i * segment_size)
+        #         end = min(int((i + 1) * segment_size), n_views) - 1
+        #         if end < start:
+        #             end = start
+        #         key_indices.append(random.randint(start, end))
+        #     key_indices = sorted(key_indices)
+        #     key_indices = [int(i) for i in key_indices]
+        # elif key_selection == "manual":
+        #     key_indices = [_ for _ in range(20)]
+        # else:
+        #     key_indices = torch.linspace(0, n_views - 1, num_key_views, dtype=torch.long).tolist()
+        #     key_indices = [int(i) for i in key_indices]
+        # key_view_camera_ids = [view_sorted[i] for i in key_indices]
 
         images = []
         original_frames = []
@@ -1337,9 +1368,11 @@ class DGE(BaseLift3DSystem):
                     use_multiview=True,
                     gaussian=self.gaussian,
                     pipe=self.pipe,
-                    key_indices=key_indices,
-                    key_view_camera_ids=key_view_camera_ids,
+                    # key_indices=key_indices,
+                    # key_view_camera_ids=key_view_camera_ids,
                     prompt_text=getattr(self.cfg, "target_prompt", "") or "",
+                    key_selection_strategy=key_selection,
+                    num_key_views=num_key_views,
                 )
 
             with self._latency_logger.timeit("edit_multiview.assign_outputs"):

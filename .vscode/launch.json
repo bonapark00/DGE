@@ -94,24 +94,34 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "1",
+                "--gpu", "2",
                 "trainer.max_steps=1500",
 
-                // "system.prompt_processor.prompt=Make the pooh look like a robot",
-                // "data.lens_edit_prompt=Make the pooh look like a robot",
-                // "system.seg_prompt=pooh",
-                // "data.mmr_seg_prompt=pooh",
-                // "system.target_prompt=robot",
-
-                "system.prompt_processor.prompt=Make the pooh wear sunglasses on his face",
-                "data.lens_edit_prompt=Make the pooh wear sunglasses on his face",
-                // "system.seg_prompt=head of the pooh",
-                // "data.mmr_seg_prompt=head of the pooh",
+                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                "data.lens_edit_prompt=Make the pooh look like a robot",
                 "system.seg_prompt=pooh",
                 "data.mmr_seg_prompt=pooh",
+                "system.target_prompt=robot",
+                "system.guidance.feature_injection_mode=similarity",
+                // "system.guidance.injection_lambda=0.5",
+                // "system.guidance.injection_3d_anchor_style=gather",
+                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
+                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
+                "system.multiview_num_key_views=4",
+                
+
+                // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his face",
+                // "data.lens_edit_prompt=Make the pooh wear sunglasses on his face",
+                // "system.prompt_processor.prompt=Change the color of the pooh's nose into red",
+                // "data.lens_edit_prompt=Change the color of the pooh's nose into red",
+
+                // "system.seg_prompt=head of the pooh",
+                // "data.mmr_seg_prompt=head of the pooh",
+                // "system.seg_prompt=pooh",
+                // "data.mmr_seg_prompt=pooh",
                 // "system.target_prompt=sunglasses of the pooh",
-                "system.target_prompt=red nose of the pooh",
-                "data.lens_edit_prompt=Change the color of the pooh's nose into red",
+                // "system.target_prompt=red nose of the pooh",
+                // "data.lens_edit_prompt=Change the color of the pooh's nose into red",
                 
                 
                 "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
@@ -150,7 +160,6 @@
                 "system.loss.lambda_sds=0.0",
 
                 "system.use_multiview_edit=true",
-                "system.multiview_num_key_views=4",
                 "system.use_warp_refine=false",
                 "system.use_gaussian_provenance=false",
                 "system.guidance.skip_key_views_in_target_loop=false",

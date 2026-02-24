@@ -45,18 +45,20 @@ class LatencyLogger:
         lines.append(f"Latency Summary (seconds) - Total Time: {total:.3f}s\n")
         
         def get_direct_children(parent_prefix: str, all_items: Dict[str, float]) -> List[Tuple[str, float]]:
-            """Get direct children of a parent (not grandchildren)"""
-            children = []
-            parent_depth = parent_prefix.count('.') if parent_prefix else 0
-            
+            """Get direct children of a parent: one segment deeper. Aggregate time for all keys under each child prefix."""
+            prefix_with_dot = parent_prefix + '.' if parent_prefix else ''
+            child_totals: Dict[str, float] = {}
             for name, secs in all_items.items():
-                if name.startswith(parent_prefix + '.'):
-                    # Check if this is a direct child (one more level deep)
-                    remaining = name[len(parent_prefix) + 1:]  # Remove parent prefix and '.'
-                    if '.' not in remaining:  # Direct child has no more dots
-                        children.append((name, secs))
-            
-            return children
+                if not name.startswith(prefix_with_dot):
+                    continue
+                remaining = name[len(prefix_with_dot):]
+                if not remaining:
+                    continue
+                # First segment is the direct child (e.g. "dge_block" from "dge_block.feature_injection.3d_anchor")
+                first_segment = remaining.split('.')[0]
+                child_prefix = prefix_with_dot + first_segment
+                child_totals[child_prefix] = child_totals.get(child_prefix, 0.0) + secs
+            return list(child_totals.items())
         
         def add_children_recursive(parent_prefix: str, indent_level: int, all_items: Dict[str, float]):
             """Recursively add children maintaining hierarchy"""

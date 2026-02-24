@@ -36,9 +36,13 @@
 
 소수의 키 뷰(key views)에서 IP2P UNet의 cross-attention map — "텍스트 토큰이 이미지의 어느 공간 위치에 attention을 주는가" — 을 수집한다. 이 2D map을 3DGS를 통해 3D 공간으로 역투영(inverse rendering)한 뒤, 모든 뷰의 카메라로 재렌더링한다. 결과적으로 **모든 뷰가 동일한 3D attention 필드를 2D로 바라보는** 기하적으로 일관된 map을 얻는다. 타깃 뷰 디노이징 시 이 map을 cross-attention 가중치로 직접 대체한다.
 
-**② DGE 기반 Cross-View Self-Attention (Epipolar Feature Injection)**
+**② DGE 기반 Cross-View Self-Attention (Feature Injection)**
 
-타깃 뷰 디노이징 중 UNet의 self-attention(attn1)을 대체하여, 에피폴라 기하로 필터링된 feature correspondence를 이용해 pivot(키) 뷰의 feature를 타깃 뷰에 주입한다. 이를 통해 self-attention 단계에서도 뷰 간 feature가 공간적으로 정렬된다.
+타깃 뷰 디노이징 중 UNet의 self-attention(attn1)을 대체하여, pivot 뷰의 feature를 타깃 뷰에 주입한다. **대응 방식**은 설정에 따라 다르다.  
+- **similarity**: **코사인 유사도**로 대응 픽셀(idx1)을 찾고 pivot self-attention 출력을 gather하여 residual에 더한다. (에피폴라 제약 미사용.)  
+- **3d_anchor**: 3DGS prior로 픽셀–가우시안 대응을 쓰며, **blend** 스타일이면 $t_j$, $F(v,p)$, $\lambda(F-h)$ 혼합; **gather** 스타일이면 similarity와 동일 구조(pivot 맵 그대로 + 3D GS remap idx_3d로 gather + residual, λ 없음).  
+
+설정: `feature_injection_mode` (`"similarity"` | `"3d_anchor"`), 3d_anchor 시 `injection_3d_anchor_style` (`"blend"` | `"gather"`).
 
 ---
 
@@ -61,7 +65,6 @@
 | $N_g$ | 3D Gaussian 개수 |
 | $G$ | 3D Gaussian Splatting 모델 |
 | $\mathbf{o}_v \in \mathbb{R}^3$ | 뷰 $v$의 카메라 중심 (world 좌표) |
-| $F_{k \to v}$ | 뷰 $k$에서 뷰 $v$로의 Fundamental matrix |
 | $s_{\text{txt}},\, s_{\text{img}}$ | CFG guidance scale (기본 7.5, 1.5) |
 
 ---
@@ -86,7 +89,7 @@
    • for t = T … 0:
        ε_k = UNet([z_k^(t); c_k], t, τ(P))   [pivotal_pass=True]
        ↳ attn1: Extended ST-Attn (키 뷰끼리 서로 attend)
-                → kf_attn_output 저장
+                → kf_attn_output 저장하지 않음 (타깃 단계에서 미사용; 메모리 절약)
        ↳ attn2: 표준 Cross-Attn + A[:,:,T] 해상도별 저장
        z_k^(t-1) ← DDIM_step(CFG(ε))
    • key_edited ← {z_k^(0)}
@@ -109,7 +112,7 @@
        ② 배치 forward [pivotal_pass=False]  (배치 단위, CFG 3×)
           set _consistent_attn_map_current = M_con^(v,r)
           ε_b = UNet([z_b^(t); c_b], t, τ(P))
-          ↳ attn1 (DGE): 에피폴라 마스킹 → argmax sim → gather
+          ↳ attn1 (DGE): similarity면 유사도 idx1 gather; 3d_anchor면 blend($λ(F−h)$) 또는 gather(3D GS idx_3d gather)
           ↳ attn2 (Consistent): O = M_con^(v,r) · V_valid
        ③ CFG + DDIM_step
           z^(t-1)[I_key] ← key_edited   (매 스텝 키 뷰 고정)
@@ -156,7 +159,7 @@ $$\mathbf{E} = \bigl[\tau_\theta^+(P),\ \tau_\theta^-(P),\ \tau_\theta^-(P)\bigr
 
 $$\hat{\boldsymbol{\epsilon}}_k^{(t)} = \text{UNet}(\text{input},\ t,\ \mathbf{E})$$
 
-이때 각 DGEBlock 내부에서는 §7.1(A)의 Extended ST-Attention이 실행되고 `kf_attn_output`이 저장된다.
+이때 각 DGEBlock 내부에서는 §7.1(A)의 Extended ST-Attention이 실행된다. **Phase 1 키 뷰 루프에서는** `kf_attn_output`을 **저장하지 않는다** (타깃 단계에서 사용하지 않으므로 메모리 절약). Phase 3 Pivotal forward에서만 저장·갱신한다.
 
 **CFG 결합:**
 
@@ -281,8 +284,7 @@ $$\mathbf{z}^{(t-1)}\bigl[\mathcal{I}_{\text{key}}\bigr] \leftarrow \texttt{key\
 │    [pivotal_pass=True ]  → pivot_hidden_states = norm_h 저장     │
 │    [pivotal_pass=False]  → 카메라 거리 계산                       │
 │                            → 코사인 유사도 계산                   │
-│                            → 에피폴라 마스킹                      │
-│                            → idx1 (/ idx2) 탐색                  │
+│                            → idx1 (/ idx2) 탐색 (에피폴라 미사용) │
 └──────────────────────────┬───────────────────────────────────────┘
                            │
            ┌───────────────┴───────────────┐
@@ -291,9 +293,9 @@ $$\mathbf{z}^{(t-1)}\bigl[\mathcal{I}_{\text{key}}\bigr] \leftarrow \texttt{key\
   ┌──────────────────────┐      ┌────────────────────────────────┐
   │ [A] Extended         │      │ [B] DGE Feature Injection      │
   │     ST-Attention     │      │     (Q-K 연산 없음)             │
-  │  키 뷰끼리 서로 attend│      │  kf_attn_output에서 gather     │
-  │  → kf_attn_output    │      └────────────────────────────────┘
-  │    저장              │
+  │  키 뷰끼리 서로 attend│      │  코사인 유사도로 대응 픽셀 탐색 │
+  │  → kf_attn_output    │      │  → kf_attn_output에서 gather    │
+  │    저장 (pivotal만)  │      └────────────────────────────────┘
   └──────────────────────┘
            │                              │
            └───────────────┬──────────────┘
@@ -362,9 +364,13 @@ $$\texttt{kf\_attn\_output} \leftarrow \text{attn\_output} \in \mathbb{R}^{3n_k 
 
 ### 7.2 [B] Non-Pivotal Pass: DGE Cross-View Feature Injection
 
-`pivotal_pass=False`인 경우 self-attention Q-K-V 연산을 수행하지 않고, 캐시된 `kf_attn_output`에서 feature를 gather한다.
+`pivotal_pass=False`인 경우 self-attention Q-K-V 연산을 수행하지 않고, 캐시된 `kf_attn_output`과 대응 관계로 feature를 주입한다. **모드**에 따라 경로가 나뉜다.  
+- **similarity**: 아래 (B-1)–(B-4)처럼 코사인 유사도로 idx1을 구한 뒤 `kf_attn_output`을 gather.  
+- **3d_anchor (blend)**: 3DGS 기반 $t_j$, $F(v,p)$를 구하고 $\mathrm{attn\_output} = \lambda(F - h)$로 residual에 더함 ($(1-\lambda)h + \lambda F$).  
+- **3d_anchor (gather)**: similarity와 동일 구조. pivot 맵 그대로 두고, 3D GS로 대응 픽셀 idx_3d(proj(pivot, j*))를 구한 뒤 gather → $h + \mathrm{attn\_output}$ (λ 없음).  
+자세한 3d_anchor 수식은 `docs/edit_multiview_3d_anchor_algorithm.md` 및 `docs/edit_multiview_self_attn_output_similarity_vs_3d_anchor.md` 참조.
 
-#### (B-1) 가장 가까운 Pivot 뷰 선택
+#### (B-1) 가장 가까운 Pivot 뷰 선택 (similarity 모드)
 
 $$D_{\text{cam}}(v, k) = \|\mathbf{o}_v - \mathbf{o}_k\|_2$$
 
@@ -384,30 +390,15 @@ $$\text{sim}_{v,p,q} = \frac{\tilde{\mathbf{H}}_v^{(p)} \cdot \tilde{\mathbf{H}}
 
 구현: `torch.einsum('bld,bcsd->bcls', norm_h[1], pivot_h)` 후 L2 정규화.
 
-#### (B-3) 에피폴라 기하 마스킹
+**참고:** 본 파이프라인(edit_latents_multiview)에서는 **에피폴라 제약을 사용하지 않는다.** DGEBlock에 `epipolar_constrains={}`가 설정되어 있어, 유사도만으로 대응 픽셀을 선택한다.
 
-Fundamental matrix $F_{k^* \to v}$를 이용해 기하적으로 불가능한 correspondence를 필터링한다.
+#### (B-3) 최적 대응 픽셀 탐색
 
-**에피폴라 마스크 (True = 무효):**
+$$j^*_p = \arg\max_{q}\;\text{sim}_{v,p,q}$$
 
-$$E_{p,q}^{(v, k^*)} = \mathbb{1}\!\left[d_\perp\!\left(\mathbf{x}_q,\; F_{k^* \to v}\,\mathbf{x}_p\right) > 1 \text{ px}\right]$$
+코사인 유사도가 최대인 pivot 위치 $j^*_p$를 찾는다. (에피폴라 마스킹 없음.)
 
-- $d_\perp$: 에피폴라 선과 점 $\mathbf{x}_q$ 사이의 수직 거리 (픽셀 단위)
-- $\mathbf{x}_p, \mathbf{x}_q$: 동차 좌표계 픽셀 위치
-
-**마스킹 적용:**
-
-$$\tilde{\text{sim}}_{v,p,q} = \begin{cases} 0 & E_{p,q}^{(v,k^*)} = 1 \\ \text{sim}_{v,p,q} & \text{otherwise} \end{cases}$$
-
-특수 처리: pivot 뷰 자신의 위치 $p_0$에는 에피폴라 마스크를 적용하지 않아 self-correspondence를 허용한다 (`idx1_epipolar[pivot_this_batch] = False`).
-
-#### (B-4) 최적 대응 픽셀 탐색
-
-$$j^*_p = \arg\max_{q}\;\tilde{\text{sim}}_{v,p,q}$$
-
-에피폴라 제약을 만족하는 pivot 위치 중 feature가 가장 유사한 픽셀 $j^*_p$를 찾는다.
-
-#### (B-5) Feature Gather (Injection)
+#### (B-4) Feature Gather (Injection)
 
 **Pivot 1개 사용 시:**
 
@@ -451,11 +442,11 @@ $$\mathbf{H} \leftarrow \text{FFN}\!\left(\text{LayerNorm}(\mathbf{H})\right) + 
 
 | 단계 | 패스 | Attention 레이어 | 연산 | 역할 |
 |------|------|-----------------|------|------|
-| Phase 1: 키 뷰 루프 | `pivotal_pass=True` | **attn1** (Extended ST-Attn) | 키 뷰 $K$개가 서로 attend; 전체 뷰 concat Key/Value 사용 → `kf_attn_output` 저장 | Spatio-temporal feature 계산 및 캐시 |
+| Phase 1: 키 뷰 루프 | `pivotal_pass=True` | **attn1** (Extended ST-Attn) | 키 뷰 $K$개가 서로 attend; 전체 뷰 concat Key/Value 사용 → `kf_attn_output` **저장하지 않음** (타깃 단계 미사용) | Spatio-temporal feature 계산 |
 | Phase 1: 키 뷰 루프 | `pivotal_pass=True` | **attn2** (StoreProcessor) | 표준 $\text{softmax}(QK^\top/\sqrt{d})V$; $\mathbf{A}[\,:\,,\mathcal{T}\,]$를 해상도별 저장 | Text-image 대응 관계 수집 |
 | Phase 3: Pivotal Forward | `pivotal_pass=True` | **attn1** (Extended ST-Attn) | Pivot 뷰들끼리 ST-attention → `kf_attn_output` 갱신 | 타깃 루프용 feature 갱신 |
 | Phase 3: Pivotal Forward | `pivotal_pass=True` | **attn2** (ConsistentProc) | $\mathbf{O} = M_{\text{con}}^{(v,r)} \cdot \mathbf{V}_{\text{valid}}$ | 일관 cross-attention |
-| Phase 3: Batch Forward | `pivotal_pass=False` | **attn1** (DGE Injection) | Q-K 연산 없음; 에피폴라 마스킹 → $\arg\max_q \tilde{\text{sim}}_{v,p,q}$ → `kf_attn_output` gather | Cross-view feature injection |
+| Phase 3: Batch Forward | `pivotal_pass=False` | **attn1** (DGE Injection) | Q-K 연산 없음; **similarity**: 유사도 idx1 gather. **3d_anchor**: blend면 $t_j$, $F$, $\lambda(F-h)$; gather면 3D GS idx_3d gather (에피폴라 미사용) | Cross-view feature injection |
 | Phase 3: Batch Forward | `pivotal_pass=False` | **attn2** (ConsistentProc) | $\mathbf{O} = M_{\text{con}}^{(v,r)} \cdot \mathbf{V}_{\text{valid}}$; Q-K 생략 | 3D-일관 cross-attention |
 
 ---
@@ -478,21 +469,17 @@ $$M_{\text{3D}}^{(r)}(g, c) = \frac{\displaystyle\sum_{k \in \mathcal{I}_{\text{
 
 $$M_{\text{con}}^{(v,r)}[\,:\,,c\,] = \text{GS\_Render}\!\left(G,\; \text{cam}_v^{(r)},\; \text{color} = M_{\text{3D}}^{(r)}[\,:\,,c\,]\right)$$
 
-**(S5) 에피폴라 마스크:**
+**(S5) DGE Feature Injection — 최적 대응 탐색 (attn1, non-pivotal, 에피폴라 미사용):**
 
-$$E_{p,q}^{(v,k^*)} = \mathbb{1}\!\left[d_\perp\!\left(\mathbf{x}_q,\; F_{k^*\to v}\,\mathbf{x}_p\right) > 1\right]$$
-
-**(S6) DGE Feature Injection — 최적 대응 탐색 (attn1, non-pivotal):**
-
-$$j^*_p = \arg\max_{q}\;\Bigl(1 - E_{p,q}^{(v,k^*)}\Bigr)\cdot\text{sim}_{v,p,q}$$
+$$j^*_p = \arg\max_{q}\;\text{sim}_{v,p,q}$$
 
 $$\mathbf{O}_{\text{self}}^{(v)} = \texttt{kf\_attn\_output}\bigl[k^*(v),\; j^*_{0:L},\; :\bigr]$$
 
-**(S7) Consistent Cross-Attention (attn2, Phase 3):**
+**(S6) Consistent Cross-Attention (attn2, Phase 3):**
 
 $$\mathbf{O}_{\text{cross}}^{(v)} = M_{\text{con}}^{(v,r)} \cdot W_v\mathbf{E}_{\text{text}}\bigl[\,:\,,\mathcal{T}\,\bigr]$$
 
-**(S8) Classifier-Free Guidance (IP2P):**
+**(S7) Classifier-Free Guidance (IP2P):**
 
 $$\hat{\boldsymbol{\epsilon}} = \boldsymbol{\epsilon}^{\text{unc}} + s_{\text{txt}}\bigl(\boldsymbol{\epsilon}^{\text{txt}} - \boldsymbol{\epsilon}^{\text{img}}\bigr) + s_{\text{img}}\bigl(\boldsymbol{\epsilon}^{\text{img}} - \boldsymbol{\epsilon}^{\text{unc}}\bigr)$$
 
@@ -521,7 +508,7 @@ Output: {I_v^{edit}}_{v=0}^{n-1}
  For t = T, T-Δ, …, 0:
      register_pivotal = True
      ε_k ← UNet([z_k^(t) ‖ c_k], t, τ(P))     // 3K batch
-       ▷ attn1: ST-Attn(Q_t, [K_1,…,K_K]) → kf_attn_output 저장
+       ▷ attn1: ST-Attn(Q_t, [K_1,…,K_K]) → kf_attn_output 저장하지 않음
        ▷ attn2: softmax(QK^T/√d)·V → A[:,:,T] 해상도별 저장
      ε_guided ← CFG(ε^txt, ε^img, ε^unc)
      z_k^(t-1) ← DDIM_step(ε_guided, t, z_k^(t))
@@ -563,15 +550,14 @@ Output: {I_v^{edit}}_{v=0}^{n-1}
        [DGEBlock – attn1, non-pivotal]
          1. k*(v) = argmin_k ‖o_v - o_k‖₂
          2. sim[v,p,q] = cosine(H_v[p], H_pivot[q])
-         3. sim[p,q] ← 0   where  E[p,q] = True   (epipolar mask)
-         4. j*_p = argmax_q sim[v,p,q]
-         5. O_self[v,p] = kf_attn_output[k*(v), j*_p, :]
-         6. H ← O_self + H                     (residual)
+         3. j*_p = argmax_q sim[v,p,q]        (에피폴라 미사용)
+         4. O_self[v,p] = kf_attn_output[k*(v), j*_p, :]
+         5. H ← O_self + H                     (residual)
        [DGEBlock – attn2, ConsistentCrossAttnProcessor]
-         7. O_cross = M_con^(v,r) · V_valid
-         8. H ← O_cross + H                    (residual)
+         6. O_cross = M_con^(v,r) · V_valid
+         7. H ← O_cross + H                    (residual)
        [DGEBlock – FFN]
-         9. H ← FFN(LN(H)) + H
+         8. H ← FFN(LN(H)) + H
    End
 
    ── (iii) CFG + DDIM step ────────────────────────────────────
@@ -595,7 +581,7 @@ Output: {I_v^{edit}}_{v=0}^{n-1}
 | 단계 | IP2P (기본) | DGEBlock (본 방법) |
 |------|-------------|-------------------|
 | **norm1** | LayerNorm | 동일 + pivot 저장 또는 sim/idx 계산 추가 |
-| **attn1** | Self-Attn (배치 내 공간 토큰끼리) | **완전 교체**: pivotal → Extended ST-Attn (뷰 간, kf_attn 저장); non-pivotal → Q-K 없이 gather (Feature Injection) |
+| **attn1** | Self-Attn (배치 내 공간 토큰끼리) | **완전 교체**: pivotal → Extended ST-Attn (뷰 간, kf_attn 저장); non-pivotal → Q-K 없이 **similarity**면 유사도 idx1 gather, **3d_anchor**면 blend($\lambda(F-h)$) 또는 gather(3D GS idx_3d) (Feature Injection, 에피폴라 미사용) |
 | **residual** | attn1 + x | 동일 |
 | **norm2** | LayerNorm | 동일 |
 | **attn2** | Cross-Attn (공간↔텍스트) | 레이어 동일, **processor만 교체**: Phase 1 → StoreProcessor; Phase 3 → ConsistentProcessor |
@@ -609,10 +595,10 @@ Output: {I_v^{edit}}_{v=0}^{n-1}
   ┌───────────────────────┐     ┌──────────────────────────────────────┐
   │ Self-Attention         │     │ [pivotal] Extended ST-Attention       │
   │ Q, K, V ← 같은 배치   │ →   │   → 뷰 간 cross-view attend           │
-  │ 배치 내 공간 토큰끼리  │     │   → kf_attn_output 저장               │
+  │ 배치 내 공간 토큰끼리  │     │   → kf_attn_output 저장 (pivotal 시에만) │
   │ 단순 attend            │     │ [non-pivotal] Feature Injection       │
   └───────────────────────┘     │   → Q-K 연산 없음                     │
-                                │   → 에피폴라 + cosine sim으로 idx 탐색 │
+                                │   → 코사인 유사도로 idx 탐색 (에피폴라 미사용) │
                                 │   → kf_attn에서 gather                │
                                 └──────────────────────────────────────┘
 
@@ -635,7 +621,7 @@ Output: {I_v^{edit}}_{v=0}^{n-1}
 | Phase 2: 역투영 | $K \times L_{\text{tok}}$회 alpha-composite 연산 | <1% (`inverse_render_2d_to_3d`) |
 | Phase 2: 재렌더링 | $n \times R \times L_{\text{tok}}$회 Gaussian splatting | ~2% (`render_consistent_maps`) |
 | Phase 3: Pivotal forward | $T \times \lceil n / B \rceil$회 추가 UNet forward | ~7% (`pivotal_forward`) |
-| Phase 3: 에피폴라 마스크 | Fundamental matrix 계산 + 픽셀 거리 계산 | ~3% (`per_timestep_setup`) |
+| Phase 3: DGE (유사도·gather) | 카메라 거리, 코사인 유사도, gather | ~3% (`per_timestep_setup` 등) |
 
 Phase 3 배치 forward 자체 (`batch_forward`, ~22%)가 전체에서 가장 큰 비중을 차지하며, 이는 IP2P 단순 편집과 동일하게 필요한 비용이다.
 
@@ -651,14 +637,12 @@ Phase 3 배치 forward 자체 (`batch_forward`, ~22%)가 전체에서 가장 큰
 | DGEBlock 생성 | `threestudio/utils/dge_utils.py` | `make_dge_block`, `DGEBlock.forward` |
 | Extended ST-Attention (attn1 교체) | `dge_utils.py` | `register_extended_attention` → `sa_forward` |
 | Normal attention 플래그 설정 | `dge_utils.py` | `register_normal_attn_flag` |
-| Epipolar 마스크 계산 | `dge_utils.py` | `compute_epipolar_constrains` |
 | Pivotal 플래그 등록 | `dge_utils.py` | `register_pivotal` |
 | 카메라·배치 정보 등록 | `dge_utils.py` | `register_cams`, `register_batch_idx` |
 | 2D → 3D 역투영 | `gaussiansplatting/scene/gaussian_model*.py` | `gaussian.apply_weights` |
 | 3D → 2D 재렌더링 | `gaussiansplatting/gaussian_renderer/__init__.py` | `render` (= `gs_render`) |
-| Fundamental matrix 계산 | `gaussiansplatting/utils/graphics_utils.py` | `get_fundamental_matrix_with_H` |
 
 ---
 
-*기준 코드: `dge_guidance.py` L519–824 (`edit_latents_multiview`),
-`dge_utils.py` (`make_dge_block`, `register_extended_attention`, `compute_epipolar_constrains`).*
+*기준 코드: `dge_guidance.py` L519–824 (`edit_latents_multiview`; target 루프에서 `epipolar_constrains={}` 설정),
+`dge_utils.py` (`make_dge_block`, `register_extended_attention`).*

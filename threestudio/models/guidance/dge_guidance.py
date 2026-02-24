@@ -16,10 +16,11 @@ from threestudio.utils.misc import C, parse_version
 from threestudio.utils.typing import *
 
 
-from threestudio.utils.dge_utils import register_pivotal, register_store_kf_attn_output, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image, register_gp_cache, unregister_gp_cache
+from threestudio.utils.dge_utils import register_pivotal, register_store_kf_attn_output, register_batch_idx, register_cams, register_epipolar_constrains, register_extended_attention, register_normal_attention, register_extended_attention, make_dge_block, isinstance_str, compute_epipolar_constrains, register_normal_attn_flag, save_epipolar_constraints_image, register_gp_cache, unregister_gp_cache, build_gaussian_provenance_cache, register_anchor_3d_cache, unregister_anchor_3d_cache, set_unet_latency_prefix, register_latency_logger
 from collections import defaultdict
 from contextlib import nullcontext
 from typing import List, Optional, Dict, Any, Tuple
+import random
 
 
 def _get_valid_token_indices(pipe, prompt: str) -> List[int]:
@@ -216,8 +217,12 @@ class DGEGuidance(BaseObject):
         camera_batch_size: int = 5
         edit_view_selection_strategy: str = ""
         skip_key_views_in_target_loop: bool = False
-
-    cfg: Config
+        # Feature injection in edit_latents_multiview: "similarity" (cosine + gather) or "3d_anchor" (3DGS-based canonical tokens)
+        feature_injection_mode: str = "similarity"
+        # For 3d_anchor: blend h_out = (1 - injection_lambda) * h_sa + injection_lambda * F(v,p). h_sa uses current hidden_states.
+        injection_lambda: float = 0.5
+        # 3d_anchor only: "blend" = λ*(F-h)+h; "gather" = similarity-like: pivot self-attn + 3D-GS remap gather + residual (no λ).
+        injection_3d_anchor_style: str = "blend"
 
     def configure(self, preloaded_pipe=None, **kwargs) -> None:
         self.weights_dtype = (
@@ -523,13 +528,17 @@ class DGEGuidance(BaseObject):
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
         cams: list,
-        key_indices: List[int],
-        gaussian,
-        pipe,
-        prompt_text: str,
+        gaussian=None,
+        pipe=None,
+        prompt_text: str = "",
         latency_logger=None,
-        key_view_camera_ids: Optional[List[int]] = None,
+        # key_view_camera_ids: Optional[List[int]] = None,
         skip_key_views_in_target_loop: bool = True,
+        feature_injection_mode: Optional[str] = None,
+        injection_lambda: Optional[float] = None,
+        injection_3d_anchor_style: Optional[str] = None,
+        key_selection_strategy: Optional[str] = None,
+        num_key_views: Optional[int] = None,
     ) -> Float[Tensor, "B 4 DH DW"]:
         """
         Multiview edit: key views with cross-view attention; collect cross-attn from key views,
@@ -540,6 +549,9 @@ class DGEGuidance(BaseObject):
             if False, all views (including key views) are denoised in target_denoise_loop (original behavior).
         """
         _p = f"{EDIT_MULTIVIEW_PREFIX}.edit_latents_multiview"  # so summary shows guidance_batch -> edit_latents_multiview -> setup, key_view_denoise_loop, ...
+        _feature_injection_mode = feature_injection_mode if feature_injection_mode is not None else self.cfg.feature_injection_mode
+        _injection_lambda = injection_lambda if injection_lambda is not None else self.cfg.injection_lambda
+        _injection_3d_anchor_style = injection_3d_anchor_style if injection_3d_anchor_style is not None else self.cfg.injection_3d_anchor_style
         with latency_logger.timeit(f"{_p}.setup") if latency_logger else nullcontext():
             self.scheduler.config.num_train_timesteps = t.item() if len(t.shape) < 1 else t[0].item()
             self.scheduler.set_timesteps(self.cfg.diffusion_steps)
@@ -548,6 +560,40 @@ class DGEGuidance(BaseObject):
             camera_batch_size = self.cfg.camera_batch_size
             device = latents.device
             n_views = latents.shape[0]
+            # Key indices: from strategy when provided (uniform / uniform_random / lens_fps), else use passed key_indices (e.g. manual)
+            if (
+                key_selection_strategy is not None
+                and key_selection_strategy not in ("manual",)
+                and num_key_views is not None
+            ):
+                _n_key = min(num_key_views, n_views)
+                if key_selection_strategy == "lens_fps" and gaussian is not None:
+                    from threestudio.data.gs_load import select_key_views_by_lens_fps
+                    key_indices = select_key_views_by_lens_fps(
+                        gaussian, cams, n_key=_n_key,
+                        top_fraction=0.20, w_vis=0.6, w_can=0.4, device=str(device),
+                    )
+                    key_indices = [int(i) for i in key_indices]
+                elif key_selection_strategy == "uniform_random":
+                    segment_size = n_views / _n_key
+                    key_indices = []
+                    for i in range(_n_key):
+                        start = int(i * segment_size)
+                        end = min(int((i + 1) * segment_size), n_views) - 1
+                        if end < start:
+                            end = start
+                        key_indices.append(random.randint(start, end))
+                    key_indices = sorted(key_indices)
+                    key_indices = [int(i) for i in key_indices]
+                elif key_selection_strategy == "manual":
+                    pass
+                else:
+                    key_indices = torch.linspace(0, n_views - 1, _n_key, dtype=torch.long, device=device).tolist()
+                    key_indices = [int(i) for i in key_indices]
+            elif key_indices is None or len(key_indices) == 0:
+                raise ValueError("edit_latents_multiview requires key_indices or (key_selection_strategy and num_key_views)")
+
+
             target_resolutions = (32 * 32, 64 * 64)
             # Cache module lists once to avoid repeated named_modules() traversal in the loop
             _dge_blocks = [(n, m) for n, m in self.unet.named_modules()
@@ -571,12 +617,22 @@ class DGEGuidance(BaseObject):
 
         positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
         split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
+        
+        
+        
         key_cams = [cams[i] for i in key_indices]
         n_key = len(key_indices)
-        if key_view_camera_ids is not None:
-            print(f"[edit_latents_multiview] key view indices (sorted pos): {key_indices}, actual camera IDs: {key_view_camera_ids}")
-        else:
-            print(f"[edit_latents_multiview] key view indices: {key_indices}")
+        # if key_view_camera_ids is not None:
+        #     print(f"[edit_latents_multiview] key view indices (sorted pos): {key_indices}, actual camera IDs: {key_view_camera_ids}")
+        # else:
+        #     print(f"[edit_latents_multiview] key view indices: {key_indices}")
+
+        key_indices = [_ for _ in range(20)]
+        key_cams = [cams[_] for _ in key_indices]
+        n_key = len(key_indices)
+        print(f"[edit_latents_multiview.key_denoise_loop] key view indices: {key_indices}, actual camera IDs: {key_cams}")
+        print(f"[edit_latents_multiview.key_denoise_loop] number of key views: {n_key}")
+
 
         with torch.no_grad():
             with latency_logger.timeit(f"{_p}.key_view_denoise_loop") if latency_logger else nullcontext():
@@ -608,7 +664,13 @@ class DGEGuidance(BaseObject):
                         latent_model_input = torch.cat([latent_model_input, pivot_image_cond], dim=1)
                         t_exp = t_step.unsqueeze(0).expand(n_key * 3).to(device)
                     with latency_logger.timeit(f"{_p}.key_view_denoise_loop.forward_unet") if latency_logger else nullcontext():
-                        noise_pred = self.forward_unet(latent_model_input, t_exp, encoder_hidden_states=pivot_text)
+                        if latency_logger:
+                            set_unet_latency_prefix(f"{_p}.key_view_denoise_loop.forward_unet.unet_forward")
+                        try:
+                            noise_pred = self.forward_unet(latent_model_input, t_exp, encoder_hidden_states=pivot_text)
+                        finally:
+                            if latency_logger:
+                                set_unet_latency_prefix(None)
                     with latency_logger.timeit(f"{_p}.key_view_denoise_loop.guidance_and_step") if latency_logger else nullcontext():
                         noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(3)
                         noise_pred_key = (
@@ -696,6 +758,53 @@ class DGEGuidance(BaseObject):
                         maps_c.append(pkg["render"][0])
                     M_con_by_view_res[view_idx][res] = torch.stack(maps_c, dim=-1)
 
+
+
+
+
+            # Key indices: from strategy when provided (uniform / uniform_random / lens_fps), else use passed key_indices (e.g. manual)
+            if (
+                key_selection_strategy is not None
+                and key_selection_strategy not in ("manual",)
+                and num_key_views is not None
+            ):
+                _n_key = min(num_key_views, n_views)
+                if key_selection_strategy == "lens_fps" and gaussian is not None:
+                    from threestudio.data.gs_load import select_key_views_by_lens_fps
+                    key_indices = select_key_views_by_lens_fps(
+                        gaussian, cams, n_key=_n_key,
+                        top_fraction=0.20, w_vis=0.6, w_can=0.4, device=str(device),
+                    )
+                    key_indices = [int(i) for i in key_indices]
+                elif key_selection_strategy == "uniform_random":
+                    segment_size = n_views / _n_key
+                    key_indices = []
+                    for i in range(_n_key):
+                        start = int(i * segment_size)
+                        end = min(int((i + 1) * segment_size), n_views) - 1
+                        if end < start:
+                            end = start
+                        key_indices.append(random.randint(start, end))
+                    key_indices = sorted(key_indices)
+                    key_indices = [int(i) for i in key_indices]
+                elif key_selection_strategy == "manual":
+                    pass
+                else:
+                    key_indices = torch.linspace(0, n_views - 1, _n_key, dtype=torch.long, device=device).tolist()
+                    key_indices = [int(i) for i in key_indices]
+            elif key_indices is None or len(key_indices) == 0:
+                raise ValueError("edit_latents_multiview requires key_indices or (key_selection_strategy and num_key_views)")
+
+        print(f"[edit_latents_multiview.target_denoise_loop] key view indices: {key_indices}, actual camera IDs: {key_cams} number of key views: {n_key}")
+        print(f"[edit_latents_multiview.target_denoise_loop] number of target views: {n_target}")
+
+        # ------------------------------------------------------------------
+        # Phase 2. Target-view preparation (after key_denoise_loop is done)
+        #   - install ConsistentCrossAttnProcessor on attn2 blocks
+        #   - add noise to latents and (optionally) fix key-view latents
+        #   - decide target view indices and gather their conditions
+        #   - (optionally) build 3D-anchor cache for "3d_anchor" mode
+        # ------------------------------------------------------------------
         with latency_logger.timeit(f"{_p}.install_consistent_processor") if latency_logger else nullcontext():
             consistent_processor = ConsistentCrossAttnProcessor(backup_processor=None)
             for name, mod in self.unet.named_modules():
@@ -726,6 +835,30 @@ class DGEGuidance(BaseObject):
             target_pos_emb = positive_text_embedding[target_indices]
             target_neg_emb = negative_text_embedding[target_indices]
 
+        # Build 3D-anchor cache once when using 3d_anchor feature injection.
+        # This also happens after key_denoise_loop and before target_denoise_loop.
+        # Build 3D-anchor cache once when using 3d_anchor feature injection
+        anchor_3d_cache = None
+        if _feature_injection_mode == "3d_anchor":
+            with latency_logger.timeit(f"{_p}.build_anchor_3d_cache") if latency_logger else nullcontext():
+                scales_anchor = [(int(r ** 0.5), int(r ** 0.5)) for r in collected_resolutions]
+                gp_full = build_gaussian_provenance_cache(
+                    gaussian, cams, key_indices, scales_anchor,
+                    K=2, M_half=1, vis_eps=0.05, alpha_tau=0.4,
+                )
+                anchor_3d_cache = {
+                    "pix2g_id": gp_full["pix2g_id"],
+                    "pix2g_w": gp_full["pix2g_w"],
+                    "g2uv": gp_full["g2uv"],
+                    "g_vis": gp_full["g_vis"],
+                    "g2uv_all": gp_full.get("g2uv_all", {}),
+                }
+
+        # ------------------------------------------------------------------
+        # Phase 3. Target-view denoise loop
+        #   - run denoising only on target views (keys are fixed if skipped)
+        #   - use consistent cross-attention and (optionally) 3D-anchor
+        # ------------------------------------------------------------------
         with latency_logger.timeit(f"{_p}.target_denoise_loop") if latency_logger else nullcontext():
             # latents_target: views to denoise, shaped [n_target, 4, H, W]
             latents_target = latents[target_indices]
@@ -756,7 +889,13 @@ class DGEGuidance(BaseObject):
 
                 ## 이게 있어야지 퀄리티가 좋음.!!
                 with latency_logger.timeit(f"{_p}.target_denoise_loop.pivotal_forward") if latency_logger else nullcontext():
-                    self.forward_unet(latent_model_input, t_step.unsqueeze(0).expand(len(pivotal_idx) * 3).to(device), encoder_hidden_states=pivot_text_embeddings)
+                    if latency_logger:
+                        set_unet_latency_prefix(f"{_p}.target_denoise_loop.pivotal_forward.unet_forward")
+                    try:
+                        self.forward_unet(latent_model_input, t_step.unsqueeze(0).expand(len(pivotal_idx) * 3).to(device), encoder_hidden_states=pivot_text_embeddings)
+                    finally:
+                        if latency_logger:
+                            set_unet_latency_prefix(None)
 
                 register_pivotal(self.unet, False)
                 noise_pred_text = []
@@ -780,6 +919,17 @@ class DGEGuidance(BaseObject):
                         _attn_map_val = data if _use_consistent else None
                         for _, mod in _attn2_modules:
                             setattr(mod, "_consistent_attn_map_current", _attn_map_val)
+                        if _feature_injection_mode == "3d_anchor" and anchor_3d_cache is not None:
+                            _batch_idx = b // camera_batch_size
+                            _pivot_global = target_indices[pivotal_idx[_batch_idx].item()] if _batch_idx < len(pivotal_idx) else target_indices[0]
+                            with latency_logger.timeit(f"{_p}.target_denoise_loop.register_anchor_3d_cache") if latency_logger else nullcontext():
+                                register_anchor_3d_cache(
+                                    self.unet, anchor_3d_cache,
+                                    batch_view_indices=batch_target_indices,
+                                    injection_lambda=_injection_lambda,
+                                    pivot_view_index=_pivot_global,
+                                    injection_3d_anchor_style=_injection_3d_anchor_style,
+                                )
                         _batch_idx = b // camera_batch_size
                         _pivot_this_batch = pivotal_idx[_batch_idx] % camera_batch_size if _batch_idx < len(pivotal_idx) else 0
                         for _, mod in _dge_blocks:
@@ -797,7 +947,16 @@ class DGEGuidance(BaseObject):
                         ], dim=0)
                         batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
                     with latency_logger.timeit(f"{_p}.target_denoise_loop.batch_forward") if latency_logger else nullcontext():
-                        batch_noise_pred = self.forward_unet(batch_model_input, t_step.unsqueeze(0).expand(len(batch_local_indices) * 3).to(device), encoder_hidden_states=batch_text_embeddings)
+                        if latency_logger:
+                            set_unet_latency_prefix(f"{_p}.target_denoise_loop.batch_forward.unet_forward")
+                        try:
+                            batch_noise_pred = self.forward_unet(batch_model_input, t_step.unsqueeze(0).expand(len(batch_local_indices) * 3).to(device), encoder_hidden_states=batch_text_embeddings)
+                        finally:
+                            if latency_logger:
+                                set_unet_latency_prefix(None)
+                    if _feature_injection_mode == "3d_anchor":
+                        with latency_logger.timeit(f"{_p}.target_denoise_loop.unregister_anchor_3d_cache") if latency_logger else nullcontext():
+                            unregister_anchor_3d_cache(self.unet)
                     batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
                     noise_pred_text.append(batch_noise_pred_text)
                     noise_pred_image.append(batch_noise_pred_image)
@@ -972,8 +1131,20 @@ class DGEGuidance(BaseObject):
             rgb_BCHW, (RH, RW), mode="bilinear", align_corners=False
         )
         
-        use_multiview_path = kwargs.get("use_multiview", False) and kwargs.get("gaussian", None) is not None and kwargs.get("key_indices", None) is not None and len(kwargs.get("key_indices", [])) > 0
+        _kv = kwargs.get("key_indices", None)
+        _strat = kwargs.get("key_selection_strategy", None)
+        _nkv = kwargs.get("num_key_views", None)
+        use_multiview_path = (
+            kwargs.get("use_multiview", False)
+            and kwargs.get("gaussian", None) is not None
+            and kwargs.get("pipe", None) is not None
+            and (_kv is not None and len(_kv) > 0 or _strat is not None and _nkv is not None)
+        )
         _prefix = EDIT_MULTIVIEW_PREFIX if use_multiview_path else EDIT_ALL_VIEW_PREFIX
+
+        # So that DGE blocks (make_dge_block) can record latency under the correct hierarchy
+        if latency_logger is not None:
+            register_latency_logger(self.unet, latency_logger)
 
         with latency_logger.timeit(f"{_prefix}.encode_images"):
             latents = self.encode_images(rgb_BCHW_HW8)
@@ -1031,15 +1202,18 @@ class DGEGuidance(BaseObject):
             pipe = kwargs.get("pipe", pipe)
             key_indices = kwargs.get("key_indices", None)
             prompt_text = kwargs.get("prompt_text", "") or getattr(prompt_utils, "prompt", "")
-            if use_multiview and gaussian is not None and pipe is not None and key_indices is not None and len(key_indices) > 0:
+            if use_multiview and gaussian is not None and pipe is not None and (key_indices is not None and len(key_indices) > 0 or _strat is not None and _nkv is not None):
                 key_view_camera_ids = kwargs.get("key_view_camera_ids", None)
                 with latency_logger.timeit(f"{_prefix}.edit_latents_multiview"):
                     edit_latents = self.edit_latents_multiview(
                         text_embeddings, latents, cond_latents, t, cams,
-                        key_indices=key_indices, gaussian=gaussian, pipe=pipe, prompt_text=prompt_text,
+                        # key_indices=key_indices, 
+                        # key_view_camera_ids=key_view_camera_ids,
+                        gaussian=gaussian, pipe=pipe, prompt_text=prompt_text,
                         latency_logger=latency_logger,
-                        key_view_camera_ids=key_view_camera_ids,
                         skip_key_views_in_target_loop=self.cfg.skip_key_views_in_target_loop,
+                        key_selection_strategy=_strat,
+                        num_key_views=_nkv,
                     )
             else:
                 gp_cache = kwargs.get("gp_cache", None)

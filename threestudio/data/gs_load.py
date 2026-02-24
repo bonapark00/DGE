@@ -18,7 +18,7 @@ from threestudio.utils.misc import get_device
 import numpy as np
 import math
 from plyfile import PlyData
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 def safe_normalize(x, eps=1e-20):
@@ -727,6 +727,11 @@ def _lens_score_candidates(cameras, gaussians, roi_mask, roi_info, pipe_params, 
 
 
 def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
+    """
+    Energy-weighted FPS: first select highest-energy camera, then iteratively
+    select the one farthest from already selected (angular distance) and with high energy.
+    Returns list of indices in selection order (no azimuth sort).
+    """
     n_pool = max(int(len(scored) * top_fraction), n_select)
     pool = scored[:n_pool]
     pool_indices = [s[0] for s in pool]
@@ -757,6 +762,61 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
             remaining.discard(best_idx)
         else:
             break
+    return selected
+
+
+def select_key_views_by_lens_fps(
+    gaussians,
+    cameras: List[Any],
+    n_key: int,
+    roi_mask: Optional[torch.Tensor] = None,
+    roi_info: Optional[Dict] = None,
+    center: Optional[np.ndarray] = None,
+    top_fraction: float = 0.20,
+    w_vis: float = 0.6,
+    w_can: float = 0.4,
+    pipe_params=None,
+    background=None,
+    override_opacity=None,
+    device: str = "cuda",
+) -> List[int]:
+    """
+    Select K key views from an existing list of cameras using the same
+    energy-weighted FPS as LENS Step 5 (no azimuth sort).
+    Returns indices into `cameras` in FPS selection order (first K).
+    """
+    if not cameras or n_key <= 0:
+        return []
+    n_key = min(n_key, len(cameras))
+    cam_centers = np.stack([
+        c.camera_center.cpu().numpy() if hasattr(c.camera_center, "cpu") else np.array(c.camera_center)
+        for c in cameras
+    ], axis=0)
+    if roi_info is None:
+        center_approx = cam_centers.mean(axis=0).astype(np.float32) if center is None else center
+        cam_forwards = _lens_normalize(center_approx[None, :] - cam_centers)
+        roi_info = _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+    center = center if center is not None else roi_info["center"]
+    if pipe_params is None:
+        from argparse import Namespace
+        from gaussiansplatting.arguments import PipelineParams, ArgumentParser
+        parser = ArgumentParser()
+        pp = PipelineParams(parser)
+        args = Namespace(convert_SHs_python=False, compute_cov3D_python=False, debug=False)
+        pipe_params = pp.extract(args)
+    if background is None:
+        background = torch.tensor([0, 0, 0], dtype=torch.float32, device=device)
+    scored = _lens_score_candidates(
+        cameras, gaussians, roi_mask, roi_info, pipe_params, background,
+        w_vis=w_vis, w_can=w_can,
+        override_opacity=override_opacity, device=device,
+    )
+    if not scored:
+        return list(range(n_key))
+    selected = _lens_diversity_selection(
+        cameras, scored, center,
+        n_select=n_key, top_fraction=top_fraction,
+    )
     return selected
 
 
@@ -2102,6 +2162,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         self.scene.cameras.clear()
         self.scene.cameras.extend(final_cameras)
         train_view_indices = list(range(len(final_cameras)))
+        # Edit views = first max_edit_view_num in azimuth-sorted list (indices 0..max_edit_view_num-1)
         edit_view_indices = train_view_indices[:max_edit_view_num]
         threestudio.info(f"[Lens] train_view_index={len(train_view_indices)}, edit_view_index={len(edit_view_indices)} (first {max_edit_view_num} of {max_view_num})")
         return train_view_indices, edit_view_indices
