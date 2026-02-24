@@ -223,6 +223,8 @@ class DGEGuidance(BaseObject):
         injection_lambda: float = 0.5
         # 3d_anchor only: "blend" = λ*(F-h)+h; "gather" = similarity-like: pivot self-attn + 3D-GS remap gather + residual (no λ).
         injection_3d_anchor_style: str = "blend"
+        # Key-view denoise loop: if True, use extended (multi-frame) self-attention after warmup; if False, always use normal self-attention.
+        key_denoise_use_extended_attention: bool = False
 
     def configure(self, preloaded_pipe=None, **kwargs) -> None:
         self.weights_dtype = (
@@ -627,9 +629,10 @@ class DGEGuidance(BaseObject):
         # else:
         #     print(f"[edit_latents_multiview] key view indices: {key_indices}")
 
-        key_indices = [_ for _ in range(20)]
-        key_cams = [cams[_] for _ in key_indices]
-        n_key = len(key_indices)
+        ## 2.2에서 cross attention map 수집에 쓰이는 view 개수 20개로 늘리고 싶으면 이렇게 하면 됨!
+        # key_indices = [_ for _ in range(20)]
+        # key_cams = [cams[_] for _ in key_indices]
+        # n_key = len(key_indices)
         print(f"[edit_latents_multiview.key_denoise_loop] key view indices: {key_indices}, actual camera IDs: {key_cams}")
         print(f"[edit_latents_multiview.key_denoise_loop] number of key views: {n_key}")
 
@@ -648,17 +651,32 @@ class DGEGuidance(BaseObject):
                 pivot_image_cond = torch.cat([
                     split_image_cond_latents[key_indices], split_image_cond_latents[key_indices], zero_image_cond_latents[key_indices]
                 ], dim=0)
+                # Key loop self-attention strategy:
+                # - key_denoise_use_extended_attention = False:
+                #     * always use normal self-attention (no frame-extend) for key loop
+                # - key_denoise_use_extended_attention = True:
+                #     * warmup (<100) with normal self-attn, then switch to extended (like target loop)
                 use_normal_attn = True
+                # Start key loop in normal-attn mode to have a well-defined initial state.
+                self.use_normal_unet()
                 for t_step in self.scheduler.timesteps:
                     with latency_logger.timeit(f"{_p}.key_view_denoise_loop.per_step_setup") if latency_logger else nullcontext():
-                        if t_step < 100:
+                        if self.cfg.key_denoise_use_extended_attention:
+                            # Original behavior: warmup with normal attn, then switch to extended.
+                            if t_step < 100:
+                                if not use_normal_attn:
+                                    self.use_normal_unet()
+                                    use_normal_attn = True
+                            else:
+                                if use_normal_attn:
+                                    register_normal_attn_flag(self.unet, False)
+                                    use_normal_attn = False
+                        else:
+                            # Always normal self-attention in key loop: if something toggled it off, restore.
                             if not use_normal_attn:
                                 self.use_normal_unet()
                                 use_normal_attn = True
-                        else:
-                            if use_normal_attn:
-                                register_normal_attn_flag(self.unet, False)
-                                use_normal_attn = False
+
                         register_pivotal(self.unet, True)
                         latent_model_input = torch.cat([latents_key] * 3)
                         latent_model_input = torch.cat([latent_model_input, pivot_image_cond], dim=1)
@@ -760,43 +778,41 @@ class DGEGuidance(BaseObject):
 
 
 
-
-
-            # Key indices: from strategy when provided (uniform / uniform_random / lens_fps), else use passed key_indices (e.g. manual)
-            if (
-                key_selection_strategy is not None
-                and key_selection_strategy not in ("manual",)
-                and num_key_views is not None
-            ):
-                _n_key = min(num_key_views, n_views)
-                if key_selection_strategy == "lens_fps" and gaussian is not None:
-                    from threestudio.data.gs_load import select_key_views_by_lens_fps
-                    key_indices = select_key_views_by_lens_fps(
-                        gaussian, cams, n_key=_n_key,
-                        top_fraction=0.20, w_vis=0.6, w_can=0.4, device=str(device),
-                    )
-                    key_indices = [int(i) for i in key_indices]
-                elif key_selection_strategy == "uniform_random":
-                    segment_size = n_views / _n_key
-                    key_indices = []
-                    for i in range(_n_key):
-                        start = int(i * segment_size)
-                        end = min(int((i + 1) * segment_size), n_views) - 1
-                        if end < start:
-                            end = start
-                        key_indices.append(random.randint(start, end))
-                    key_indices = sorted(key_indices)
-                    key_indices = [int(i) for i in key_indices]
-                elif key_selection_strategy == "manual":
-                    pass
-                else:
-                    key_indices = torch.linspace(0, n_views - 1, _n_key, dtype=torch.long, device=device).tolist()
-                    key_indices = [int(i) for i in key_indices]
-            elif key_indices is None or len(key_indices) == 0:
-                raise ValueError("edit_latents_multiview requires key_indices or (key_selection_strategy and num_key_views)")
+        # Key indices: from strategy when provided (uniform / uniform_random / lens_fps), else use passed key_indices (e.g. manual)
+        if (
+            key_selection_strategy is not None
+            and key_selection_strategy not in ("manual",)
+            and num_key_views is not None
+        ):
+            _n_key = min(num_key_views, n_views)
+            if key_selection_strategy == "lens_fps" and gaussian is not None:
+                from threestudio.data.gs_load import select_key_views_by_lens_fps
+                key_indices = select_key_views_by_lens_fps(
+                    gaussian, cams, n_key=_n_key,
+                    top_fraction=0.20, w_vis=0.6, w_can=0.4, device=str(device),
+                )
+                key_indices = [int(i) for i in key_indices]
+            elif key_selection_strategy == "uniform_random":
+                segment_size = n_views / _n_key
+                key_indices = []
+                for i in range(_n_key):
+                    start = int(i * segment_size)
+                    end = min(int((i + 1) * segment_size), n_views) - 1
+                    if end < start:
+                        end = start
+                    key_indices.append(random.randint(start, end))
+                key_indices = sorted(key_indices)
+                key_indices = [int(i) for i in key_indices]
+            elif key_selection_strategy == "manual":
+                pass
+            else:
+                key_indices = torch.linspace(0, n_views - 1, _n_key, dtype=torch.long, device=device).tolist()
+                key_indices = [int(i) for i in key_indices]
+        elif key_indices is None or len(key_indices) == 0:
+            raise ValueError("edit_latents_multiview requires key_indices or (key_selection_strategy and num_key_views)")
 
         print(f"[edit_latents_multiview.target_denoise_loop] key view indices: {key_indices}, actual camera IDs: {key_cams} number of key views: {n_key}")
-        print(f"[edit_latents_multiview.target_denoise_loop] number of target views: {n_target}")
+        # print(f"[edit_latents_multiview.target_denoise_loop] number of target views: {n_target}")
 
         # ------------------------------------------------------------------
         # Phase 2. Target-view preparation (after key_denoise_loop is done)

@@ -94,7 +94,7 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "2",
+                "--gpu", "3",
                 "trainer.max_steps=1500",
 
                 "system.prompt_processor.prompt=Make the pooh look like a robot",
