@@ -7,10 +7,12 @@ and a trained 3D Gaussian point_cloud.ply, then write PNGs + a video.
 Run:
   cd /working/style-transfer/DGE-camera-selection
   python render_colmap_views.py \
-    --ply_path /path/to/point_cloud/iteration_30000/point_cloud.ply \
+    --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
     --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
-    --out_dir output/colmap_views \
-    --video_path output/colmap_views.mp4
+    --out_dir /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/colmap_render_full  \
+    --render_width 1919 \
+    --render_height 1439 \
+    --video_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/colmap_render_full/colmap_views.mp4
 """
 
 import os
@@ -117,7 +119,7 @@ def main():
             max_rgb = float(rgb.max().item())
             print(f"[debug] view0 rgb mean/max = {mean_rgb:.6f}/{max_rgb:.6f}")
 
-        out_path = os.path.join(args.out_dir, f"{i:05d}_{getattr(cam, 'image_name', 'view')}.png")
+        out_path = os.path.join(args.out_dir, f"{getattr(cam, 'image_name', 'view')}.png")
         torchvision.utils.save_image(rgb, out_path)
         frames.append((rgb.clamp(0.0, 1.0) * 255.0).byte().permute(1, 2, 0).cpu().numpy())
 

@@ -117,7 +117,6 @@ class DGE(BaseLift3DSystem):
 
         # Multiview edit (key-view cross-attn + inverse-render + consistent map for target views)
         use_multiview_edit: bool = False  # If True, use edit_multiview instead of edit_all_view
-        multiview_num_key_views: Optional[int] = None  # Key views count (default: min(4, n_views//4))
         # Key view selection: "uniform" = linspace; "uniform_random" = one random per interval; "lens_fps" = LENS Step 5 energy-weighted FPS
         multiview_edit_key_selection_strategy: str = "uniform"
 
@@ -763,9 +762,17 @@ class DGE(BaseLift3DSystem):
                     cv2.imwrite(cur_path, out_to_save)
                     img_bgr = cv2.imread(cur_path)
                 cached_image = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-                self.origin_frames[id] = torch.tensor(
+                origin_img = torch.tensor(
                     cached_image / 255, device="cuda", dtype=torch.float32
-                )[None]
+                )[None]  # [1, H, W, 3]
+                self.origin_frames[id] = origin_img
+
+                # Also store the rendered origin image on the camera object itself
+                # so that downstream code can access it as a camera-attached tensor.
+                cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                img_chw = origin_img[0].permute(2, 0, 1).contiguous()  # [3, H, W]
+                device = getattr(cur_cam, "data_device", img_chw.device)
+                cur_cam.rendered_image_from_generated_view = img_chw.to(device)
 
     def on_before_optimizer_step(self, optimizer):
         with torch.no_grad():
@@ -1257,7 +1264,7 @@ class DGE(BaseLift3DSystem):
             )
         print("edited images saved to:", self.get_save_path("edited_images.png"))
 
-    def edit_multiview(self, original_render_name, cache_name, update_camera=False, global_step=0, num_key_views=None):
+    def edit_multiview(self, original_render_name, cache_name, update_camera=False, global_step=0):
         """
         Multiview edit: key views edited with cross-view (pivotal) attention; cross-attention
         from key views is inverse-rendered to 3D and re-rendered to consistent 2D maps;
@@ -1292,10 +1299,10 @@ class DGE(BaseLift3DSystem):
         cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
 
         camera_batch_size = getattr(self.cfg.guidance, "camera_batch_size", 5)
-        # n_views = len(view_sorted)
-        # if num_key_views is None:
-        #     num_key_views = max(1, min(4, n_views // 4))
-        # num_key_views = min(num_key_views, n_views)
+        n_views = len(view_sorted)
+        # Derive number of key views purely from editing cameras and batch size:
+        #   num_key_views = max(1, floor(n_views / camera_batch_size))
+        num_key_views = max(1, n_views // camera_batch_size)
         key_selection = getattr(self.cfg, "multiview_edit_key_selection_strategy", "uniform")
         # if key_selection == "lens_fps" and self.gaussian is not None and n_views >= num_key_views:
         #     from threestudio.data.gs_load import select_key_views_by_lens_fps
@@ -2432,7 +2439,6 @@ class DGE(BaseLift3DSystem):
                     cache_name="edited_views_multiview",
                     update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
                     global_step=self.true_global_step,
-                    num_key_views=self.cfg.multiview_num_key_views,
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("edit_all_view"):

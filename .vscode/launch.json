@@ -107,7 +107,6 @@
                 // "system.guidance.injection_3d_anchor_style=gather",
                 "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
                 // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
-                "system.multiview_num_key_views=4",
                 
 
                 // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his face",

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m gaussiansplatting.render_from_json:*)",
+      "Bash(python -c:*)",
+      "Bash(python:*)",
+      "Bash(ls:*)",
+      "Bash(pip show:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

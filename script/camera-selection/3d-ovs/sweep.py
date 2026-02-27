@@ -47,18 +47,13 @@ import wandb
 # ==========================
 
 CONFIG = "configs/dge_camera-selection.yaml"
-GPU = "0,1"  # default; override with --gpu (e.g. "0" or "0,1,2" for multi-GPU per run)
+GPU = "0,1,2,3"  # default; override with --gpu (e.g. "0" or "0,1,2" for multi-GPU per run)
 
 DATA_TYPE = "3d-ovs"
-DATA_NAME = "covered_desk"
-PROMPT = "Change the fleece jacket into a leather jacket"
-SEG_PROMPT = "fleece jacket"
-MMR_SEG_PROMPT = SEG_PROMPT
-TARGET_PROMPT = "Leather jacket"
-
-DATA_SOURCE = f"/data/users/jaeyeonpark/dataset/{DATA_TYPE}/{DATA_NAME}/"
-GS_SOURCE = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/point_cloud/iteration_30000/point_cloud.ply"
-
+DATA_NAME = "covered_desk"  # default; may be overridden per TASK via DATA_NAME
+DATA_SOURCE_ROOT = "/data/users/jaeyeonpark/dataset"
+GS_SOURCE_ROOT = "/data/users/jaeyeonpark/3dgs-trained"
+RENDER_SUBDIR = "colmap_render_full"
 GUIDANCE_SCALE = "12.5"
 MASK_THRES = "0.6"
 MAX_VIEW_NUM = "25"
@@ -80,6 +75,12 @@ USE_SDS = False
 USE_SDS_DGE = False
 LAMBDA_SDS = "0.0"
 
+FEATURE_INJECTION_MODE = "similarity" # `"similarity"`(내 논문) , `"3d_anchor"` | 3d_anchor 시 `injection_3d_anchor_style` (`"blend"` | `"gather"`).
+MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY = "lens_fps"
+USE_MULTIVIEW_EDIT_DEFAULT = True
+USE_GAUSSIAN_PROVENANCE_DEFAULT = False
+SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
+
 LENS_USE_IP2P_SCORING = "true"
 LENS_IP2P_STEPS = "5"
 LENS_IP2P_GUIDANCE_SCALE = "12.5"
@@ -89,13 +90,9 @@ LENS_CONE_HALF_ANGLE_DEG = "60"
 LENS_LAMBDA_LEAK = "1.5"
 LENS_LAMBDA_ENT = "15.0"
 
-ORIGIN_RENDER_BASE = "/data/users/jaeyeonpark/DGE-outputs/origin_render"
 EDIT_VIEW_SELECTION_STRATEGY_DEFAULT = "lens"
-GT_DIR = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/train/ours_30000/renders"
 
 
-STYLE_TARGET_PROMPT = "A man with a leather jacket"
-STYLE_SOURCE_PROMPT = SEG_PROMPT
 INTERVAL = 1
 DEVICE = "cuda"
 LAMBDA_ISM_DEFAULT = 0.0001
@@ -103,7 +100,7 @@ USE_WARP_REFINE_DEFAULT = True
 WARP_REFINE_COLOR_FIT_STEPS_DEFAULT = 100 
 
 WANDB_PROJECT = "dge-camera-selection"
-WANDB_SWEEP_NAME = f"sweep/{DATA_TYPE}/{DATA_NAME}"
+WANDB_SWEEP_NAME = f"sweep/{DATA_TYPE}"
 
 # ==========================
 # Prompt combinations for 3d-ovs; sweep can vary over these via "task" parameter
@@ -112,9 +109,11 @@ WANDB_SWEEP_NAME = f"sweep/{DATA_TYPE}/{DATA_NAME}"
 
 # STYLE_SOURCE_PROMPT = 편집 전(원본), STYLE_TARGET_PROMPT = 편집 후(목표)
 TASKS = [
+    ## covered_desk
     # 1) Change the shaving razor into an apple
     {
         "name": "razor_to_apple",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Change the shaving razor into an apple",
         "SEG_PROMPT": "shaving razor",
         "TARGET_PROMPT": "apple",
@@ -124,6 +123,7 @@ TASKS = [
     # 2) Change the shampoo bottle into an apple
     {
         "name": "bottle_to_apple",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Change the shampoo bottle into an apple",
         "SEG_PROMPT": "shampoo bottle",
         "TARGET_PROMPT": "apple",
@@ -133,6 +133,7 @@ TASKS = [
     # 3) Give the pooh a pair of pants
     {
         "name": "pooh_pants",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Give the pooh a pair of pants",
         "SEG_PROMPT": "pooh",
         "TARGET_PROMPT": "pants",
@@ -142,6 +143,7 @@ TASKS = [
     # 4) Make the pooh look like a penguin
     {
         "name": "pooh_penguin",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Make the pooh look like a penguin",
         "SEG_PROMPT": "pooh",
         "TARGET_PROMPT": "penguin",
@@ -151,6 +153,7 @@ TASKS = [
     # 5) Change the red sweater into a leather jacket
     {
         "name": "sweater_to_leather_jacket",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Change the red sweater into a leather jacket",
         "SEG_PROMPT": "red sweater of the pooh",
         "TARGET_PROMPT": "leather jacket of the pooh",
@@ -160,6 +163,7 @@ TASKS = [
     # 6) Make the pooh wear sunglasses on his face
     {
         "name": "pooh_sunglasses",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Make the pooh wear sunglasses on his face",
         "SEG_PROMPT": "head of the pooh",
         "TARGET_PROMPT": "sunglasses",
@@ -169,6 +173,7 @@ TASKS = [
     # 7) Change the pooh's sweater color to blue
     {
         "name": "sweater_blue",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Change the pooh's sweater color to blue",
         "SEG_PROMPT": "red sweater of the pooh",
         "TARGET_PROMPT": "blue sweater of the pooh",
@@ -178,6 +183,7 @@ TASKS = [
     # 8) Add flower pattern to the pooh's sweater
     {
         "name": "sweater_flower",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Add flower pattern to the pooh's sweater",
         "SEG_PROMPT": "red sweater of the pooh",
         "TARGET_PROMPT": "sweater of the pooh with flower pattern",
@@ -187,6 +193,7 @@ TASKS = [
     # 9) Make the pooh look like a panda
     {
         "name": "pooh_panda",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Make the pooh look like a panda",
         "SEG_PROMPT": "pooh",
         "TARGET_PROMPT": "panda",
@@ -196,11 +203,217 @@ TASKS = [
     # 10) Make the pooh look like a robot
     {
         "name": "pooh_robot",
+        "DATA_NAME": "covered_desk",
         "PROMPT": "Make the pooh look like a robot",
         "SEG_PROMPT": "pooh",
         "TARGET_PROMPT": "robot",
         "STYLE_SOURCE_PROMPT": "pooh",
         "STYLE_TARGET_PROMPT": "robot",
+    },
+
+
+    ## blue_sofa
+    # 1) Change the plush toy's color to pink
+    {
+        "name": "plush_pink",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the plush toy's color to pink",
+        "SEG_PROMPT": "yellow plush toy",
+        "TARGET_PROMPT": "pink plush toy",
+        "STYLE_SOURCE_PROMPT": "yellow plush toy",
+        "STYLE_TARGET_PROMPT": "pink plush toy",
+    },
+    # 2) Make the plush toy wear a tiny hat
+    {
+        "name": "plush_hat",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Make the plush toy wear a tiny hat",
+        "SEG_PROMPT": "head of the plush toy",
+        "TARGET_PROMPT": "head of the plush toy wearing a tiny party hat",
+        "STYLE_SOURCE_PROMPT": "head of the plush toy",
+        "STYLE_TARGET_PROMPT": "head of the plush toy wearing a tiny party hat",
+    },
+    # 3) Change the sunglasses to red frames
+    {
+        "name": "glasses_red",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the sunglasses to red frames",
+        "SEG_PROMPT": "black frames of the sunglasses",
+        "TARGET_PROMPT": "bright red frames of the sunglasses",
+        "STYLE_SOURCE_PROMPT": "black frames of the sunglasses",
+        "STYLE_TARGET_PROMPT": "bright red frames of the sunglasses",
+    },
+    # 4) Replace the JBL speaker with a vintage radio
+    {
+        "name": "speaker_vintage",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Replace the JBL speaker with a vintage radio",
+        "SEG_PROMPT": "grey JBL speaker",
+        "TARGET_PROMPT": "vintage wooden radio",
+        "STYLE_SOURCE_PROMPT": "grey JBL speaker",
+        "STYLE_TARGET_PROMPT": "vintage wooden radio",
+    },
+    # 5) Change the perfume liquid color to blue
+    {
+        "name": "perfume_blue",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the perfume liquid color to blue",
+        "SEG_PROMPT": "yellow liquid inside the perfume bottle",
+        "TARGET_PROMPT": "ocean blue liquid inside the perfume bottle",
+        "STYLE_SOURCE_PROMPT": "yellow liquid inside the perfume bottle",
+        "STYLE_TARGET_PROMPT": "ocean blue liquid inside the perfume bottle",
+    },
+    # 6) Add a digital clock display to the remote controller
+    {
+        "name": "remote_digital",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Make the remote controller screen glow neon green",
+        "SEG_PROMPT": "screen of the white remote controller",
+        "TARGET_PROMPT": "glowing neon green screen of the remote controller",
+        "STYLE_SOURCE_PROMPT": "screen of the white remote controller",
+        "STYLE_TARGET_PROMPT": "glowing neon green screen of the remote controller",
+    },
+    # 7) Turn the plush toy into a tiger
+    {
+        "name": "plush_tiger",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the plush toy's pattern to tiger stripes",
+        "SEG_PROMPT": "plush toy",
+        "TARGET_PROMPT": "tiger striped plush toy",
+        "STYLE_SOURCE_PROMPT": "plush toy",
+        "STYLE_TARGET_PROMPT": "tiger striped plush toy",
+    },
+    # 8) Change the speaker color to gold
+    {
+        "name": "speaker_gold",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the speaker to a shiny gold texture",
+        "SEG_PROMPT": "grey speaker body",
+        "TARGET_PROMPT": "shiny metallic gold speaker body",
+        "STYLE_SOURCE_PROMPT": "grey speaker body",
+        "STYLE_TARGET_PROMPT": "shiny metallic gold speaker body",
+    },
+    # 9) Make the sunglasses look like aviator glasses
+    {
+        "name": "glasses_aviator",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the sunglasses style to gold-rimmed aviators",
+        "SEG_PROMPT": "black sunglasses",
+        "TARGET_PROMPT": "gold-rimmed aviator sunglasses",
+        "STYLE_SOURCE_PROMPT": "black sunglasses",
+        "STYLE_TARGET_PROMPT": "gold-rimmed aviator sunglasses",
+    },
+    # 10) Change the perfume bottle cap to silver
+    {
+        "name": "perfume_silver_cap",
+        "DATA_NAME": "blue_sofa",
+        "PROMPT": "Change the perfume bottle cap to silver",
+        "SEG_PROMPT": "black cap of the perfume bottle",
+        "TARGET_PROMPT": "polished silver cap of the perfume bottle",
+        "STYLE_SOURCE_PROMPT": "black cap of the perfume bottle",
+        "STYLE_TARGET_PROMPT": "polished silver cap of the perfume bottle",
+    },
+
+    ## room
+    # 1) Change the rubber chicken's color to red
+    {
+        "name": "chicken_red",
+        "DATA_NAME": "room",
+        "PROMPT": "Change the rubber chicken's color to red",
+        "SEG_PROMPT": "yellow rubber chicken",
+        "TARGET_PROMPT": "red rubber chicken",
+        "STYLE_SOURCE_PROMPT": "yellow rubber chicken",
+        "STYLE_TARGET_PROMPT": "red rubber chicken",
+    },
+    # 2) Make the rabbit figure white
+    {
+        "name": "rabbit_white",
+        "DATA_NAME": "room",
+        "PROMPT": "Make the rabbit figure white",
+        "SEG_PROMPT": "grey rabbit figure",
+        "TARGET_PROMPT": "white rabbit figure",
+        "STYLE_SOURCE_PROMPT": "grey rabbit figure",
+        "STYLE_TARGET_PROMPT": "white rabbit figure",
+    },
+    # 3) Change the dinosaur figure to green
+    {
+        "name": "dino_green",
+        "DATA_NAME": "room",
+        "PROMPT": "Change the dinosaur figure to green",
+        "SEG_PROMPT": "brown dinosaur figure",
+        "TARGET_PROMPT": "green dinosaur figure",
+        "STYLE_SOURCE_PROMPT": "brown dinosaur figure",
+        "STYLE_TARGET_PROMPT": "green dinosaur figure",
+    },
+    # 4) Replace the baseball with a tennis ball
+    {
+        "name": "ball_tennis",
+        "DATA_NAME": "room",
+        "PROMPT": "Replace the baseball with a tennis ball",
+        "SEG_PROMPT": "white baseball",
+        "TARGET_PROMPT": "yellow tennis ball",
+        "STYLE_SOURCE_PROMPT": "white baseball",
+        "STYLE_TARGET_PROMPT": "yellow tennis ball",
+    },
+    # 5) Change the basket material to wood
+    {
+        "name": "basket_wood",
+        "DATA_NAME": "room",
+        "PROMPT": "Change the basket material to dark wood",
+        "SEG_PROMPT": "woven basket",
+        "TARGET_PROMPT": "dark wooden basket",
+        "STYLE_SOURCE_PROMPT": "woven basket",
+        "STYLE_TARGET_PROMPT": "dark wooden basket",
+    },
+    # 6) Add a tiny bow tie to the rubber chicken
+    {
+        "name": "chicken_bow_tie",
+        "DATA_NAME": "room",
+        "PROMPT": "Add a tiny blue bow tie to the rubber chicken's neck",
+        "SEG_PROMPT": "neck of the yellow rubber chicken",
+        "TARGET_PROMPT": "yellow rubber chicken wearing a tiny blue bow tie",
+        "STYLE_SOURCE_PROMPT": "neck of the yellow rubber chicken",
+        "STYLE_TARGET_PROMPT": "yellow rubber chicken wearing a tiny blue bow tie",
+    },
+    # 7) Give the rabbit figure sunglasses
+    {
+        "name": "rabbit_sunglasses",
+        "DATA_NAME": "room",
+        "PROMPT": "Give the rabbit figure a pair of small sunglasses",
+        "SEG_PROMPT": "face of the grey rabbit figure",
+        "TARGET_PROMPT": "grey rabbit figure wearing small sunglasses",
+        "STYLE_SOURCE_PROMPT": "face of the grey rabbit figure",
+        "STYLE_TARGET_PROMPT": "grey rabbit figure wearing small sunglasses",
+    },
+    # 8) Make the dinosaur figure look like it's made of metal
+    {
+        "name": "dino_metal",
+        "DATA_NAME": "room",
+        "PROMPT": "Make the dinosaur figure look like it's made of shiny metal",
+        "SEG_PROMPT": "brown dinosaur figure",
+        "TARGET_PROMPT": "shiny metallic dinosaur figure",
+        "STYLE_SOURCE_PROMPT": "brown dinosaur figure",
+        "STYLE_TARGET_PROMPT": "shiny metallic dinosaur figure",
+    },
+    # 9) Change the baseball to a golden ball
+    {
+        "name": "ball_gold",
+        "DATA_NAME": "room",
+        "PROMPT": "Change the baseball to a solid golden ball",
+        "SEG_PROMPT": "white baseball",
+        "TARGET_PROMPT": "solid golden ball",
+        "STYLE_SOURCE_PROMPT": "white baseball",
+        "STYLE_TARGET_PROMPT": "solid golden ball",
+    },
+    # 10) Fill the basket with apples
+    {
+        "name": "basket_apples",
+        "DATA_NAME": "room",
+        "PROMPT": "Fill the empty space in the basket with red apples",
+        "SEG_PROMPT": "inside of the woven basket",
+        "TARGET_PROMPT": "woven basket filled with red apples",
+        "STYLE_SOURCE_PROMPT": "inside of the woven basket",
+        "STYLE_TARGET_PROMPT": "woven basket filled with red apples",
     },
 ]
 TASKS_BY_NAME = {t["name"]: t for t in TASKS}
@@ -244,10 +457,10 @@ SWEEP_CONFIG = {
             "values": [45, 60, 75],
         },
         # Warp-refine 사용 여부 (True: warp-refine 브랜치, False: 기존 DGE guidance)
-        "use_warp_refine": {
-            "values": [True, False],
-            # "values": [False],
-        },
+        # "use_warp_refine": {
+        #     "values": [True, False],
+        #     # "values": [False],
+        # },
         "task": {
             "values": [t["name"] for t in TASKS],
         },
@@ -350,8 +563,13 @@ def train_and_evaluate():
     style_target_prompt = task.get("STYLE_TARGET_PROMPT", "")
     style_source_prompt = task.get("STYLE_SOURCE_PROMPT", "a Photo")
 
+    data_name = task.get("DATA_NAME", DATA_NAME)
+    data_source = f"{DATA_SOURCE_ROOT}/{DATA_TYPE}/{data_name}/"
+    gs_source = f"{GS_SOURCE_ROOT}/{DATA_TYPE}/{data_name}/point_cloud/iteration_30000/point_cloud.ply"
+    gt_dir = f"{GS_SOURCE_ROOT}/{DATA_TYPE}/{data_name}/{RENDER_SUBDIR}"
+
     name = (
-        f"sweep/{DATA_TYPE}/{DATA_NAME}"
+        f"sweep/{DATA_TYPE}/{data_name}"
         f"/lambda_d{lambda_d}/{strategy}/lambda_ism{lambda_ism}/cf{warp_refine_color_fit_steps}/wr{use_warp_refine}/{task_name}"
     )
 
@@ -366,9 +584,10 @@ def train_and_evaluate():
         "--gpu", gpu,
         f"trainer.max_steps={MAX_STEPS}",
         f"system.prompt_processor.prompt={prompt}",
-        f"data.source={DATA_SOURCE}",
+        f"data.source={data_source}",
         f"system.guidance.guidance_scale={GUIDANCE_SCALE}",
-        f"system.gs_source={GS_SOURCE}",
+        f"system.guidance.feature_injection_mode={FEATURE_INJECTION_MODE}",
+        f"system.gs_source={gs_source}",
         f"system.seg_prompt={seg_prompt}",
         f"data.mmr_seg_prompt={seg_prompt}",
         f"system.target_prompt={target_prompt}",
@@ -388,8 +607,12 @@ def train_and_evaluate():
         f"system.use_warp_refine={str(use_warp_refine).lower()}",
         f"data.max_view_num={MAX_VIEW_NUM}",
         f"data.max_edit_view_num={MAX_EDIT_VIEW_NUM}",
+        f"system.multiview_edit_key_selection_strategy={MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY}",
+        f"system.use_multiview_edit={str(USE_MULTIVIEW_EDIT_DEFAULT).lower()}",
+        f"system.use_gaussian_provenance={str(USE_GAUSSIAN_PROVENANCE_DEFAULT).lower()}",
+        f"system.guidance.skip_key_views_in_target_loop={str(SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT).lower()}",
         f"data.edit_view_selection_strategy={strategy}",
-        f"data.lens_ply_path={GS_SOURCE}",
+        f"data.lens_ply_path={gs_source}",
         f"data.lens_seg_prompt={seg_prompt}",
         f"data.lens_edit_prompt={prompt}",
         f"data.lens_use_ip2p_scoring={LENS_USE_IP2P_SCORING}",
@@ -456,7 +679,7 @@ def train_and_evaluate():
 
     # ---- Run metrics ----
     # GT dir must match this run's strategy (lens vs random); path must exist with pre-generated origin renders
-    gt_dir = GT_DIR
+    gt_dir = gt_dir
     # Use first GPU in list for metrics (e.g. "0,1" -> cuda:0)
     gpu_id = gpu.split(",")[0].strip()
     device = f"cuda:{gpu_id}"
