@@ -25,6 +25,7 @@ from argparse import ArgumentParser
 from threestudio.utils.misc import get_device
 from threestudio.utils.perceptual import PerceptualLoss
 from threestudio.utils.sam import LangSAMTextSegmentor
+from threestudio.utils.latency import LatencyLogger
 
 @threestudio.register("dge-system")
 class DGE(BaseLift3DSystem):
@@ -98,6 +99,9 @@ class DGE(BaseLift3DSystem):
         else:
             self.cache_dir = os.path.join("edit_cache", self.cfg.gs_source.replace("/", "-"))
 
+        # Latency logger for hierarchical timing (e.g. 2d_editing.*, 3d_finetune.*)
+        self.latency_logger = LatencyLogger(os.path.join(self.cache_dir, "latency"))
+
     @torch.no_grad()
     def update_mask(self, save_name="mask") -> None:
         print(f"Segment with prompt: {self.cfg.seg_prompt}")
@@ -113,38 +117,39 @@ class DGE(BaseLift3DSystem):
             weights_cnt = torch.zeros_like(self.gaussian._opacity, dtype=torch.int32)
             threestudio.info(f"Segmentation with prompt: {self.cfg.seg_prompt}")
             for id in tqdm(self.view_list):
-                cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
-                cur_path_viz = os.path.join(
-                    mask_cache_dir, "viz_{:0>4d}.png".format(id)
-                )
+                with self.latency_logger.timeit("2d_editing.segmentation"):
+                    cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
+                    cur_path_viz = os.path.join(
+                        mask_cache_dir, "viz_{:0>4d}.png".format(id)
+                    )
 
-                cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
 
-                mask = self.text_segmentor(self.origin_frames[id], self.cfg.seg_prompt)[
-                    0
-                ].to(get_device())
+                    mask = self.text_segmentor(self.origin_frames[id], self.cfg.seg_prompt)[
+                        0
+                    ].to(get_device())
 
-                mask_to_save = (
-                        mask[0]
-                        .cpu()
-                        .detach()[..., None]
-                        .repeat(1, 1, 3)
-                        .numpy()
-                        .clip(0.0, 1.0)
-                        * 255.0
-                ).astype(np.uint8)
-                cv2.imwrite(cur_path, mask_to_save)
+                    mask_to_save = (
+                            mask[0]
+                            .cpu()
+                            .detach()[..., None]
+                            .repeat(1, 1, 3)
+                            .numpy()
+                            .clip(0.0, 1.0)
+                            * 255.0
+                    ).astype(np.uint8)
+                    cv2.imwrite(cur_path, mask_to_save)
 
-                masked_image = self.origin_frames[id].detach().clone()[0]
-                masked_image[mask[0].bool()] *= 0.3
-                masked_image_to_save = (
-                        masked_image.cpu().detach().numpy().clip(0.0, 1.0) * 255.0
-                ).astype(np.uint8)
-                masked_image_to_save = cv2.cvtColor(
-                    masked_image_to_save, cv2.COLOR_RGB2BGR
-                )
-                cv2.imwrite(cur_path_viz, masked_image_to_save)
-                self.gaussian.apply_weights(cur_cam, weights, weights_cnt, mask)
+                    masked_image = self.origin_frames[id].detach().clone()[0]
+                    masked_image[mask[0].bool()] *= 0.3
+                    masked_image_to_save = (
+                            masked_image.cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                    ).astype(np.uint8)
+                    masked_image_to_save = cv2.cvtColor(
+                        masked_image_to_save, cv2.COLOR_RGB2BGR
+                    )
+                    cv2.imwrite(cur_path_viz, masked_image_to_save)
+                    self.gaussian.apply_weights(cur_cam, weights, weights_cnt, mask)
 
             weights /= weights_cnt + 1e-7
 
@@ -575,12 +580,13 @@ class DGE(BaseLift3DSystem):
             images = torch.cat(images, dim=0)
             original_frames = torch.cat(original_frames, dim=0)
 
-            edited_images = self.guidance( # dge_guidance.py:478 의 __call__ 함수 호출
-                images,
-                original_frames,
-                self.prompt_processor(),
-                cams = cams_sorted
-            )
+            with self.latency_logger.timeit("2d_editing.diffusion_guidance"):
+                edited_images = self.guidance(  # dge_guidance.py:478 의 __call__ 함수 호출
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
+                    cams=cams_sorted,
+                )
 
             for view_index_tmp in range(len(self.view_list)):
                 self.edit_frames[view_sorted[view_index_tmp]] = edited_images['edit_images'][view_index_tmp].unsqueeze(0).detach().clone() # 1 H W C
@@ -613,87 +619,103 @@ class DGE(BaseLift3DSystem):
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0 or self.cfg.loss.use_sds:
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
             
-
     def training_step(self, batch, batch_idx):
-        if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
-            self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step) 
-    
-        self.gaussian.update_learning_rate(self.true_global_step)
-        batch_index = batch["index"]
+        with self.latency_logger.timeit("3d_finetune.training_step"):
+            if (
+                self.true_global_step % self.cfg.camera_update_per_step == 0
+                and self.cfg.guidance_type == "dge-guidance"
+                and not self.cfg.loss.use_sds
+            ):
+                self.edit_all_view(
+                    original_render_name="origin_render",
+                    cache_name="edited_views",
+                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                    global_step=self.true_global_step,
+                )
 
-        if isinstance(batch_index, int):
-            batch_index = [batch_index]
-        if self.cfg.guidance_type == 'dge-guidance': 
-            for img_index, cur_index in enumerate(batch_index):
-                if cur_index not in self.edit_frames:
-                    batch_index[img_index] = self.view_list[img_index]
+            self.gaussian.update_learning_rate(self.true_global_step)
+            batch_index = batch["index"]
 
-        out = self(batch, local=self.cfg.local_edit)
+            if isinstance(batch_index, int):
+                batch_index = [batch_index]
+            if self.cfg.guidance_type == "dge-guidance":
+                for img_index, cur_index in enumerate(batch_index):
+                    if cur_index not in self.edit_frames:
+                        batch_index[img_index] = self.view_list[img_index]
 
-        images = out["comp_rgb"]
-        mask = out["masks"].unsqueeze(-1)
-        loss = 0.0
-        # nerf2nerf loss
-        if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0:
-            prompt_utils = self.prompt_processor()
-            gt_images = []
-            for img_index, cur_index in enumerate(batch_index):
-                # if cur_index not in self.edit_frames:
-                #     # cur_index = self.view_list[0]
-                if (cur_index not in self.edit_frames or (
-                        self.cfg.per_editing_step > 0
-                        and self.cfg.edit_begin_step
-                        < self.global_step
-                        < self.cfg.edit_until_step
-                        and self.global_step % self.cfg.per_editing_step == 0
-                )) and 'dge' not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
-                    print(self.cfg.guidance_type)
-                    result = self.guidance(
-                        images[img_index][None],
-                        self.origin_frames[cur_index],
-                        prompt_utils,
-                    )
-                 
-                    self.edit_frames[cur_index] = result["edit_images"].detach().clone()
+            out = self(batch, local=self.cfg.local_edit)
 
-                gt_images.append(self.edit_frames[cur_index])
-            gt_images = torch.concatenate(gt_images, dim=0)
-            if self.cfg.use_masked_image:
-                print("use masked image")
-                guidance_out = {
-                "loss_l1": torch.nn.functional.l1_loss(images * mask, gt_images * mask),
-                "loss_p": self.perceptual_loss(
-                    (images * mask).permute(0, 3, 1, 2).contiguous(),
-                    (gt_images * mask ).permute(0, 3, 1, 2).contiguous(),
-                ).sum(),
-                }
-            else:
-                guidance_out = {
-                    "loss_l1": torch.nn.functional.l1_loss(images, gt_images),
-                    "loss_p": self.perceptual_loss(
-                        images.permute(0, 3, 1, 2).contiguous(),
-                        gt_images.permute(0, 3, 1, 2).contiguous(),
-                    ).sum(),
-                }
-            for name, value in guidance_out.items():
-                self.log(f"train/{name}", value)
-                if name.startswith("loss_"):
-                    loss += value * self.C(
-                        self.cfg.loss[name.replace("loss_", "lambda_")]
-                    )
-        # sds loss
-        if self.cfg.loss.use_sds:
-            prompt_utils = self.prompt_processor()
-            self.guidance.cfg.use_sds = True
-            guidance_out = self.guidance(
-                out["comp_rgb"],
-                torch.concatenate(
-                    [self.origin_frames[idx] for idx in batch_index], dim=0
-                ),
-                prompt_utils)  
-            loss += guidance_out["loss_sds"] * self.cfg.loss.lambda_sds 
+            images = out["comp_rgb"]
+            mask = out["masks"].unsqueeze(-1)
+            loss = 0.0
+            # nerf2nerf loss
+            if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0:
+                prompt_utils = self.prompt_processor()
+                gt_images = []
+                for img_index, cur_index in enumerate(batch_index):
+                    # if cur_index not in self.edit_frames:
+                    #     # cur_index = self.view_list[0]
+                    if (
+                        cur_index not in self.edit_frames
+                        or (
+                            self.cfg.per_editing_step > 0
+                            and self.cfg.edit_begin_step < self.global_step < self.cfg.edit_until_step
+                            and self.global_step % self.cfg.per_editing_step == 0
+                        )
+                    ) and "dge" not in str(self.cfg.guidance_type) and not self.cfg.loss.use_sds:
+                        print(self.cfg.guidance_type)
+                        result = self.guidance(
+                            images[img_index][None],
+                            self.origin_frames[cur_index],
+                            prompt_utils,
+                        )
 
-        for name, value in self.cfg.loss.items():
-            self.log(f"train_params/{name}", self.C(value))
-    
-        return {"loss": loss}
+                        self.edit_frames[cur_index] = result["edit_images"].detach().clone()
+
+                    gt_images.append(self.edit_frames[cur_index])
+                gt_images = torch.concatenate(gt_images, dim=0)
+                if self.cfg.use_masked_image:
+                    print("use masked image")
+                    guidance_out = {
+                        "loss_l1": torch.nn.functional.l1_loss(images * mask, gt_images * mask),
+                        "loss_p": self.perceptual_loss(
+                            (images * mask).permute(0, 3, 1, 2).contiguous(),
+                            (gt_images * mask).permute(0, 3, 1, 2).contiguous(),
+                        ).sum(),
+                    }
+                else:
+                    guidance_out = {
+                        "loss_l1": torch.nn.functional.l1_loss(images, gt_images),
+                        "loss_p": self.perceptual_loss(
+                            images.permute(0, 3, 1, 2).contiguous(),
+                            gt_images.permute(0, 3, 1, 2).contiguous(),
+                        ).sum(),
+                    }
+                for name, value in guidance_out.items():
+                    self.log(f"train/{name}", value)
+                    if name.startswith("loss_"):
+                        loss += value * self.C(
+                            self.cfg.loss[name.replace("loss_", "lambda_")]
+                        )
+            # sds loss
+            if self.cfg.loss.use_sds:
+                prompt_utils = self.prompt_processor()
+                self.guidance.cfg.use_sds = True
+                guidance_out = self.guidance(
+                    out["comp_rgb"],
+                    torch.concatenate(
+                        [self.origin_frames[idx] for idx in batch_index], dim=0
+                    ),
+                    prompt_utils,
+                )
+                loss += guidance_out["loss_sds"] * self.cfg.loss.lambda_sds
+
+            for name, value in self.cfg.loss.items():
+                self.log(f"train_params/{name}", self.C(value))
+
+            return {"loss": loss}
+
+    def on_fit_end(self) -> None:
+        # Persist latency summary at the end of training.
+        if hasattr(self, "latency_logger"):
+            self.latency_logger.write_summary("latency_summary.txt")

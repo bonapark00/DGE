@@ -1,0 +1,343 @@
+import os
+import sys
+import re
+import random
+from argparse import ArgumentParser
+from tqdm import tqdm
+from PIL import Image
+import torch
+import clip
+from CLIP import compose_text_with_templates
+from torchvision import transforms
+import numpy as np
+
+torch.manual_seed(0)
+random.seed(0)
+np.random.seed(0)
+
+cropper = transforms.Compose([
+    transforms.RandomCrop(128)
+])
+
+augment = transforms.Compose([
+    transforms.RandomPerspective(fill=0, p=1, distortion_scale=0.5),
+    transforms.Resize(224)
+])
+
+
+def encode_image(model,
+                 preprocess,
+                 image_path,
+                 patch=False,
+                 device="cuda"
+                 ):
+    """ Encode image using CLIP model
+    Args:
+        model: CLIP model
+        preprocess: Preprocessing function
+        image_path: Path to the image
+        device: Device to use for encoding
+    Returns:
+        image_feat: Encoded image feature
+    """
+
+    image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+    with torch.no_grad():
+        img_proc = []
+        if patch:
+            for _ in range(128):
+                target_crop = cropper(image)
+                target_crop = augment(target_crop)
+                img_proc.append(target_crop)
+        else:
+            img_proc.append(image)
+        img_proc = torch.cat(img_proc, dim=0)
+        image_feat = model.encode_image(img_proc)
+        image_feat /= (image_feat.clone().norm(dim=-1, keepdim=True))
+    return image_feat
+
+
+def encode_text(model,
+                text,
+                device
+                ):
+    """ Encode text using CLIP model
+    Args:
+        model: CLIP model
+        text: Text to encode
+        device: Device to use for encoding
+    Returns:
+        text_feat: Encoded text feature
+    """
+    composed_text = compose_text_with_templates(text)
+    tokens = clip.tokenize(composed_text).to(device)
+    with torch.no_grad():
+        text_feat = model.encode_text(tokens)
+        text_feat = text_feat.mean(axis=0, keepdim=True)
+        text_feat /= text_feat.norm(dim=-1, keepdim=True)
+    return text_feat
+
+
+def get_direction(emb1, emb2):
+    """ Get direction vector between two embeddings
+    Args:
+        emb1: First embedding
+        emb2: Second embedding
+    Returns:
+        direction: Direction vector
+    """
+    direction = emb1 - emb2
+    return direction
+
+
+def convert_render_filename_to_gt(render_filename, gt_dir):
+    """Convert render filename (e.g., '0.png') to GT filename (e.g., '00000.png')
+    Args:
+        render_filename: Filename from render directory (e.g., '0.png', '1.png')
+        gt_dir: GT directory path to check file existence
+    Returns:
+        gt_filename: GT filename with 5-digit zero padding (e.g., '00000.png')
+    """
+    # Extract number from render filename
+    match = re.search(r'(\d+)', render_filename)
+    if match:
+        num = int(match.group(1))
+        # Convert to 5-digit zero-padded format
+        gt_filename = f"{num:05d}.png"
+        gt_path = os.path.join(gt_dir, gt_filename)
+        # Check if file exists, if not try original filename
+        if os.path.exists(gt_path):
+            return gt_filename
+    # Fallback to original filename if conversion fails or file doesn't exist
+    return render_filename
+
+
+class CLIPDirSim():
+    def __init__(self,
+                 model,
+                 preprocess,
+                 style_target_prompt=None,
+                 style_image=None,
+                 style_source_prompt="a Photo",
+                 device="cuda"):
+        self.model = model.to(device)
+        self.preprocess = preprocess
+        self.device = device
+        with torch.no_grad():
+            if style_target_prompt is not None:
+                self.style_feat = encode_text(model, style_target_prompt, device)
+            if style_image is not None:
+                self.style_feat = encode_image(
+                    model, preprocess, style_image, device=device)
+            src_feat = encode_text(model, style_source_prompt, device=device)
+            self.style_dir = get_direction(self.style_feat, src_feat)
+
+    def __call__(self, gt_image_path, render_image_path, patch=False):
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
+        scores_sum = 0
+        images = 0
+        with torch.no_grad():
+            for filename in tqdm(files, desc="CLIP directional similarity", unit="img"):
+                gt_filename = convert_render_filename_to_gt(filename, gt_image_path)
+                gt_path = os.path.join(gt_image_path, gt_filename)
+                render_path = os.path.join(render_image_path, filename)
+                gt_feat = encode_image(
+                    self.model, self.preprocess, gt_path, device=self.device)
+                render_feat = encode_image(
+                    self.model, self.preprocess, render_path, patch=patch, device=self.device)
+                img_dir = get_direction(render_feat, gt_feat)
+                style_dir = self.style_dir
+                scores_sum += torch.cosine_similarity(
+                    img_dir, style_dir, dim=1).cpu().numpy()[0]
+                images += 1
+        return 100 * scores_sum / images
+
+
+class CLIPDirCons():
+    def __init__(self,
+                 model,
+                 preprocess,
+                 device="cuda"):
+        self.model = model.to(device)
+        self.preprocess = preprocess
+        self.device = device
+
+    def __call__(self, gt_image_path, render_image_path, k=1, patch=False):
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
+        scores_sum = 0
+        images = 0
+        with torch.no_grad():
+            for i, _ in tqdm(enumerate(files), total=len(files), desc="CLIP directional consistency", unit="img"):
+                if i < len(files) - k:
+                    gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
+                    gt_filename_next = convert_render_filename_to_gt(files[i+k], gt_image_path)
+                    gt_path = os.path.join(gt_image_path, gt_filename)
+                    gt_path_next = os.path.join(gt_image_path, gt_filename_next)
+                    render_path = os.path.join(render_image_path, files[i])
+                    render_path_next = os.path.join(
+                        render_image_path, files[i+k])
+                    render_feat = encode_image(
+                        self.model, self.preprocess, render_path, patch, device=self.device)
+                    render_feat_next = encode_image(
+                        self.model, self.preprocess, render_path_next, patch, device=self.device)
+                    gt_feat = encode_image(
+                        self.model, self.preprocess, gt_path, device=self.device)
+                    gt_feat_next = encode_image(
+                        self.model, self.preprocess, gt_path_next, device=self.device)
+                    gt_dir = get_direction(gt_feat_next, gt_feat)
+                    render_dir = get_direction(render_feat_next, render_feat)
+                    scores_sum += torch.cosine_similarity(
+                        gt_dir, render_dir, dim=1).cpu().numpy()[0]
+                    images += 1
+        return 100 * scores_sum / images
+
+
+class CLIPScore():
+    def __init__(self,
+                 model,
+                 preprocess,
+                 style_target_prompt=None,
+                 style_image=None,
+                 device="cuda"):
+        self.model = model.to(device)
+        self.preprocess = preprocess
+        self.device = device
+        with torch.no_grad():
+            if style_target_prompt is not None:
+                self.style_feat = encode_text(
+                    model, style_target_prompt, device)
+            if style_image is not None:
+                self.style_feat = encode_image(
+                    model, preprocess, style_image, device=device)
+
+    def __call__(self, render_image_path, patch=False):
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
+        scores_sum = 0
+        images = 0
+        with torch.no_grad():
+            for filename in tqdm(files, desc="CLIP Score", unit="img"):
+                render_path = os.path.join(render_image_path, filename)
+                render_feat = encode_image(
+                    self.model, self.preprocess, render_path, patch, device=self.device)
+                scores_sum += torch.cosine_similarity(
+                    render_feat, self.style_feat, dim=1).cpu().numpy()[0]
+                images += 1
+        return 100 * scores_sum / images
+
+
+class CLIPF():
+    def __init__(self,
+                 model,
+                 preprocess,
+                 device="cuda"):
+        self.model = model.to(device)
+        self.preprocess = preprocess
+        self.device = device
+
+    def __call__(self, gt_image_path, render_image_path, patch=False):
+        files = [f for f in os.listdir(render_image_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        files.sort(key=lambda f: int(''.join(filter(str.isdigit, f))) if ''.join(filter(str.isdigit, f)) else 0)
+        scores_sum_render = 0
+        scores_sum_gt = 0
+        images = 0
+        with torch.no_grad():
+            for i, _ in tqdm(enumerate(files), total=len(files), desc="CLIP F", unit="img"):
+                if i < len(files) - 1:
+                    gt_filename = convert_render_filename_to_gt(files[i], gt_image_path)
+                    gt_filename_next = convert_render_filename_to_gt(files[i+1], gt_image_path)
+                    gt_path = os.path.join(gt_image_path, gt_filename)
+                    gt_path_next = os.path.join(gt_image_path, gt_filename_next)
+                    render_path = os.path.join(render_image_path, files[i])
+                    render_path_next = os.path.join(
+                        render_image_path, files[i+1])
+                    render_feat = encode_image(
+                        self.model, self.preprocess, render_path, patch, device=self.device)
+                    render_feat_next = encode_image(
+                        self.model, self.preprocess, render_path_next, patch, device=self.device)
+                    gt_feat = encode_image(self.model, self.preprocess,
+                                           gt_path, device=self.device)
+                    gt_feat_next = encode_image(
+                        self.model, self.preprocess, gt_path_next, device=self.device)
+                    scores_sum_render += torch.cosine_similarity(
+                        render_feat, render_feat_next, dim=1).cpu().numpy()[0]
+                    scores_sum_gt += torch.cosine_similarity(
+                        gt_feat, gt_feat_next, dim=1).cpu().numpy()[0]
+                    images += 1
+        clip_f_gt = scores_sum_gt / images
+        cli_f_render = scores_sum_render / images
+        return 100 * cli_f_render / clip_f_gt
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser(description="Training script parameters")
+    parser.add_argument('--gt', type=str, default=None)
+    parser.add_argument('--render', type=str, default=None)
+    parser.add_argument('--style_image', type=str, default=None)
+    parser.add_argument('--style_target_prompt', '--style_prompt', dest='style_target_prompt', type=str, default=None)
+    parser.add_argument("--style_source_prompt", "--object_prompt", dest="style_source_prompt", type=str, default="a Photo")
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--interval", type=int, default=1)
+    args = parser.parse_args(sys.argv[1:])
+
+    clip_model, clip_preprocess = clip.load("ViT-L/14", device=args.device)
+
+    clip_similarity = CLIPDirSim(clip_model, clip_preprocess,
+                                   style_target_prompt=args.style_target_prompt,
+                                   style_image=args.style_image,
+                                   style_source_prompt=args.style_source_prompt,
+                                   device=args.device)
+    clip_consistency = CLIPDirCons(clip_model, clip_preprocess, device=args.device)
+    clip_f = CLIPF(clip_model, clip_preprocess, device=args.device)
+    clip_score = CLIPScore(clip_model, clip_preprocess,
+                            style_target_prompt=args.style_target_prompt,
+                            style_image=args.style_image,
+                            device=args.device)
+    
+    # Calculate metrics
+    clip_dir_consistency = clip_consistency(args.gt, args.render, k=args.interval)
+    clip_f_scaled = clip_f(args.gt, args.render)
+    clip_score_value = clip_score(args.render)
+    clip_dir_similarity = clip_similarity(args.gt, args.render)
+    
+    # Print to console
+    print(f"CLIP directional consistency: {clip_dir_consistency}")
+    print(f"CLIP_F (scaled): {clip_f_scaled}")
+    print(f"CLIP Score: {clip_score_value}")
+    print(f"CLIP directional similarity: {clip_dir_similarity}")
+    
+    # Save to eval_clip.txt (in the same directory structure as cmd.txt)
+    # args.render is typically: {trial_dir}/save/it{max_steps}-test/
+    # trial_dir is two levels up from args.render
+    render_path = os.path.abspath(args.render)
+    # Navigate to trial_dir: args.render -> save -> trial_dir
+    if os.path.basename(os.path.dirname(render_path)) == "save":
+        trial_dir = os.path.dirname(os.path.dirname(render_path))
+        eval_clip_path = os.path.join(trial_dir, "eval_clip.txt")
+    else:
+        # Fallback: save in render directory's parent
+        eval_clip_path = os.path.join(os.path.dirname(render_path), "eval_clip.txt")
+    
+    # Write metrics to file
+    with open(eval_clip_path, "w") as f:
+        f.write("CLIP Evaluation Metrics\n")
+        f.write("=" * 50 + "\n\n")
+        f.write(f"GT Directory: {args.gt}\n")
+        f.write(f"Render Directory: {args.render}\n")
+        if args.style_target_prompt:
+            f.write(f"Style Target Prompt: {args.style_target_prompt}\n")
+        if args.style_image:
+            f.write(f"Style Image: {args.style_image}\n")
+        f.write(f"Interval: {args.interval}\n")
+        f.write("\n")
+        f.write("-" * 50 + "\n")
+        f.write("Results:\n")
+        f.write("-" * 50 + "\n")
+        f.write(f"CLIP directional consistency: {clip_dir_consistency}\n")
+        f.write(f"CLIP_F (scaled): {clip_f_scaled}\n")
+        f.write(f"CLIP Score: {clip_score_value}\n")
+        f.write(f"CLIP directional similarity: {clip_dir_similarity}\n")
+    
+    print(f"\nMetrics saved to: {eval_clip_path}")
