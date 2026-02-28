@@ -25,7 +25,7 @@ class LatencyLogger:
         self.name_to_total_s[name] = self.name_to_total_s.get(name, 0.0) + seconds
         self.entries.append((name, seconds))
 
-    def write_summary(self, filename: str = "summary.txt") -> None:
+    def write_summary(self, filename: str = "summary.txt", dest_dir: str | None = None) -> None:
         # Build a hierarchical tree from dotted names.
         # Each name contributes only once to its own node ("self time"),
         # and parent nodes aggregate children so that hierarchy
@@ -102,7 +102,9 @@ class LatencyLogger:
             lines.append(f"{root}: {secs:.3f}s ({pct:.2f}%)")
             add_children_recursive(root, 1)
 
-        out_path = os.path.join(self.base_dir, filename)
+        out_dir = dest_dir if dest_dir is not None else self.base_dir
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, filename)
         with open(out_path, "w") as f:
             f.write("\n".join(lines))
 

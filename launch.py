@@ -194,6 +194,14 @@ def main(args, extras) -> None:
 
     if args.train:
         trainer.fit(system, datamodule=dm, ckpt_path=cfg.resume)
+        # Latency summary: on_fit_end에서도 쓰지만, 예외/종료 시 누락될 수 있어 fit 직후 한 번 더 기록
+        if hasattr(system, "latency_logger"):
+            trial_latency_dir = os.path.join(cfg.trial_dir, "latency")
+            rank_zero_only(
+                lambda: system.latency_logger.write_summary(
+                    "summary.txt", dest_dir=trial_latency_dir
+                )
+            )()
         trainer.test(system, datamodule=dm)
         if args.gradio:
             # also export assets if in gradio mode

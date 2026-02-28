@@ -249,7 +249,28 @@ class DGE(BaseLift3DSystem):
         with torch.no_grad():
             for id in tqdm(range(self.trainer.datamodule.train_dataset.total_view_num)):
                 cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
-                if not os.path.exists(cur_path) or self.cfg.cache_overwrite:
+                need_render = (
+                    not os.path.exists(cur_path)
+                    or self.cfg.cache_overwrite
+                )
+                if need_render:
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index": id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width": self.trainer.datamodule.train_dataset.width,
+                    }
+                    out = self(cur_batch)["comp_rgb"]
+                    out_to_save = (
+                            out[0].cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                    ).astype(np.uint8)
+                    out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
+                    if not cv2.imwrite(cur_path, out_to_save):
+                        raise IOError(f"Failed to write image: {cur_path}")
+                raw = cv2.imread(cur_path)
+                if raw is None or raw.size == 0:
+                    # 재시도: 캐시 손상/경쟁 가능성 있음 → 해당 뷰만 다시 렌더
                     cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
                     cur_batch = {
                         "index": id,
@@ -263,7 +284,13 @@ class DGE(BaseLift3DSystem):
                     ).astype(np.uint8)
                     out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
                     cv2.imwrite(cur_path, out_to_save)
-                cached_image = cv2.cvtColor(cv2.imread(cur_path), cv2.COLOR_BGR2RGB)
+                    raw = cv2.imread(cur_path)
+                if raw is None or raw.size == 0:
+                    raise FileNotFoundError(
+                        f"Failed to read image: {cur_path} (missing or corrupted). "
+                        "Remove the cache dir or set system.cache_overwrite=true and retry."
+                    )
+                cached_image = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
                 self.origin_frames[id] = torch.tensor(
                     cached_image / 255, device="cuda", dtype=torch.float32
                 )[None]
@@ -271,34 +298,36 @@ class DGE(BaseLift3DSystem):
     def on_before_optimizer_step(self, optimizer):
         with torch.no_grad():
             if self.true_global_step < self.cfg.densify_until_iter:
-                viewspace_point_tensor_grad = torch.zeros_like(
-                    self.viewspace_point_list[0]
-                )
-                for idx in range(len(self.viewspace_point_list)):
-                    viewspace_point_tensor_grad = (
-                            viewspace_point_tensor_grad
-                            + self.viewspace_point_list[idx].grad
+                with self.latency_logger.timeit("3d_finetune.densification_stats"):
+                    viewspace_point_tensor_grad = torch.zeros_like(
+                        self.viewspace_point_list[0]
                     )
-                # Keep track of max radii in image-space for pruning
-                self.gaussian.max_radii2D[self.visibility_filter] = torch.max(
-                    self.gaussian.max_radii2D[self.visibility_filter],
-                    self.radii[self.visibility_filter],
-                )
-                self.gaussian.add_densification_stats(
-                    viewspace_point_tensor_grad, self.visibility_filter
-                )
+                    for idx in range(len(self.viewspace_point_list)):
+                        viewspace_point_tensor_grad = (
+                                viewspace_point_tensor_grad
+                                + self.viewspace_point_list[idx].grad
+                        )
+                    # Keep track of max radii in image-space for pruning
+                    self.gaussian.max_radii2D[self.visibility_filter] = torch.max(
+                        self.gaussian.max_radii2D[self.visibility_filter],
+                        self.radii[self.visibility_filter],
+                    )
+                    self.gaussian.add_densification_stats(
+                        viewspace_point_tensor_grad, self.visibility_filter
+                    )
                 # Densification
                 if (
                         self.true_global_step >= self.cfg.densify_from_iter
                         and self.true_global_step % self.cfg.densification_interval == 0
                 ):  # 500 100
-                    self.gaussian.densify_and_prune(
-                        self.cfg.max_grad,
-                        self.cfg.max_densify_percent,
-                        self.cfg.min_opacity,
-                        self.cameras_extent,
-                        5,
-                    )
+                    with self.latency_logger.timeit("3d_finetune.densify_and_prune"):
+                        self.gaussian.densify_and_prune(
+                            self.cfg.max_grad,
+                            self.cfg.max_densify_percent,
+                            self.cfg.min_opacity,
+                            self.cameras_extent,
+                            5,
+                        )
 
     def validation_step(self, batch, batch_idx):
         batch["camera"] = [
@@ -554,31 +583,32 @@ class DGE(BaseLift3DSystem):
                 cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
             sorted_cam_idx = self.sort_the_cameras_idx(cameras)
             view_sorted = [self.view_list[idx] for idx in sorted_cam_idx]
-            cams_sorted = [cameras[idx] for idx in sorted_cam_idx]     
-                   
-            for id in view_sorted:
-                cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
-                original_image_path = os.path.join(original_render_cache_dir, "{:0>4d}.png".format(id))
-                cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
-                cur_batch = {
-                    "index": id,
-                    "camera": [cur_cam],
-                    "height": self.trainer.datamodule.train_dataset.height,
-                    "width": self.trainer.datamodule.train_dataset.width,
-                }
-                out_pkg = self(cur_batch)
-                out = out_pkg["comp_rgb"]
-                if self.cfg.use_masked_image:
-                    out = out * out_pkg["masks"].unsqueeze(-1)
-                images.append(out)
-                assert os.path.exists(original_image_path)
-                cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
-                self.origin_frames[id] = torch.tensor(
-                    cached_image / 255, device="cuda", dtype=torch.float32
-                )[None]
-                original_frames.append(self.origin_frames[id])
-            images = torch.cat(images, dim=0)
-            original_frames = torch.cat(original_frames, dim=0)
+            cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
+
+            with self.latency_logger.timeit("2d_editing.render_views_for_edit"):
+                for id in view_sorted:
+                    cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
+                    original_image_path = os.path.join(original_render_cache_dir, "{:0>4d}.png".format(id))
+                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                    cur_batch = {
+                        "index": id,
+                        "camera": [cur_cam],
+                        "height": self.trainer.datamodule.train_dataset.height,
+                        "width": self.trainer.datamodule.train_dataset.width,
+                    }
+                    out_pkg = self(cur_batch)
+                    out = out_pkg["comp_rgb"]
+                    if self.cfg.use_masked_image:
+                        out = out * out_pkg["masks"].unsqueeze(-1)
+                    images.append(out)
+                    assert os.path.exists(original_image_path)
+                    cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
+                    self.origin_frames[id] = torch.tensor(
+                        cached_image / 255, device="cuda", dtype=torch.float32
+                    )[None]
+                    original_frames.append(self.origin_frames[id])
+                images = torch.cat(images, dim=0)
+                original_frames = torch.cat(original_frames, dim=0)
 
             with self.latency_logger.timeit("2d_editing.diffusion_guidance"):
                 edited_images = self.guidance(  # dge_guidance.py:478 의 __call__ 함수 호출
@@ -607,7 +637,8 @@ class DGE(BaseLift3DSystem):
 
     def on_fit_start(self) -> None:
         super().on_fit_start()
-        self.render_all_view(cache_name="origin_render")
+        with self.latency_logger.timeit("on_fit_start.origin_render_all_view"):
+            self.render_all_view(cache_name="origin_render")
 
         if len(self.cfg.seg_prompt) > 0:
             self.update_mask()
@@ -620,19 +651,18 @@ class DGE(BaseLift3DSystem):
             self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
             
     def training_step(self, batch, batch_idx):
+        if (
+            self.true_global_step % self.cfg.camera_update_per_step == 0
+            and self.cfg.guidance_type == "dge-guidance"
+            and not self.cfg.loss.use_sds
+        ):
+            self.edit_all_view(
+                original_render_name="origin_render",
+                cache_name="edited_views",
+                update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                global_step=self.true_global_step,
+            )
         with self.latency_logger.timeit("3d_finetune.training_step"):
-            if (
-                self.true_global_step % self.cfg.camera_update_per_step == 0
-                and self.cfg.guidance_type == "dge-guidance"
-                and not self.cfg.loss.use_sds
-            ):
-                self.edit_all_view(
-                    original_render_name="origin_render",
-                    cache_name="edited_views",
-                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
-                    global_step=self.true_global_step,
-                )
-
             self.gaussian.update_learning_rate(self.true_global_step)
             batch_index = batch["index"]
 
@@ -716,6 +746,9 @@ class DGE(BaseLift3DSystem):
             return {"loss": loss}
 
     def on_fit_end(self) -> None:
-        # Persist latency summary at the end of training.
-        if hasattr(self, "latency_logger"):
-            self.latency_logger.write_summary("latency_summary.txt")
+        # Latency summary는 trial_dir에만 기록 (edit_cache에는 쓰지 않음).
+        if hasattr(self, "latency_logger") and hasattr(self, "trainer"):
+            log_dir = getattr(self.trainer, "log_dir", None)
+            if log_dir:
+                trial_latency = os.path.join(log_dir, "latency")
+                self.latency_logger.write_summary("summary.txt", dest_dir=trial_latency)
