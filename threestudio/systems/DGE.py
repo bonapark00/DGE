@@ -1,7 +1,9 @@
 from dataclasses import dataclass, field
 from typing import Optional
+import contextlib
 import math
 import random
+import time
 from re import T
 
 from PIL import Image, ImageDraw, ImageFont
@@ -69,6 +71,9 @@ class DGE(BaseLift3DSystem):
         mask_max_ratio: float = 0.9  # Skip views where mask covers > this fraction of image (0~1)
         mask_min_ratio: float = 0.01  # Skip views where mask covers < this fraction (likely failed seg)
         mask_outlier_iqr: float = 1.5  # IQR multiplier for outlier detection; exclude views outside [Q1-k*IQR, Q3+k*IQR]
+        # update_mask: view population and count
+        mask_view_population: str = "colmap_views"  # "colmap_views" = colmap_cameras_for_mask, "train_cameras" = train_dataset.scene.cameras
+        mask_num_views: int = 30  # number of views to use for masking (top by distance from Gaussian center)
         max_grad: float = 1e-7
         min_opacity: float = 0.005
         
@@ -160,192 +165,213 @@ class DGE(BaseLift3DSystem):
 
     @torch.no_grad()
     def update_mask(self, seg_object=None, save_name="mask") -> None:
+        _lat = getattr(self, "_latency_logger", None)
+        _time = (lambda _n, **_kw: _lat.timeit(_n, **_kw)) if _lat is not None else lambda _n, **_kw: contextlib.nullcontext()
+
         train_dataset = self.trainer.datamodule.train_dataset
 
-        # Unified: select 30 cameras with largest distance from Gaussian center
-        if hasattr(train_dataset, 'colmap_cameras_for_mask') and train_dataset.colmap_cameras_for_mask is not None:
-            all_cameras = train_dataset.colmap_cameras_for_mask
-            print("[Lens] update_mask: using Colmap cameras for mask")
-        else:
-            all_cameras = train_dataset.scene.cameras
-
-        # Compute Gaussian center from model
-        gaussian_center = None
-        if hasattr(self, 'gaussian') and self.gaussian is not None:
-            try:
-                xyz = self.gaussian.get_xyz
-                if isinstance(xyz, torch.Tensor):
-                    xyz_np = xyz.detach().cpu().numpy()
-                else:
-                    xyz_np = np.array(xyz)
-                gaussian_center = np.mean(xyz_np, axis=0).astype(np.float32)
-                print(f"Computed Gaussian center from model: {gaussian_center}")
-            except Exception as e:
-                threestudio.warn(f"Failed to get Gaussian center from model: {e}")
-
-        if gaussian_center is None:
-            cam_centers = []
-            for cam in all_cameras:
-                center = cam.camera_center
-                if isinstance(center, torch.Tensor):
-                    center = center.detach().cpu().numpy()
-                cam_centers.append(center)
-            cam_centers = np.array(cam_centers)
-            gaussian_center = np.median(cam_centers, axis=0)
-            print(f"Using median of camera centers as object center: {gaussian_center}")
-
-        gaussian_center_tensor = torch.tensor(gaussian_center, device=get_device(), dtype=torch.float32)
-        camera_distances = []
-        for idx, cam in enumerate(all_cameras):
-            camera_center = cam.camera_center
-            if isinstance(camera_center, torch.Tensor):
-                camera_center = camera_center.to(get_device())
-            else:
-                camera_center = torch.tensor(camera_center, device=get_device(), dtype=torch.float32)
-            distance = torch.norm(camera_center - gaussian_center_tensor).item()
-            camera_distances.append((idx, distance))
-        camera_distances.sort(key=lambda x: x[1], reverse=True)
-        view_list = [idx for idx, _ in camera_distances[:30]]
-        print(f"Selected 30 cameras with largest distance from Gaussian center: {[f'{idx}(dist={dist:.2f})' for idx, dist in camera_distances[:30]]}")
-
-        print(f"View list for segmentation: {view_list}")
-
-        print(f"Segment with prompt: {seg_object}")
-        mask_cache_dir = os.path.join(
-            self.cache_dir, seg_object + f"_{save_name}_{len(view_list)}_view"
-        )
-        gs_mask_path = os.path.join(mask_cache_dir, "gs_mask.pt")
-
-        if (seg_object == self.cfg.target_prompt) or not os.path.exists(gs_mask_path) or self.cfg.cache_overwrite:
-            os.makedirs(mask_cache_dir, exist_ok=True)
-            weights = torch.zeros_like(self.gaussian._opacity)
-            weights_cnt = torch.zeros_like(self.gaussian._opacity, dtype=torch.int32)
-            threestudio.info(f"Segmentation with prompt: {seg_object}")
-
-
-            use_colmap_for_mask = (
-                hasattr(train_dataset, 'colmap_cameras_for_mask')
-                and train_dataset.colmap_cameras_for_mask is not None
-            )
-
-            # Pass 1: collect mask ratios for all views
-            collected = []
-            for id in tqdm(view_list, desc="update_mask pass1"):
-                cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
-                cur_path_viz = os.path.join(
-                    mask_cache_dir, "viz_{:0>4d}.png".format(id)
+        with _time("update_mask"):
+            with _time("update_mask.setup"):
+                # View population: colmap_views or train_cameras (from cfg)
+                use_colmap = (
+                    self.cfg.mask_view_population == "colmap_views"
+                    and hasattr(train_dataset, "colmap_cameras_for_mask")
+                    and train_dataset.colmap_cameras_for_mask is not None
                 )
-                if use_colmap_for_mask:
-                    cur_cam = train_dataset.colmap_cameras_for_mask[id]
+                if use_colmap:
+                    all_cameras = train_dataset.colmap_cameras_for_mask
+                    print("[Lens] update_mask: using Colmap cameras for mask (mask_view_population=colmap_views)")
                 else:
-                    cur_cam = train_dataset.scene.cameras[id]
+                    all_cameras = train_dataset.scene.cameras
+                    print("[Lens] update_mask: using train_dataset.scene.cameras (mask_view_population=train_cameras)")
 
-                if seg_object == self.cfg.target_prompt:
-                    cur_batch = {
-                        "index": id,
-                        "camera": [cur_cam],
-                        "height": train_dataset.height,
-                        "width": train_dataset.width,
-                    }
-                    out = self(cur_batch)["comp_rgb"]
-                    out_to_save = (
-                            out[0].cpu().detach().numpy().clip(0.0, 1.0) * 255.0
-                    ).astype(np.uint8)
-                    out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
-                    cv2.imwrite(cur_path, out_to_save)
-                    cached_image = cv2.cvtColor(cv2.imread(cur_path), cv2.COLOR_BGR2RGB)
-                    image_to_segment = torch.tensor(
-                        cached_image / 255, device="cuda", dtype=torch.float32
-                    )[None]
+                # Compute Gaussian center from model
+                gaussian_center = None
+                if hasattr(self, 'gaussian') and self.gaussian is not None:
+                    try:
+                        xyz = self.gaussian.get_xyz
+                        if isinstance(xyz, torch.Tensor):
+                            xyz_np = xyz.detach().cpu().numpy()
+                        else:
+                            xyz_np = np.array(xyz)
+                        gaussian_center = np.mean(xyz_np, axis=0).astype(np.float32)
+                        print(f"Computed Gaussian center from model: {gaussian_center}")
+                    except Exception as e:
+                        threestudio.warn(f"Failed to get Gaussian center from model: {e}")
 
-                elif seg_object == self.cfg.seg_prompt:
-                    if use_colmap_for_mask:
-                        # Lens: render from Colmap camera (origin_frames has lens views)
-                        cur_batch = {
-                            "index": id,
-                            "camera": [cur_cam],
-                            "height": train_dataset.height,
-                            "width": train_dataset.width,
-                        }
-                        out = self(cur_batch)["comp_rgb"]
-                        image_to_segment = out.detach().clone()
+                if gaussian_center is None:
+                    cam_centers = []
+                    for cam in all_cameras:
+                        center = cam.camera_center
+                        if isinstance(center, torch.Tensor):
+                            center = center.detach().cpu().numpy()
+                        cam_centers.append(center)
+                    cam_centers = np.array(cam_centers)
+                    gaussian_center = np.median(cam_centers, axis=0)
+                    print(f"Using median of camera centers as object center: {gaussian_center}")
+
+                gaussian_center_tensor = torch.tensor(gaussian_center, device=get_device(), dtype=torch.float32)
+                camera_distances = []
+                for idx, cam in enumerate(all_cameras):
+                    camera_center = cam.camera_center
+                    if isinstance(camera_center, torch.Tensor):
+                        camera_center = camera_center.to(get_device())
                     else:
-                        image_to_segment = self.origin_frames[id]
+                        camera_center = torch.tensor(camera_center, device=get_device(), dtype=torch.float32)
+                    distance = torch.norm(camera_center - gaussian_center_tensor).item()
+                    camera_distances.append((idx, distance))
+                camera_distances.sort(key=lambda x: x[1], reverse=True)
+                n_views = min(self.cfg.mask_num_views, len(camera_distances))
+                view_list = [idx for idx, _ in camera_distances[:n_views]]
+                print(f"Selected {n_views} cameras with largest distance from Gaussian center (mask_num_views={self.cfg.mask_num_views}): {[f'{idx}(dist={dist:.2f})' for idx, dist in camera_distances[:n_views]]}")
 
-                mask = self.text_segmentor(image_to_segment, seg_object)[0].to(get_device())
-                mask_ratio = mask[0].float().mean().item()
+                print(f"View list for segmentation: {view_list}")
 
-                # Hard bounds: skip extreme failures
-                if mask_ratio > self.cfg.mask_max_ratio:
-                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} > mask_max_ratio={self.cfg.mask_max_ratio}")
-                    continue
-                if mask_ratio < self.cfg.mask_min_ratio:
-                    print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} < mask_min_ratio={self.cfg.mask_min_ratio}")
-                    continue
-
-                collected.append((id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz))
-
-            # Outlier detection: exclude views with ratio outside [Q1 - k*IQR, Q3 + k*IQR]
-            if len(collected) >= 3:
-                ratios = np.array([r for _, _, r, _, _, _, _ in collected])
-                q1, q3 = np.percentile(ratios, [25, 75])
-                iqr = q3 - q1
-                k = self.cfg.mask_outlier_iqr
-                low = max(0.0, q1 - k * iqr)
-                high = min(1.0, q3 + k * iqr)
-                inlier_indices = [i for i, (_, _, r, _, _, _, _) in enumerate(collected) if low <= r <= high]
-                outlier_count = len(collected) - len(inlier_indices)
-                if outlier_count > 0:
-                    print(f"[update_mask] Outlier filter: Q1={q1:.3f} Q3={q3:.3f} IQR={iqr:.3f} -> [{low:.3f}, {high:.3f}], excluding {outlier_count} views")
-                    for i in range(len(collected)):
-                        if i not in inlier_indices:
-                            print(f"  - view {collected[i][0]}: ratio={collected[i][2]:.3f} (outlier)")
-                collected = [collected[i] for i in inlier_indices]
-
-            # Pass 2: apply_weights only for inlier views
-            for id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz in tqdm(collected, desc="update_mask pass2"):
-                mask_to_save = ( # todo: target_prompt에 대한 마스크는 저장할 필요 없음.
-                        mask[0]
-                        .cpu()  
-                        .detach()[..., None]
-                        .repeat(1, 1, 3)
-                        .numpy()
-                        .clip(0.0, 1.0)
-                        * 255.0
-                ).astype(np.uint8)
-                cv2.imwrite(cur_path, mask_to_save)
-
-                masked_image = image_to_segment.detach().clone()[0]
-                masked_image[mask[0].bool()] *= 0.3
-                masked_image_to_save = (
-                        masked_image.cpu().detach().numpy().clip(0.0, 1.0) * 255.0
-                ).astype(np.uint8)
-                masked_image_to_save = cv2.cvtColor(
-                    masked_image_to_save, cv2.COLOR_RGB2BGR
+                print(f"Segment with prompt: {seg_object}")
+                mask_cache_dir = os.path.join(
+                    self.cache_dir, seg_object + f"_{save_name}_{len(view_list)}_view"
                 )
-                cv2.imwrite(cur_path_viz, masked_image_to_save)
-                self.gaussian.apply_weights(cur_cam, weights, weights_cnt, mask)
+                gs_mask_path = os.path.join(mask_cache_dir, "gs_mask.pt")
 
-            weights /= weights_cnt + 1e-7
+            if (seg_object == self.cfg.target_prompt) or not os.path.exists(gs_mask_path) or self.cfg.cache_overwrite:
+                os.makedirs(mask_cache_dir, exist_ok=True)
+                weights = torch.zeros_like(self.gaussian._opacity)
+                weights_cnt = torch.zeros_like(self.gaussian._opacity, dtype=torch.int32)
+                threestudio.info(f"Segmentation with prompt: {seg_object}")
 
-            selected_mask = weights > self.cfg.mask_thres
-            selected_mask = selected_mask[:, 0]
-            torch.save(selected_mask, gs_mask_path)
-        else:
-            print("load cache")
-            mask_cache_dir = os.path.join(
-                self.cache_dir, seg_object + f"_{save_name}_65_view"
-            )
-            for id in tqdm(self.edit_view_index):
-                cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
-                cur_mask = cv2.imread(cur_path)
-                cur_mask = torch.tensor(
-                    cur_mask / 255, device="cuda", dtype=torch.float32
-                )[..., 0][None]
-            selected_mask = torch.load(gs_mask_path)
+                use_colmap_for_mask = use_colmap
 
-        self.gaussian.set_mask(selected_mask)
-        self.gaussian.apply_grad_mask(selected_mask)
+                # Pass 1: collect mask ratios for all views
+                collected = []
+                with _time("update_mask.pass1"):
+                    for id in tqdm(view_list, desc="update_mask pass1"):
+                        cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
+                        cur_path_viz = os.path.join(
+                            mask_cache_dir, "viz_{:0>4d}.png".format(id)
+                        )
+                        with _time("update_mask.pass1.select_cam"):
+                            if use_colmap_for_mask:
+                                cur_cam = train_dataset.colmap_cameras_for_mask[id]
+                            else:
+                                cur_cam = train_dataset.scene.cameras[id]
+
+                        with _time("update_mask.pass1.render", sync_cuda=True):
+                            if seg_object == self.cfg.target_prompt:
+                                cur_batch = {
+                                    "index": id,
+                                    "camera": [cur_cam],
+                                    "height": train_dataset.height,
+                                    "width": train_dataset.width,
+                                }
+                                out = self(cur_batch)["comp_rgb"]
+                                out_to_save = (
+                                        out[0].cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                                ).astype(np.uint8)
+                                with _time("update_mask.pass1.io"):
+                                    out_to_save = cv2.cvtColor(out_to_save, cv2.COLOR_RGB2BGR)
+                                    cv2.imwrite(cur_path, out_to_save)
+                                    cached_image = cv2.cvtColor(cv2.imread(cur_path), cv2.COLOR_BGR2RGB)
+                                with _time("update_mask.pass1.to_tensor"):
+                                    image_to_segment = torch.tensor(
+                                        cached_image / 255, device="cuda", dtype=torch.float32
+                                    )[None]
+
+                            elif seg_object == self.cfg.seg_prompt:
+                                if use_colmap_for_mask:
+                                    cur_batch = {
+                                        "index": id,
+                                        "camera": [cur_cam],
+                                        "height": train_dataset.height,
+                                        "width": train_dataset.width,
+                                    }
+                                    out = self(cur_batch)["comp_rgb"]
+                                    image_to_segment = out.detach().clone()
+                                else:
+                                    image_to_segment = self.origin_frames[id]
+
+                        with _time("update_mask.pass1.segment", sync_cuda=True):
+                            mask = self.text_segmentor(image_to_segment, seg_object)[0].to(get_device())
+
+                        with _time("update_mask.pass1.ratio_filter"):
+                            mask_ratio = mask[0].float().mean().item()
+
+                            # Hard bounds: skip extreme failures
+                            if mask_ratio > self.cfg.mask_max_ratio:
+                                print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} > mask_max_ratio={self.cfg.mask_max_ratio}")
+                                continue
+                            if mask_ratio < self.cfg.mask_min_ratio:
+                                print(f"[update_mask] Skipping view {id}: mask_ratio={mask_ratio:.3f} < mask_min_ratio={self.cfg.mask_min_ratio}")
+                                continue
+
+                        with _time("update_mask.pass1.collect"):
+                            collected.append((id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz))
+
+                # Outlier detection: exclude views with ratio outside [Q1 - k*IQR, Q3 + k*IQR]
+                with _time("update_mask.outlier_filter"):
+                    if len(collected) >= 3:
+                        ratios = np.array([r for _, _, r, _, _, _, _ in collected])
+                        q1, q3 = np.percentile(ratios, [25, 75])
+                        iqr = q3 - q1
+                        k = self.cfg.mask_outlier_iqr
+                        low = max(0.0, q1 - k * iqr)
+                        high = min(1.0, q3 + k * iqr)
+                        inlier_indices = [i for i, (_, _, r, _, _, _, _) in enumerate(collected) if low <= r <= high]
+                        outlier_count = len(collected) - len(inlier_indices)
+                        if outlier_count > 0:
+                            print(f"[update_mask] Outlier filter: Q1={q1:.3f} Q3={q3:.3f} IQR={iqr:.3f} -> [{low:.3f}, {high:.3f}], excluding {outlier_count} views")
+                            for i in range(len(collected)):
+                                if i not in inlier_indices:
+                                    print(f"  - view {collected[i][0]}: ratio={collected[i][2]:.3f} (outlier)")
+                            collected = [collected[i] for i in inlier_indices]
+
+                # Pass 2: apply_weights only for inlier views
+                with _time("update_mask.pass2"):
+                    for id, mask, mask_ratio, cur_cam, image_to_segment, cur_path, cur_path_viz in tqdm(collected, desc="update_mask pass2"):
+                        mask_to_save = ( # todo: target_prompt에 대한 마스크는 저장할 필요 없음.
+                                mask[0]
+                                .cpu()  
+                                .detach()[..., None]
+                                .repeat(1, 1, 3)
+                                .numpy()
+                                .clip(0.0, 1.0)
+                                * 255.0
+                        ).astype(np.uint8)
+                        # cv2.imwrite(cur_path, mask_to_save)
+
+                        masked_image = image_to_segment.detach().clone()[0]
+                        masked_image[mask[0].bool()] *= 0.3
+                        masked_image_to_save = (
+                                masked_image.cpu().detach().numpy().clip(0.0, 1.0) * 255.0
+                        ).astype(np.uint8)
+                        masked_image_to_save = cv2.cvtColor(
+                            masked_image_to_save, cv2.COLOR_RGB2BGR
+                        )
+                        # cv2.imwrite(cur_path_viz, masked_image_to_save)
+                        self.gaussian.apply_weights(cur_cam, weights, weights_cnt, mask)
+
+                with _time("update_mask.save_weights"):
+                    weights /= weights_cnt + 1e-7
+
+                    selected_mask = weights > self.cfg.mask_thres
+                    selected_mask = selected_mask[:, 0]
+                    # torch.save(selected_mask, gs_mask_path)
+            else:
+                with _time("update_mask.load_cache"):
+                    print("load cache")
+                    mask_cache_dir = os.path.join(
+                        self.cache_dir, seg_object + f"_{save_name}_65_view"
+                    )
+                    for id in tqdm(self.edit_view_index):
+                        cur_path = os.path.join(mask_cache_dir, "{:0>4d}.png".format(id))
+                        cur_mask = cv2.imread(cur_path)
+                        cur_mask = torch.tensor(
+                            cur_mask / 255, device="cuda", dtype=torch.float32
+                        )[..., 0][None]
+                    selected_mask = torch.load(gs_mask_path)
+
+            with _time("update_mask.apply_mask"):
+                self.gaussian.set_mask(selected_mask)
+                self.gaussian.apply_grad_mask(selected_mask)
 
     @torch.no_grad()
     def prune_distant_floater_gaussians(self):
@@ -774,37 +800,57 @@ class DGE(BaseLift3DSystem):
                 device = getattr(cur_cam, "data_device", img_chw.device)
                 cur_cam.rendered_image_from_generated_view = img_chw.to(device)
 
+    def on_before_backward(self, loss):
+        """Called by Lightning before loss.backward(). Start timer for backward."""
+        if hasattr(self, "_latency_logger") and self._latency_logger is not None:
+            self._ts_backward_start = time.perf_counter()
+
+    def on_after_backward(self):
+        """Called by Lightning after loss.backward(). Record backward duration."""
+        if hasattr(self, "_latency_logger") and self._latency_logger is not None and hasattr(self, "_ts_backward_start"):
+            self._latency_logger.record("backward", time.perf_counter() - self._ts_backward_start)
+
     def on_before_optimizer_step(self, optimizer):
-        with torch.no_grad():
-            if self.true_global_step < self.cfg.densify_until_iter:
-                viewspace_point_tensor_grad = torch.zeros_like(
-                    self.viewspace_point_list[0]
-                )
-                for idx in range(len(self.viewspace_point_list)):
-                    viewspace_point_tensor_grad = (
-                            viewspace_point_tensor_grad
-                            + self.viewspace_point_list[idx].grad
-                    )
-                # Keep track of max radii in image-space for pruning
-                self.gaussian.max_radii2D[self.visibility_filter] = torch.max(
-                    self.gaussian.max_radii2D[self.visibility_filter],
-                    self.radii[self.visibility_filter],
-                )
-                self.gaussian.add_densification_stats(
-                    viewspace_point_tensor_grad, self.visibility_filter
-                )
-                # Densification
-                if (
-                        self.true_global_step >= self.cfg.densify_from_iter
-                        and self.true_global_step % self.cfg.densification_interval == 0
-                ):  # 500 100
-                    self.gaussian.densify_and_prune(
-                        self.cfg.max_grad,
-                        self.cfg.max_densify_percent,
-                        self.cfg.min_opacity,
-                        self.cameras_extent,
-                        5,
-                    )
+        with self._latency_logger.timeit("on_before_optimizer_step"):
+            with torch.no_grad():
+                if self.true_global_step < self.cfg.densify_until_iter:
+                    with self._latency_logger.timeit("on_before_optimizer_step.densification_stats"):
+                        viewspace_point_tensor_grad = torch.zeros_like(
+                            self.viewspace_point_list[0]
+                        )
+                        for idx in range(len(self.viewspace_point_list)):
+                            viewspace_point_tensor_grad = (
+                                    viewspace_point_tensor_grad
+                                    + self.viewspace_point_list[idx].grad
+                            )
+                        # Keep track of max radii in image-space for pruning
+                        self.gaussian.max_radii2D[self.visibility_filter] = torch.max(
+                            self.gaussian.max_radii2D[self.visibility_filter],
+                            self.radii[self.visibility_filter],
+                        )
+                        self.gaussian.add_densification_stats(
+                            viewspace_point_tensor_grad, self.visibility_filter
+                        )
+                    # Densification
+                    if (
+                            self.true_global_step >= self.cfg.densify_from_iter
+                            and self.true_global_step % self.cfg.densification_interval == 0
+                    ):  # 500 100
+                        with self._latency_logger.timeit("on_before_optimizer_step.densify_and_prune"):
+                            self.gaussian.densify_and_prune(
+                                self.cfg.max_grad,
+                                self.cfg.max_densify_percent,
+                                self.cfg.min_opacity,
+                                self.cameras_extent,
+                                5,
+                            )
+        if hasattr(self, "_latency_logger") and self._latency_logger is not None:
+            self._ts_optimizer_step_start = time.perf_counter()
+
+    def on_after_optimizer_step(self, optimizer):
+        """Called by Lightning after optimizer.step(). Record optimizer_step duration."""
+        if hasattr(self, "_latency_logger") and self._latency_logger is not None and hasattr(self, "_ts_optimizer_step_start"):
+            self._latency_logger.record("optimizer_step", time.perf_counter() - self._ts_optimizer_step_start)
 
     def validation_step(self, batch, batch_idx):
         batch["camera"] = [
@@ -1148,7 +1194,7 @@ class DGE(BaseLift3DSystem):
         
         # self.edited_cams = []
         if update_camera: ## 60개 view 중에서 max_view_num개만 랜덤하게 선택됨.
-            with self._latency_logger.timeit("edit_all_view.update_editing_cameras"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view.update_editing_cameras"):
                 self.trainer.datamodule.train_dataset.update_editing_cameras(random_seed = global_step + 1)
                 self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
                 sorted_train_view_list = sorted(self.edit_view_index)
@@ -1171,7 +1217,7 @@ class DGE(BaseLift3DSystem):
         t_max_step = self.cfg.added_noise_schedule
         self.guidance.max_step = t_max_step[min(len(t_max_step)-1, self.true_global_step//self.cfg.camera_update_per_step)]
         with torch.no_grad():
-            with self._latency_logger.timeit("edit_all_view.collect_cameras"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view.collect_cameras"):
                 # self.edit_view_index = [_ for _ in range(len(self.trainer.datamodule.train_dataset.scene.cameras))]
                 for id in self.edit_view_index:
                     cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
@@ -1195,25 +1241,25 @@ class DGE(BaseLift3DSystem):
                     "height": self.trainer.datamodule.train_dataset.height,
                     "width": self.trainer.datamodule.train_dataset.width,
                 }
-                with self._latency_logger.timeit("edit_all_view.render_single"):
+                with self._latency_logger.timeit("training_step_all.edit_all_view.render_single"):
                     out_pkg = self(cur_batch)
                 out = out_pkg["comp_rgb"] ## 이게 forward해서 렌더링 결과 얻는 부분임!
                 if self.cfg.use_masked_image:
-                    with self._latency_logger.timeit("edit_all_view.apply_mask"):
+                    with self._latency_logger.timeit("training_step_all.edit_all_view.apply_mask"):
                         out = out * out_pkg["masks"].unsqueeze(-1)
                 images.append(out)
                 assert os.path.exists(original_image_path)
-                with self._latency_logger.timeit("edit_all_view.load_original"):
+                with self._latency_logger.timeit("training_step_all.edit_all_view.load_original"):
                     cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
                     self.origin_frames[id] = torch.tensor(
                         cached_image / 255, device="cuda", dtype=torch.float32
                     )[None]
                 original_frames.append(self.origin_frames[id])
-            with self._latency_logger.timeit("edit_all_view.concat_batches"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view.concat_batches"):
                 images = torch.cat(images, dim=0) ## view들을 concat하여 배치로 만듦
                 original_frames = torch.cat(original_frames, dim=0)
 
-            with self._latency_logger.timeit("edit_all_view.guidance_batch"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view.guidance_batch"):
                 edited_images = self.guidance( ## DGEGuidance.__call__ 함수 호출
                     images, ## 편집대상(latents): training 되고 있는 3dgs에서 렌더한 이미지. 
                     original_frames, ## 이미지 조건(latents): 원본 이미지(Edit 전의 GT)
@@ -1222,7 +1268,7 @@ class DGE(BaseLift3DSystem):
                     latency_logger = self._latency_logger
                 )
 
-            with self._latency_logger.timeit("edit_all_view.assign_outputs"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view.assign_outputs"):
                 # view_sorted 순서를 저장 (나중에 이 순서대로 저장하기 위해)
                 self.edit_frames_order = view_sorted.copy()
                 for view_index_tmp in range(len(self.edit_view_index)):
@@ -1273,38 +1319,41 @@ class DGE(BaseLift3DSystem):
         if getattr(self, "pipe", None) is None:
             self.parser = ArgumentParser(description="Training script parameters")
             self.pipe = PipelineParams(self.parser)
-        if update_camera:
-            with self._latency_logger.timeit("edit_multiview.update_editing_cameras"):
-                self.trainer.datamodule.train_dataset.update_editing_cameras(random_seed=global_step + 1)
-                self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
-                sorted_train_view_list = sorted(self.edit_view_index)
-                selected_views = torch.linspace(
-                    0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
-                )
-                self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
+        _lat = getattr(self, "_latency_logger", None)
+        _edit_wrap = _lat.timeit("training_step_all.edit_multiview") if _lat is not None else contextlib.nullcontext()
+        with _edit_wrap:
+            if update_camera:
+                with self._latency_logger.timeit("training_step_all.edit_multiview.update_editing_cameras"):
+                    self.trainer.datamodule.train_dataset.update_editing_cameras(random_seed=global_step + 1)
+                    self.edit_view_index = self.trainer.datamodule.train_dataset.edit_view_index
+                    sorted_train_view_list = sorted(self.edit_view_index)
+                    selected_views = torch.linspace(
+                        0, len(sorted_train_view_list) - 1, self.trainer.datamodule.val_dataset.n_views, dtype=torch.int
+                    )
+                    self.trainer.datamodule.val_dataset.selected_views = [sorted_train_view_list[idx] for idx in selected_views]
 
-        print(f"{self.true_global_step}th step, Camera view index: {self.edit_view_index}")
+            print(f"{self.true_global_step}th step, Camera view index: {self.edit_view_index}")
 
-        self.edit_frames = {}
-        self.edit_frames_order = []
-        cache_dir = os.path.join(self.cache_dir, cache_name)
-        original_render_cache_dir = os.path.join(self.cache_dir, original_render_name)
-        os.makedirs(cache_dir, exist_ok=True)
+            self.edit_frames = {}
+            self.edit_frames_order = []
+            cache_dir = os.path.join(self.cache_dir, cache_name)
+            original_render_cache_dir = os.path.join(self.cache_dir, original_render_name)
+            os.makedirs(cache_dir, exist_ok=True)
 
-        cameras = []
-        for id in self.edit_view_index:
-            cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
-        sorted_cam_idx = self.sort_the_cameras_idx(cameras)
-        view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
-        cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
+            cameras = []
+            for id in self.edit_view_index:
+                cameras.append(self.trainer.datamodule.train_dataset.scene.cameras[id])
+            sorted_cam_idx = self.sort_the_cameras_idx(cameras)
+            view_sorted = [self.edit_view_index[idx] for idx in sorted_cam_idx]
+            cams_sorted = [cameras[idx] for idx in sorted_cam_idx]
 
-        camera_batch_size = getattr(self.cfg.guidance, "camera_batch_size", 5)
-        n_views = len(view_sorted)
+            camera_batch_size = getattr(self.cfg.guidance, "camera_batch_size", 5)
+            n_views = len(view_sorted)
         # Derive number of key views purely from editing cameras and batch size:
-        #   num_key_views = max(1, floor(n_views / camera_batch_size))
-        num_key_views = max(1, n_views // camera_batch_size)
-        key_selection = getattr(self.cfg, "multiview_edit_key_selection_strategy", "uniform")
-        # if key_selection == "lens_fps" and self.gaussian is not None and n_views >= num_key_views:
+            #   num_key_views = max(1, floor(n_views / camera_batch_size))
+            num_key_views = max(1, n_views // camera_batch_size)
+            key_selection = getattr(self.cfg, "multiview_edit_key_selection_strategy", "uniform")
+            # if key_selection == "lens_fps" and self.gaussian is not None and n_views >= num_key_views:
         #     from threestudio.data.gs_load import select_key_views_by_lens_fps
         #     with self._latency_logger.timeit("edit_multiview.key_selection_lens_fps"):
         #         key_indices = select_key_views_by_lens_fps(
@@ -1333,75 +1382,75 @@ class DGE(BaseLift3DSystem):
         #     key_indices = [_ for _ in range(20)]
         # else:
         #     key_indices = torch.linspace(0, n_views - 1, num_key_views, dtype=torch.long).tolist()
-        #     key_indices = [int(i) for i in key_indices]
-        # key_view_camera_ids = [view_sorted[i] for i in key_indices]
+            #     key_indices = [int(i) for i in key_indices]
+            # key_view_camera_ids = [view_sorted[i] for i in key_indices]
 
-        images = []
-        original_frames = []
-        t_max_step = self.cfg.added_noise_schedule
-        self.guidance.max_step = t_max_step[min(len(t_max_step) - 1, self.true_global_step // self.cfg.camera_update_per_step)]
-        with torch.no_grad():
-            with self._latency_logger.timeit("edit_multiview.render_and_load_originals"):
-                for id in view_sorted:
-                    cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
-                    original_image_path = os.path.join(original_render_cache_dir, "{:0>4d}.png".format(id))
-                    cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
-                    cur_batch = {
-                        "index": id,
-                        "camera": [cur_cam],
-                        "height": self.trainer.datamodule.train_dataset.height,
-                        "width": self.trainer.datamodule.train_dataset.width,
-                    }
-                    out_pkg = self(cur_batch)
-                    out = out_pkg["comp_rgb"]
-                    if self.cfg.use_masked_image:
-                        out = out * out_pkg["masks"].unsqueeze(-1)
-                    images.append(out)
-                    assert os.path.exists(original_image_path)
-                    cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
-                    self.origin_frames[id] = torch.tensor(cached_image / 255, device="cuda", dtype=torch.float32)[None]
-                    original_frames.append(self.origin_frames[id])
-            with self._latency_logger.timeit("edit_multiview.concat_batch"):
-                images = torch.cat(images, dim=0)
-                original_frames = torch.cat(original_frames, dim=0)
+            images = []
+            original_frames = []
+            t_max_step = self.cfg.added_noise_schedule
+            self.guidance.max_step = t_max_step[min(len(t_max_step) - 1, self.true_global_step // self.cfg.camera_update_per_step)]
+            with torch.no_grad():
+                with self._latency_logger.timeit("training_step_all.edit_multiview.render_and_load_originals"):
+                    for id in view_sorted:
+                        cur_path = os.path.join(cache_dir, "{:0>4d}.png".format(id))
+                        original_image_path = os.path.join(original_render_cache_dir, "{:0>4d}.png".format(id))
+                        cur_cam = self.trainer.datamodule.train_dataset.scene.cameras[id]
+                        cur_batch = {
+                            "index": id,
+                            "camera": [cur_cam],
+                            "height": self.trainer.datamodule.train_dataset.height,
+                            "width": self.trainer.datamodule.train_dataset.width,
+                        }
+                        out_pkg = self(cur_batch)
+                        out = out_pkg["comp_rgb"]
+                        if self.cfg.use_masked_image:
+                            out = out * out_pkg["masks"].unsqueeze(-1)
+                        images.append(out)
+                        assert os.path.exists(original_image_path)
+                        cached_image = cv2.cvtColor(cv2.imread(original_image_path), cv2.COLOR_BGR2RGB)
+                        self.origin_frames[id] = torch.tensor(cached_image / 255, device="cuda", dtype=torch.float32)[None]
+                        original_frames.append(self.origin_frames[id])
+                with self._latency_logger.timeit("training_step_all.edit_multiview.concat_batch"):
+                    images = torch.cat(images, dim=0)
+                    original_frames = torch.cat(original_frames, dim=0)
 
-            with self._latency_logger.timeit("edit_multiview.guidance_batch"):
-                edited_images = self.guidance(
-                    images,
-                    original_frames,
-                    self.prompt_processor(),
-                    cams=cams_sorted,
-                    latency_logger=self._latency_logger,
-                    use_multiview=True,
-                    gaussian=self.gaussian,
-                    pipe=self.pipe,
-                    # key_indices=key_indices,
-                    # key_view_camera_ids=key_view_camera_ids,
-                    prompt_text=getattr(self.cfg, "target_prompt", "") or "",
-                    key_selection_strategy=key_selection,
-                    num_key_views=num_key_views,
-                )
+                with self._latency_logger.timeit("training_step_all.edit_multiview.guidance_batch"):
+                    edited_images = self.guidance(
+                        images,
+                        original_frames,
+                        self.prompt_processor(),
+                        cams=cams_sorted,
+                        latency_logger=self._latency_logger,
+                        use_multiview=True,
+                        gaussian=self.gaussian,
+                        pipe=self.pipe,
+                        # key_indices=key_indices,
+                        # key_view_camera_ids=key_view_camera_ids,
+                        prompt_text=getattr(self.cfg, "target_prompt", "") or "",
+                        key_selection_strategy=key_selection,
+                        num_key_views=num_key_views,
+                    )
 
-            with self._latency_logger.timeit("edit_multiview.assign_outputs"):
-                self.edit_frames_order = view_sorted.copy()
-                for view_index_tmp in range(len(self.edit_view_index)):
-                    self.edit_frames[view_sorted[view_index_tmp]] = edited_images["edit_images"][view_index_tmp].unsqueeze(0).detach().clone()
+                with self._latency_logger.timeit("training_step_all.edit_multiview.assign_outputs"):
+                    self.edit_frames_order = view_sorted.copy()
+                    for view_index_tmp in range(len(self.edit_view_index)):
+                        self.edit_frames[view_sorted[view_index_tmp]] = edited_images["edit_images"][view_index_tmp].unsqueeze(0).detach().clone()
 
-        with self._latency_logger.timeit("edit_multiview.build_save_list"):
-            save_list = []
-            if len(self.edit_frames_order) > 0:
-                for index in self.edit_frames_order:
-                    if index in self.edit_frames:
-                        img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+            with self._latency_logger.timeit("training_step_all.edit_multiview.build_save_list"):
+                save_list = []
+                if len(self.edit_frames_order) > 0:
+                    for index in self.edit_frames_order:
+                        if index in self.edit_frames:
+                            img_with_index = self._add_index_to_image(self.edit_frames[index][0], index)
+                            save_list.append({"type": "rgb", "img": img_with_index, "kwargs": {"data_format": "HWC"}})
+                else:
+                    for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
+                        img_with_index = self._add_index_to_image(image[0], index)
                         save_list.append({"type": "rgb", "img": img_with_index, "kwargs": {"data_format": "HWC"}})
-            else:
-                for index, image in sorted(self.edit_frames.items(), key=lambda item: item[0]):
-                    img_with_index = self._add_index_to_image(image[0], index)
-                    save_list.append({"type": "rgb", "img": img_with_index, "kwargs": {"data_format": "HWC"}})
-        if len(save_list) > 0:
-            with self._latency_logger.timeit("edit_multiview.save_image_grid"):
-                self.save_image_grid("edited_images_multiview.png", save_list, name="edited_images_multiview", step=self.true_global_step)
-        print("multiview edited images saved to:", self.get_save_path("edited_images_multiview.png"))
+            if len(save_list) > 0:
+                with self._latency_logger.timeit("training_step_all.edit_multiview.save_image_grid"):
+                    self.save_image_grid("edited_images_multiview.png", save_list, name="edited_images_multiview", step=self.true_global_step)
+            print("multiview edited images saved to:", self.get_save_path("edited_images_multiview.png"))
 
     @torch.no_grad()
     def _render_single(self, cam) -> torch.Tensor:
@@ -1596,7 +1645,7 @@ class DGE(BaseLift3DSystem):
           3. Store results in self.edit_frames.
         """
         if update_camera:
-            with self._latency_logger.timeit("edit_all_view_wr.update_editing_cameras"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.update_editing_cameras"):
                 self.trainer.datamodule.train_dataset.update_editing_cameras(
                     random_seed=global_step + 1
                 )
@@ -1623,7 +1672,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Collect & sort cameras (same ordering as edit_all_view)             #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_all_view_wr.collect_and_sort_cameras"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.collect_and_sort_cameras"):
             cameras = [
                 self.trainer.datamodule.train_dataset.scene.cameras[i]
                 for i in self.edit_view_index
@@ -1633,7 +1682,7 @@ class DGE(BaseLift3DSystem):
             cams_sorted  = [cameras[i]              for i in sorted_cam_idx]
 
         # Reload origin frames
-        with self._latency_logger.timeit("edit_all_view_wr.reload_origin_frames"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.reload_origin_frames"):
             with torch.no_grad():
                 for vid in view_sorted:
                     orig_path = os.path.join(original_render_cache, "{:0>4d}.png".format(vid))
@@ -1647,18 +1696,18 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Anchor view: edit with vanilla IP2P (full-strength)                 #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_all_view_wr.anchor_total"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.anchor_total"):
             # Use the middle view in the sorted circular ordering as the anchor (\"central\" view)
             mid_idx   = len(view_sorted) // 2
             anchor_vid = view_sorted[mid_idx]
             anchor_cam = cams_sorted[mid_idx]
             print(f"[warp-refine] Anchor view index: {anchor_vid} (mid_idx={mid_idx}, total_views={len(view_sorted)})")
 
-            with self._latency_logger.timeit("edit_all_view_wr.anchor_render"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.anchor_render"):
                 with torch.no_grad():
                     anchor_rendered_hwc = self._render_single(anchor_cam)  # [H, W, C]
 
-            with self._latency_logger.timeit("edit_all_view_wr.anchor_ip2p"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.anchor_ip2p"):
                 anchor_rendered_np  = (anchor_rendered_hwc.cpu().numpy().clip(0, 1) * 255).astype(np.uint8)
                 anchor_rendered_pil = PILImage.fromarray(anchor_rendered_np)
                 H, W = anchor_rendered_np.shape[:2]
@@ -1690,7 +1739,7 @@ class DGE(BaseLift3DSystem):
         target_cams  = cams_sorted[1:]
 
         if len(target_cams) > 0:
-            with self._latency_logger.timeit("edit_all_view_wr.propagate_and_refine"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.propagate_and_refine"):
                 refined_list = self.propagate_and_refine_views(
                     anchor_cam=anchor_cam,
                     edited_anchor_image=anchor_edited_hwc,
@@ -1699,7 +1748,7 @@ class DGE(BaseLift3DSystem):
                     prompt=prompt,
                 )
 
-            with self._latency_logger.timeit("edit_all_view_wr.assign_refined"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.assign_refined"):
                 for vid, refined_hwc in zip(target_vids, refined_list):
                     self.edit_frames[vid] = refined_hwc.unsqueeze(0).detach().clone()
                     self.edit_frames_order.append(vid)
@@ -1707,7 +1756,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Save grid for inspection                                             #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_all_view_wr.save_grid"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine.save_grid"):
             save_list = []
             for vid in self.edit_frames_order:
                 if vid in self.edit_frames:
@@ -1759,7 +1808,7 @@ class DGE(BaseLift3DSystem):
         if scales is None:
             scales = [(64, 64), (32, 32), (16, 16), (8, 8)]
 
-        with self._latency_logger.timeit("build_gp_cache"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.build_gp_cache"):
             self._gp_cache = build_gaussian_provenance_cache(
                 gaussian         = self.gaussian,
                 cams             = cams_sorted,
@@ -1816,7 +1865,7 @@ class DGE(BaseLift3DSystem):
         # Camera update (identical to edit_all_view)                          #
         # ------------------------------------------------------------------ #
         if update_camera:
-            with self._latency_logger.timeit("edit_gp.update_editing_cameras"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.update_editing_cameras"):
                 self.trainer.datamodule.train_dataset.update_editing_cameras(
                     random_seed=global_step + 1
                 )
@@ -1872,7 +1921,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Build gaussian-provenance cache (1 per camera-update cycle)        #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_gp.build_gp_cache"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.gp_cache"):
             self.build_gp_cache(
                 cams_sorted      = cams_sorted,
                 key_cam_indices  = key_cam_indices,
@@ -1892,7 +1941,7 @@ class DGE(BaseLift3DSystem):
         original_frames = []
 
         with torch.no_grad():
-            with self._latency_logger.timeit("edit_gp.render_and_load"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.render_and_load"):
                 for id in view_sorted:
                     orig_path = os.path.join(
                         original_render_cache, "{:0>4d}.png".format(id)
@@ -1934,7 +1983,7 @@ class DGE(BaseLift3DSystem):
         # to each DGEBlock via the existing register_* mechanism.             #
         # ------------------------------------------------------------------ #
         with torch.no_grad():
-            with self._latency_logger.timeit("edit_gp.guidance_batch"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.guidance_batch"):
                 edited_images = self.guidance(
                     images,
                     original_frames,
@@ -1948,7 +1997,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Store results (identical to edit_all_view)                          #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_gp.assign_outputs"):
+        with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance.assign_outputs"):
             self.edit_frames_order = view_sorted.copy()
             for vi, vid in enumerate(view_sorted):
                 self.edit_frames[vid] = (
@@ -2032,7 +2081,7 @@ class DGE(BaseLift3DSystem):
         # Camera update (identical to edit_all_view)                          #
         # ------------------------------------------------------------------ #
         if update_camera:
-            with self._latency_logger.timeit("edit_aw.update_editing_cameras"):
+            with self._latency_logger.timeit("training_step_all.edit_aw.update_editing_cameras"):
                 self.trainer.datamodule.train_dataset.update_editing_cameras(
                     random_seed=global_step + 1
                 )
@@ -2064,7 +2113,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Collect & sort cameras                                              #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_aw.collect_and_sort"):
+        with self._latency_logger.timeit("training_step_all.edit_aw.collect_and_sort"):
             cameras = [
                 self.trainer.datamodule.train_dataset.scene.cameras[i]
                 for i in self.edit_view_index
@@ -2092,7 +2141,7 @@ class DGE(BaseLift3DSystem):
         original_frames: list = []
 
         with torch.no_grad():
-            with self._latency_logger.timeit("edit_aw.render_all"):
+            with self._latency_logger.timeit("training_step_all.edit_aw.render_all"):
                 for vid in view_sorted:
                     cam = self.trainer.datamodule.train_dataset.scene.cameras[vid]
                     cur_batch = {
@@ -2159,7 +2208,7 @@ class DGE(BaseLift3DSystem):
         # ------------------------------------------------------------------ #
         # Step 3: Build AttentionWarpManager & extract features               #
         # ------------------------------------------------------------------ #
-        with self._latency_logger.timeit("edit_aw.build_manager"):
+        with self._latency_logger.timeit("training_step_all.edit_aw.build_manager"):
             diffusion_steps = self.guidance.cfg.diffusion_steps
             aw_manager = AttentionWarpManager(
                 unet                   = self.guidance.unet,
@@ -2171,7 +2220,7 @@ class DGE(BaseLift3DSystem):
                 occlusion_threshold    = occlusion_threshold,
             )
 
-        with self._latency_logger.timeit("edit_aw.extract_features"):
+        with self._latency_logger.timeit("training_step_all.edit_aw.extract_features"):
             # Get text embeddings from the prompt processor
             prompt_utils = self.prompt_processor()
             # text_embeddings shape from DGE: (3*B, 77, 768) – use the first slice
@@ -2194,7 +2243,7 @@ class DGE(BaseLift3DSystem):
             )
 
         # Register custom AttnProcessors on the UNet
-        with self._latency_logger.timeit("edit_aw.apply_to_unet"):
+        with self._latency_logger.timeit("training_step_all.edit_aw.apply_to_unet"):
             aw_manager.apply_to_unet()
 
         # ------------------------------------------------------------------ #
@@ -2209,7 +2258,7 @@ class DGE(BaseLift3DSystem):
             for view_i, (vid, tgt_cam, tgt_depth) in enumerate(
                 zip(view_sorted, cams_sorted, depth_maps)
             ):
-                with self._latency_logger.timeit(f"edit_aw.denoise_view_{view_i}"):
+                with self._latency_logger.timeit(f"training_step_all.edit_aw.denoise_view_{view_i}"):
                     # Set the target view for geometry-aware K/V blending
                     aw_manager.set_target_view(tgt_cam, tgt_depth)
                     # Reset per-step decay counters
@@ -2241,7 +2290,7 @@ class DGE(BaseLift3DSystem):
                     )
 
         # Restore original attention processors
-        with self._latency_logger.timeit("edit_aw.remove_from_unet"):
+        with self._latency_logger.timeit("training_step_all.edit_aw.remove_from_unet"):
             aw_manager.remove_from_unet()
         # Restore normal-attn flag
         register_normal_attn_flag(self.guidance.unet, False)
@@ -2361,8 +2410,7 @@ class DGE(BaseLift3DSystem):
         )
 
         if len(self.cfg.seg_prompt) > 0:
-            with self._latency_logger.timeit("update_mask"):
-                self.update_mask(self.cfg.seg_prompt)
+            self.update_mask(self.cfg.seg_prompt)
 
         if len(self.cfg.prompt_processor) > 0:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
@@ -2409,9 +2457,10 @@ class DGE(BaseLift3DSystem):
         )
 
     def training_step(self, batch, batch_idx):
+        _ts_start = time.perf_counter()
         if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_warp_refine:
             # Warp-and-Refine branch: vanilla IP2P propagation (no DGE attention)
-            with self._latency_logger.timeit("edit_all_view_warp_refine"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine"):
                 self.edit_all_view_warp_refine(
                     original_render_name='origin_render',
                     cache_name="edited_views_wr",
@@ -2421,7 +2470,7 @@ class DGE(BaseLift3DSystem):
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_gaussian_provenance and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             # Version B: Gaussian-Provenance Sparse Cross-View Attention
-            with self._latency_logger.timeit("edit_all_view_gaussian_provenance"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view_gaussian_provenance"):
                 self.edit_all_view_gaussian_provenance(
                     original_render_name='origin_render',
                     cache_name="edited_views_gp",
@@ -2433,25 +2482,23 @@ class DGE(BaseLift3DSystem):
                     gp_alpha_tau=self.cfg.gp_alpha_tau,
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_multiview_edit and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
-            with self._latency_logger.timeit("edit_multiview"):
-                self.edit_multiview(
-                    original_render_name='origin_render',
-                    cache_name="edited_views_multiview",
-                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
-                    global_step=self.true_global_step,
-                )
+            self.edit_multiview(
+                original_render_name='origin_render',
+                cache_name="edited_views_multiview",
+                update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                global_step=self.true_global_step,
+            )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
-            with self._latency_logger.timeit("edit_all_view"):
+            with self._latency_logger.timeit("training_step_all.edit_all_view"):
                 self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step)
         
         if self.true_global_step == self.cfg.mask_update_at_step and len(self.cfg.target_prompt) > 0:
-            with self._latency_logger.timeit(f"update_mask at step {self.true_global_step}"):
-                print(f"Update mask with prompt: {self.cfg.target_prompt}")
-                self.update_mask(self.cfg.target_prompt)
+            print(f"Update mask with prompt: {self.cfg.target_prompt}")
+            self.update_mask(self.cfg.target_prompt)
         
         # Prune distant floater Gaussians
         if self.cfg.prune_floater_at_step >= 0 and self.true_global_step == self.cfg.prune_floater_at_step:
-            with self._latency_logger.timeit(f"prune_floater at step {self.true_global_step}"):
+            with self._latency_logger.timeit(f"training_step_all.prune_floater"):
                 self.prune_distant_floater_gaussians()
 
         self.gaussian.update_learning_rate(self.true_global_step)
@@ -2464,7 +2511,7 @@ class DGE(BaseLift3DSystem):
         #         if cur_index not in self.edit_frames:
         #             batch_index[img_index] = self.trainer.datamodule.train_dataset.train_view_index[img_index] # 전체 train view
 
-        with self._latency_logger.timeit("render_forward"):
+        with self._latency_logger.timeit("training_step_all.render_forward"):
             out = self(batch, local=self.cfg.local_edit)
 
         images = out["comp_rgb"]
@@ -2485,34 +2532,40 @@ class DGE(BaseLift3DSystem):
 
 
             loss_dict = {}
-            ## L1 + Perceptual loss 
+            ## L1 + Perceptual loss
             if len(gt_images) > 0: # ground truth image가 있다면 기존의 Loss를 그대로 활용
                 gt_images = torch.concatenate(gt_images, dim=0)
 
                 if self.cfg.use_masked_image:
                     print("use masked image")
-                    loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images * mask, gt_images * mask)
-                    loss_dict["loss_p"] = self.perceptual_loss(
-                        (images * mask).permute(0, 3, 1, 2).contiguous(),
-                        (gt_images * mask).permute(0, 3, 1, 2).contiguous(),
-                    ).sum()
+                    with self._latency_logger.timeit("training_step_all.loss_l1"):
+                        loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images * mask, gt_images * mask)
+                    with self._latency_logger.timeit("training_step_all.loss_p"):
+                        loss_dict["loss_p"] = self.perceptual_loss(
+                            (images * mask).permute(0, 3, 1, 2).contiguous(),
+                            (gt_images * mask).permute(0, 3, 1, 2).contiguous(),
+                        ).sum()
                 else:
-                    loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images, gt_images)
-                    loss_dict["loss_p"] = self.perceptual_loss(
-                        images.permute(0, 3, 1, 2).contiguous(),
-                        gt_images.permute(0, 3, 1, 2).contiguous(),
-                    ).sum()
+                    with self._latency_logger.timeit("training_step_all.loss_l1"):
+                        loss_dict["loss_l1"] = torch.nn.functional.l1_loss(images, gt_images)
+                    with self._latency_logger.timeit("training_step_all.loss_p"):
+                        loss_dict["loss_p"] = self.perceptual_loss(
+                            images.permute(0, 3, 1, 2).contiguous(),
+                            gt_images.permute(0, 3, 1, 2).contiguous(),
+                        ).sum()
 
             ## Lite-ISM loss
             if self.cfg.loss.lambda_ism > 0:
                 # Lite-ISM: 2-batch UNet, x0-prediction target, strong edit signal
-                loss_ism = self.compute_lite_ism_loss(images, batch_index)
+                with self._latency_logger.timeit("training_step_all.loss_ism"):
+                    loss_ism = self.compute_lite_ism_loss(images, batch_index)
                 loss_dict["loss_ism"] = loss_ism
 
             ## DDS-lite loss
             if self.cfg.loss.lambda_dds > 0:
                 # DDS-lite: lightweight distillation for views without edit_frames
-                loss_dds = self.compute_dds_loss(images, batch_index)
+                with self._latency_logger.timeit("training_step_all.loss_dds"):
+                    loss_dds = self.compute_dds_loss(images, batch_index)
                 loss_dict["loss_dds"] = loss_dds
 
             ## Directional CLIP loss
@@ -2520,40 +2573,40 @@ class DGE(BaseLift3DSystem):
                 # Direction CLIP loss
                 # images shape: (B, H, W, C) -> (B, C, H, W)로 변환 필요
                 # Prepare images for CLIP: apply mask if use_masked_image is True
+                with self._latency_logger.timeit("training_step_all.loss_d"):
+                    images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                    gt_images_list = []
+                    for idx in batch_index:
+                        gt_images_list.append(self.origin_frames[idx])
+                    gt_images_clip = torch.concatenate(gt_images_list, dim=0).permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
 
-                images_clip = images.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
-                gt_images_list = []
-                for idx in batch_index:
-                    gt_images_list.append(self.origin_frames[idx])
-                gt_images_clip = torch.concatenate(gt_images_list, dim=0).permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+                    render_features = clip_model.encode_image(
+                        clip_normalize(images_clip))
+                    source_features = clip_model.encode_image(
+                        clip_normalize(gt_images_clip))
+                    # NOTE: add eps to prevent NaN/Inf when norm is near-zero
+                    eps = 1e-6
+                    render_features = render_features / (
+                        render_features.clone().norm(dim=-1, keepdim=True) + eps
+                    )
 
-                render_features = clip_model.encode_image(
-                    clip_normalize(images_clip))
-                source_features = clip_model.encode_image(
-                    clip_normalize(gt_images_clip))
-                # NOTE: add eps to prevent NaN/Inf when norm is near-zero
-                eps = 1e-6
-                render_features = render_features / (
-                    render_features.clone().norm(dim=-1, keepdim=True) + eps
-                )
+                    img_direction = render_features - source_features
+                    img_direction = img_direction / (
+                        img_direction.clone().norm(dim=-1, keepdim=True) + eps
+                    )
 
-                img_direction = render_features - source_features
-                img_direction = img_direction / (
-                    img_direction.clone().norm(dim=-1, keepdim=True) + eps
-                )
+                    # `self.style_direction` may be stored as (D,) or (1, D).
+                    # Make it 1D first, then broadcast to (B, D) safely.
+                    style_dir = self.style_direction
+                    if style_dir.ndim == 2 and style_dir.shape[0] == 1:
+                        style_dir = style_dir[0]
+                    style_dir = style_dir / (style_dir.norm(dim=-1, keepdim=False) + eps)
+                    style_dir = style_dir.unsqueeze(0).expand(render_features.size(0), -1)
 
-                # `self.style_direction` may be stored as (D,) or (1, D).
-                # Make it 1D first, then broadcast to (B, D) safely.
-                style_dir = self.style_direction
-                if style_dir.ndim == 2 and style_dir.shape[0] == 1:
-                    style_dir = style_dir[0]
-                style_dir = style_dir / (style_dir.norm(dim=-1, keepdim=False) + eps)
-                style_dir = style_dir.unsqueeze(0).expand(render_features.size(0), -1)
+                    loss_d = (1 - torch.cosine_similarity(img_direction,
+                            style_dir, dim=1)).mean()
 
-                loss_d = (1 - torch.cosine_similarity(img_direction,
-                        style_dir, dim=1)).mean()
-
-                loss_dict["loss_d"] = loss_d
+                    loss_dict["loss_d"] = loss_d
 
             # novel views에 대해서 DDS, CLIP 모두 적용하지 않은 경우에만 dummy로 graph 연결 (기존 loss_dict 덮어쓰지 않음)
             if self.cfg.loss.lambda_d <= 0 and len(loss_dict) == 0:
@@ -2567,13 +2620,13 @@ class DGE(BaseLift3DSystem):
                     loss += value * self.C(
                         self.cfg.loss[name.replace("loss_", "lambda_")]
                     )
-            
+
 
         # sds loss
         if self.cfg.loss.use_sds:
             prompt_utils = self.prompt_processor()
             self.guidance.cfg.use_sds = True
-            with self._latency_logger.timeit("guidance_sds"):
+            with self._latency_logger.timeit("training_step_all.guidance_sds"):
                 loss_dict = self.guidance(
                     out["comp_rgb"],
                     torch.concatenate(
@@ -2583,11 +2636,12 @@ class DGE(BaseLift3DSystem):
                     cams=batch["camera"],
                     latency_logger=self._latency_logger,
                 )
-            loss += loss_dict["loss_sds"] * self.cfg.loss.lambda_sds 
+            loss += loss_dict["loss_sds"] * self.cfg.loss.lambda_sds
 
         for name, value in self.cfg.loss.items():
             self.log(f"train_params/{name}", self.C(value))
-    
+
+        self._latency_logger.record("training_step_all", time.perf_counter() - _ts_start)
         return {"loss": loss}
 
     def on_train_end(self) -> None:

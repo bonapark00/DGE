@@ -685,7 +685,8 @@ class DGEGuidance(BaseObject):
                         if latency_logger:
                             set_unet_latency_prefix(f"{_p}.key_view_denoise_loop.forward_unet.unet_forward")
                         try:
-                            noise_pred = self.forward_unet(latent_model_input, t_exp, encoder_hidden_states=pivot_text)
+                            with latency_logger.timeit(f"{_p}.key_view_denoise_loop.forward_unet.unet_forward") if latency_logger else nullcontext():
+                                noise_pred = self.forward_unet(latent_model_input, t_exp, encoder_hidden_states=pivot_text)
                         finally:
                             if latency_logger:
                                 set_unet_latency_prefix(None)
@@ -908,12 +909,13 @@ class DGEGuidance(BaseObject):
                     if latency_logger:
                         set_unet_latency_prefix(f"{_p}.target_denoise_loop.pivotal_forward.unet_forward")
                     try:
-                        self.forward_unet(latent_model_input, t_step.unsqueeze(0).expand(len(pivotal_idx) * 3).to(device), encoder_hidden_states=pivot_text_embeddings)
+                        with latency_logger.timeit(f"{_p}.target_denoise_loop.pivotal_forward.unet_forward") if latency_logger else nullcontext():
+                            self.forward_unet(latent_model_input, t_step.unsqueeze(0).expand(len(pivotal_idx) * 3).to(device), encoder_hidden_states=pivot_text_embeddings)
                     finally:
                         if latency_logger:
                             set_unet_latency_prefix(None)
+                    register_pivotal(self.unet, False)
 
-                register_pivotal(self.unet, False)
                 noise_pred_text = []
                 noise_pred_image = []
                 noise_pred_uncond = []
@@ -966,7 +968,8 @@ class DGEGuidance(BaseObject):
                         if latency_logger:
                             set_unet_latency_prefix(f"{_p}.target_denoise_loop.batch_forward.unet_forward")
                         try:
-                            batch_noise_pred = self.forward_unet(batch_model_input, t_step.unsqueeze(0).expand(len(batch_local_indices) * 3).to(device), encoder_hidden_states=batch_text_embeddings)
+                            with latency_logger.timeit(f"{_p}.target_denoise_loop.batch_forward.unet_forward") if latency_logger else nullcontext():
+                                batch_noise_pred = self.forward_unet(batch_model_input, t_step.unsqueeze(0).expand(len(batch_local_indices) * 3).to(device), encoder_hidden_states=batch_text_embeddings)
                         finally:
                             if latency_logger:
                                 set_unet_latency_prefix(None)

@@ -2,6 +2,7 @@ import os
 import time
 from contextlib import contextmanager
 from typing import Dict, List, Tuple
+import torch
 
 
 class LatencyLogger:
@@ -10,14 +11,20 @@ class LatencyLogger:
         os.makedirs(self.base_dir, exist_ok=True)
         self.name_to_total_s: Dict[str, float] = {}
         self.entries: List[Tuple[str, float]] = []
+        self._wall_start: float = time.perf_counter()
+        self._cpu_start: float = time.process_time()
 
     @contextmanager
-    def timeit(self, name: str):
-        start = time.time()
+    def timeit(self, name: str, sync_cuda: bool = False):
+        if sync_cuda and torch.cuda.is_available():
+            torch.cuda.synchronize()
+        start = time.perf_counter()
         try:
             yield
         finally:
-            dt = time.time() - start
+            if sync_cuda and torch.cuda.is_available():
+                torch.cuda.synchronize()
+            dt = time.perf_counter() - start
             self.name_to_total_s[name] = self.name_to_total_s.get(name, 0.0) + dt
             self.entries.append((name, dt))
 
@@ -26,66 +33,74 @@ class LatencyLogger:
         self.entries.append((name, seconds))
 
     def write_summary(self, filename: str = "summary.txt") -> None:
-        # Calculate total time from top-level categories only (without nested items)
+        # Split into top-level (no dot) and nested (has dot)
         top_level_categories = {}
         nested_categories = {}
-        
         for name, secs in self.name_to_total_s.items():
-            if '.' in name:
-                # This is a nested item
+            if "." in name:
                 nested_categories[name] = secs
             else:
-                # This is a top-level category
                 top_level_categories[name] = secs
-        
-        # Total time is sum of only top-level categories (not including nested)
-        total = sum(top_level_categories.values())
-        
-        lines: List[str] = []
-        lines.append(f"Latency Summary (seconds) - Total Time: {total:.3f}s\n")
-        
-        def get_direct_children(parent_prefix: str, all_items: Dict[str, float]) -> List[Tuple[str, float]]:
-            """Get direct children of a parent: one segment deeper. Aggregate time for all keys under each child prefix."""
-            prefix_with_dot = parent_prefix + '.' if parent_prefix else ''
-            child_totals: Dict[str, float] = {}
-            for name, secs in all_items.items():
+
+        def get_direct_children_names(parent_prefix: str, all_items: Dict[str, float]) -> List[str]:
+            """Return the full names of direct children (one segment deeper than parent)."""
+            prefix_with_dot = parent_prefix + "." if parent_prefix else ""
+            seen: set = set()
+            result: List[str] = []
+            for name in all_items:
                 if not name.startswith(prefix_with_dot):
                     continue
                 remaining = name[len(prefix_with_dot):]
                 if not remaining:
                     continue
-                # First segment is the direct child (e.g. "dge_block" from "dge_block.feature_injection.3d_anchor")
-                first_segment = remaining.split('.')[0]
+                first_segment = remaining.split(".")[0]
                 child_prefix = prefix_with_dot + first_segment
-                child_totals[child_prefix] = child_totals.get(child_prefix, 0.0) + secs
-            return list(child_totals.items())
-        
+                if child_prefix not in seen:
+                    seen.add(child_prefix)
+                    result.append(child_prefix)
+            return result
+
+        def get_direct_children_sum(parent_prefix: str, all_items: Dict[str, float]) -> float:
+            """Sum the recorded time of direct children of parent (one segment deeper).
+            Each child's value is taken directly from all_items[child_prefix] (not aggregated
+            from descendants), so the hierarchy never double-counts nested measurements."""
+            return sum(all_items.get(cp, 0.0) for cp in get_direct_children_names(parent_prefix, all_items))
+
+        def get_direct_children(parent_prefix: str, all_items: Dict[str, float]) -> List[Tuple[str, float]]:
+            return [(cp, all_items.get(cp, 0.0)) for cp in get_direct_children_names(parent_prefix, all_items)]
+
+        # For each top-level, use at least the sum of direct children so hierarchy never inverts
+        displayed_top_level: Dict[str, float] = {}
+        for name, secs in top_level_categories.items():
+            children_sum = get_direct_children_sum(name, nested_categories)
+            displayed_top_level[name] = max(secs, children_sum)
+
+        total = sum(displayed_top_level.values())
+
+        wall_elapsed = time.perf_counter() - self._wall_start
+        cpu_elapsed = time.process_time() - self._cpu_start
+
+        lines: List[str] = []
+        lines.append(f"Latency Summary (seconds) - Total Time: {total:.3f}s\n")
+        lines.append(f"Wall time: {wall_elapsed:.3f}s | CPU time: {cpu_elapsed:.3f}s\n")
+
         def add_children_recursive(parent_prefix: str, indent_level: int, all_items: Dict[str, float]):
-            """Recursively add children maintaining hierarchy"""
             children = get_direct_children(parent_prefix, all_items)
             if not children:
                 return
-            
-            # Sort direct children by time
             children = sorted(children, key=lambda x: -x[1])
-            
             for child_name, child_secs in children:
                 child_pct = (child_secs / total * 100.0) if total > 0 else 0.0
-                display_name = child_name.split('.')[-1]  # Get last part after last dot
+                display_name = child_name.split(".")[-1]
                 indent = "  " * indent_level + "└─ "
                 lines.append(f"{indent}{display_name}: {child_secs:.3f}s ({child_pct:.2f}%)")
-                
-                # Recursively add grandchildren
                 add_children_recursive(child_name, indent_level + 1, all_items)
-        
-        # Sort by total time
-        for name, secs in sorted(top_level_categories.items(), key=lambda x: -x[1]):
+
+        for name, secs in sorted(displayed_top_level.items(), key=lambda x: -x[1]):
             pct = (secs / total * 100.0) if total > 0 else 0.0
             lines.append(f"{name}: {secs:.3f}s ({pct:.2f}%)")
-            
-            # Add nested measurements with proper hierarchy
             add_children_recursive(name, 1, nested_categories)
-        
+
         out_path = os.path.join(self.base_dir, filename)
         with open(out_path, "w") as f:
             f.write("\n".join(lines))
