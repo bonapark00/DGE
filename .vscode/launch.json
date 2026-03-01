@@ -157,15 +157,18 @@
                 "system.loss.use_sds=false",
                 "system.guidance.use_sds_dge=false",
                 "system.loss.lambda_sds=0.0",
-
+                
                 "system.use_multiview_edit=true",
                 "system.use_warp_refine=false",
                 "system.use_gaussian_provenance=false",
                 "system.guidance.skip_key_views_in_target_loop=false",
+                
 
-                "data.max_view_num=25",
-                "data.max_edit_view_num=20",
-
+                "system.mask_view_population=train_cameras",
+                "system.mask_num_views=20",
+                "data.max_view_num=15",
+                "data.max_edit_view_num=15",
+                "system.densify_until_iter=900",
                 
                 "data.lens_use_ip2p_scoring=true",
                 "data.lens_ip2p_steps=5",
@@ -179,6 +182,7 @@
                 "system.mask_update_at_step=600",
                 "system.mask_update_view_num=5",
                 "system.prune_floater_at_step=-1",
+                "checkpoint.save_top_k=0",
 
             ],
             "cwd": "${workspaceFolder}",
