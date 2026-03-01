@@ -94,17 +94,17 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "0",
+                "--gpu", "1",
                 "trainer.max_steps=1500",
 
                 "data.edit_view_selection_strategy=lens",
                 "system.guidance.edit_view_selection_strategy=lens",
 
                 // covered_desk dataset
-                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
-                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
 
                 // room dataset
                 "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
@@ -132,16 +132,19 @@
                 // "system.target_prompt=sunglasses of the pooh",
 
                 // baseball -> tennis ball
-                "system.prompt_processor.prompt=Replace the baseball with a tennis ball",
+                "system.prompt_processor.prompt=Replace the baseball with a yellow tennis ball",
                 "data.lens_edit_prompt=Replace the baseball with a tennis ball",
-                "system.seg_prompt=baseball",
-                "data.mmr_seg_prompt=baseball",
-                "data.lens_seg_prompt=baseball",
-                "system.target_prompt=tennis ball",
+                // "system.prompt_processor.prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
+                // "data.lens_edit_prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
+            
+                "system.seg_prompt=white baseball",
+                "data.mmr_seg_prompt=white baseball",
+                "data.lens_seg_prompt=white baseball",
+                "system.target_prompt=yellow tennis ball",
 
-                "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
-                // "data.lens_distance_multipliers=6.0", // 하나로 지정해보기!!
+                "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+                "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!!
                 "data.lens_use_ip2p_scoring=true",
                 "data.lens_entropy_thresh=0.97",
                 "data.lens_ip2p_steps=5",
@@ -149,7 +152,7 @@
 
                 "data.lens_ip2p_guidance_scale=12.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
-                "data.lens_cone_half_angle_deg=80",
+                "data.lens_cone_half_angle_deg=60",
                 // "data.lens_diversity_y_variance_weight=0.5", //값을 키우면(예: 0.5, 1.0): 고도가 비슷한 뷰를 더 선호해 y축 방향 variance가 줄어듭니다.
                 // "data.lens_prune_z_bottom_percent=0.4",
                 // "data.lens_prune_y_top_percent=0.4",
@@ -173,11 +176,11 @@
 
                 "system.guidance.feature_injection_mode=similarity",
                 // "system.guidance.injection_lambda=0.5",
-                // "system.guidance.injection_3d_anchor_style=gather",
+                // "system.guidance.injection_3d_anchor_style=gather",f
                 "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
                 // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
 
-                "system.guidance.guidance_scale=7.5",
+                "system.guidance.guidance_scale=12.5",
                 "system.mask_thres=0.6",
                 "system.mask_max_ratio=0.6",
                 "system.mask_min_ratio=0.01",
@@ -204,17 +207,7 @@
                 "data.max_view_num=25",
                 "data.max_edit_view_num=20",
 
-                // ball_tennis (sweep.py TASKS): room, white baseball -> yellow tennis ball
-                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "system.prompt_processor.prompt=Replace the baseball with a tennis ball",
-                "data.lens_edit_prompt=Replace the baseball with a tennis ball",
-                "system.seg_prompt=white baseball",
-                "data.mmr_seg_prompt=white baseball",
-                "data.lens_seg_prompt=white baseball",
-                "system.target_prompt=yellow tennis ball",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room/ball_tennis",
+
 
                 "system.densify_until_iter=1500",
 
