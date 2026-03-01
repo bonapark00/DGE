@@ -94,45 +94,72 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "3",
+                "--gpu", "0",
                 "trainer.max_steps=1500",
 
-                "system.prompt_processor.prompt=Make the pooh look like a robot",
-                "data.lens_edit_prompt=Make the pooh look like a robot",
-                "system.seg_prompt=pooh",
-                "data.mmr_seg_prompt=pooh",
-                "system.target_prompt=robot",
-                "system.guidance.feature_injection_mode=similarity",
-                // "system.guidance.injection_lambda=0.5",
-                // "system.guidance.injection_3d_anchor_style=gather",
-                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
-                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
-                
-
-                // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his face",
-                // "data.lens_edit_prompt=Make the pooh wear sunglasses on his face",
-                // "system.prompt_processor.prompt=Change the color of the pooh's nose into red",
-                // "data.lens_edit_prompt=Change the color of the pooh's nose into red",
-
-                // "system.seg_prompt=head of the pooh",
-                // "data.mmr_seg_prompt=head of the pooh",
-                // "system.seg_prompt=pooh",
-                // "data.mmr_seg_prompt=pooh",
-                // "system.target_prompt=sunglasses of the pooh",
-                // "system.target_prompt=red nose of the pooh",
-                // "data.lens_edit_prompt=Change the color of the pooh's nose into red",
-                
-                
-                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
-                "data.lens_seg_prompt=pooh",
                 "data.edit_view_selection_strategy=lens",
                 "system.guidance.edit_view_selection_strategy=lens",
+
+                // covered_desk dataset
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
+
+                // room dataset
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room",
+                
+
+                // pooh -> robot
+                // "system.prompt_processor.prompt=Make the pooh look like a robot",
+                // "data.lens_edit_prompt=Make the pooh look like a robot",
+                // "system.seg_prompt=pooh",
+                // "data.mmr_seg_prompt=pooh",
+                // "data.lens_seg_prompt=pooh",
+                // "system.target_prompt=robot",
+
+                
+                // ---
+                // pooh -> sunglasses
+                // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his eyes",
+                // "data.lens_edit_prompt=Make the pooh wear sunglasses on his eyes",
+                // "system.seg_prompt=head of the pooh",
+                // "data.mmr_seg_prompt=head of the pooh",
+                // "data.lens_seg_prompt=head of the pooh",
+                // "system.target_prompt=sunglasses of the pooh",
+
+                // baseball -> tennis ball
+                "system.prompt_processor.prompt=Replace the baseball with a tennis ball",
+                "data.lens_edit_prompt=Replace the baseball with a tennis ball",
+                "system.seg_prompt=baseball",
+                "data.mmr_seg_prompt=baseball",
+                "data.lens_seg_prompt=baseball",
+                "system.target_prompt=tennis ball",
+
                 "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
-                
-                
+                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
+                // "data.lens_distance_multipliers=6.0", // 하나로 지정해보기!!
+                "data.lens_use_ip2p_scoring=true",
+                "data.lens_entropy_thresh=0.97",
+                "data.lens_ip2p_steps=5",
+                "data.lens_lambda_ent=15.0",
+
+                "data.lens_ip2p_guidance_scale=12.5",
+                "data.lens_ip2p_image_guidance_scale=1.5",
+                "data.lens_cone_half_angle_deg=80",
+                // "data.lens_diversity_y_variance_weight=0.5", //값을 키우면(예: 0.5, 1.0): 고도가 비슷한 뷰를 더 선호해 y축 방향 variance가 줄어듭니다.
+                // "data.lens_prune_z_bottom_percent=0.4",
+                // "data.lens_prune_y_top_percent=0.4",
+                // "data.lens_prune_x_both_percent=1",
+                // "data.lens_n_candidates=150",
+                // "data.lens_top_fraction=0.20",
+                // "data.lens_w_vis=0.6",
+                // "data.lens_w_can=0.4",
+
+
                 // "data.lens_seg_prompt=man",
                 // "system.target_prompt=clown",
                 // "data.lens_edit_prompt=Turn the man into a clown",
@@ -144,7 +171,13 @@
                 // "system.guidance.edit_view_selection_strategy=random",
                 // "data.lens_distance_multipliers=0.5,1.0,1.5,2.0,2.5,3.0",
 
-                "system.guidance.guidance_scale=12.5",
+                "system.guidance.feature_injection_mode=similarity",
+                // "system.guidance.injection_lambda=0.5",
+                // "system.guidance.injection_3d_anchor_style=gather",
+                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
+                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
+
+                "system.guidance.guidance_scale=7.5",
                 "system.mask_thres=0.6",
                 "system.mask_max_ratio=0.6",
                 "system.mask_min_ratio=0.01",
@@ -165,22 +198,27 @@
                 
 
                 "system.mask_view_population=train_cameras",
-                "system.mask_num_views=20",
-                "data.max_view_num=15",
-                "data.max_edit_view_num=15",
-                "system.densify_until_iter=900",
-                
-                "data.lens_use_ip2p_scoring=true",
-                "data.lens_ip2p_steps=5",
-                "data.lens_ip2p_guidance_scale=12.5",
-                "data.lens_ip2p_image_guidance_scale=1.5",
-                "data.lens_cone_half_angle_deg=60",
-                "data.lens_lambda_leak=1.5",
-                "data.lens_lambda_ent=15.0",
+                "system.mask_num_views=30",
+                "system.mask_update_view_num=30",
+                "system.mask_update_at_step=300",
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+
+                // ball_tennis (sweep.py TASKS): room, white baseball -> yellow tennis ball
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                "system.prompt_processor.prompt=Replace the baseball with a tennis ball",
+                "data.lens_edit_prompt=Replace the baseball with a tennis ball",
+                "system.seg_prompt=white baseball",
+                "data.mmr_seg_prompt=white baseball",
+                "data.lens_seg_prompt=white baseball",
+                "system.target_prompt=yellow tennis ball",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room/ball_tennis",
+
+                "system.densify_until_iter=1500",
 
                 "system.camera_update_per_step=1500",
-                "system.mask_update_at_step=600",
-                "system.mask_update_view_num=5",
                 "system.prune_floater_at_step=-1",
                 "checkpoint.save_top_k=0",
 

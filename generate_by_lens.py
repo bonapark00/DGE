@@ -22,28 +22,157 @@ Outputs:
 """
 
 """
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
+        --seg_prompt "head of the pooh" \
+        --edit_prompt "Make the pooh wear sunglasses on his eyes" \
+        --use_ip2p_scoring \
+        --distance_multipliers "5.0, 6.0, 7.0, 8.0, 9.0, 10.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 4.0 \
+        --save_attn_grid output/attn_grid_pooh_sunglasses.jpg \
+        --gpu 0 \
+        --v_front_method scene_center \
+        --prune_z_bottom_percent 0.4 \
+        --prune_y_top_percent 0.4 \
+        --prune_x_both_percent 1 \
+        --save_pruned_ply output/pruned.ply
+
  python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
         --seg_prompt "red sweater" \
         --edit_prompt "Change the red sweater into a leather jacket" \
         --use_ip2p_scoring \
-        --save_colmap output/lens_colmap \
-        --video_path output/lens_claude.mp4 \
         --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
         --visualize_roi \
         --n_select 20 \
-        --save_attn_grid output/attn_grid.jpg
+        --save_attn_grid output/attn_grid.jpg \
+        --gpu 0
+        # --save_colmap output/lens_colmap \
+        # --video_path output/lens_claude.mp4 \
 
+ python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
+        --seg_prompt "head of the pooh" \
+        --edit_prompt "Make the pooh wear sunglasses on his eyes" \
+        --use_ip2p_scoring \
+        --distance_multipliers "5.0, 6.0, 7.0, 8.0, 9.0, 10.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 4.0 \
+        --save_attn_grid output/attn_grid_pooh_sunglasses.jpg \
+        --gpu 0 \
+        --v_front_method scene_center
+        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
+
+ python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
+        --seg_prompt "sweater of the pooh" \
+        --edit_prompt "Change the sweather of the pooh into a fleece jacket" \
+        --use_ip2p_scoring \
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 4.0 \
+        --save_attn_grid output/attn_grid_pooh_sweater_to_leather_jacket.jpg \
+        --gpu 1 \
+        --v_front_method scene_center
+ 
+ python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
+        --seg_prompt "pooh" \
+        --edit_prompt "Make the pooh look like a robot" \
+        --use_ip2p_scoring \
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 4.0 \
+        --save_attn_grid output/attn_grid_pooh_sweater_to_leather_jacket.jpg \
+        --gpu 1 \
+        --v_front_method scene_center
+
+
+ python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
+        --seg_prompt "eyes of the rabbit" \
+        --edit_prompt "Make the rabbit wear sunglasses on his eyes" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.2, 0.5, 0.7, 1.0, 2.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_rabbit_sunglasses.jpg \
+        --gpu 1 \
+        --v_front_method scene_center \
+        --guidance_scale 6.0
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
+        --seg_prompt "eyes of the rabbit" \
+        --edit_prompt "Make the rabbit wear sunglasses on his eyes" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.7, 1.0, 1.2, 1.4, 1.6, 2.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_rabbit_sunglasses.jpg \
+        --gpu 1 \
+        --v_front_method scene_center --guidance_scale 5.0
+ python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
+        --seg_prompt "dinosaur" \
+        --edit_prompt "Change the dinosaur figure to green" \
+        --use_ip2p_scoring \
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_dino_green.jpg \
+        --gpu 1 \
+        --v_front_method scene_center
 """
 
 
 # Compatibility patch for huggingface_hub  (must be first)
 import hf_hub_patch  # noqa: E402, F401
 
+# Set CUDA_VISIBLE_DEVICES from --gpu / --device before any torch import, so that
+# GaussianModel, Simple_Camera, and the renderer (all use .cuda() / device="cuda")
+# see a single GPU and avoid cross-device illegal memory access.
+import os
+import sys
+for i, arg in enumerate(sys.argv):
+    if arg == "--gpu" and i + 1 < len(sys.argv):
+        try:
+            os.environ["CUDA_VISIBLE_DEVICES"] = str(int(sys.argv[i + 1]))
+            break
+        except ValueError:
+            pass
+    if arg == "--device" and i + 1 < len(sys.argv):
+        val = sys.argv[i + 1]
+        if val.startswith("cuda:") and ":" in val:
+            try:
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(int(val.split(":")[1]))
+                break
+            except ValueError:
+                pass
+    if arg.startswith("--device="):
+        val = arg.split("=", 1)[1]
+        if val.startswith("cuda:") and ":" in val:
+            try:
+                os.environ["CUDA_VISIBLE_DEVICES"] = str(int(val.split(":")[1]))
+                break
+            except ValueError:
+                pass
+
 import collections
 import math
-import os
 from argparse import ArgumentParser
 from contextlib import contextmanager
 from typing import Dict, List, Optional, Tuple
@@ -51,6 +180,7 @@ from typing import Dict, List, Optional, Tuple
 import imageio
 import numpy as np
 import torch
+from torch import nn
 import torchvision
 
 from gaussiansplatting.arguments import ModelParams, PipelineParams, get_combined_args
@@ -165,6 +295,34 @@ def load_gaussians(ply_path: str, sh_degree: int):
     return gaussians
 
 
+def _prune_gaussians_by_mask(gaussians: GaussianModel, keep_mask: torch.Tensor) -> int:
+    """
+    Prune Gaussians in-place by keeping only points where keep_mask is True.
+    Does not use optimizer (for inference-only models). Returns number of points removed.
+    """
+    device = gaussians.get_xyz.device
+    keep_mask = keep_mask.to(device)
+    n_before = keep_mask.shape[0]
+    n_keep = int(keep_mask.sum().item())
+    n_remove = n_before - n_keep
+    if n_remove == 0:
+        return 0
+    # Replace parameters (model has no optimizer in generate_by_lens)
+    gaussians._xyz = nn.Parameter(gaussians._xyz[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._features_dc = nn.Parameter(gaussians._features_dc[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._features_rest = nn.Parameter(gaussians._features_rest[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._opacity = nn.Parameter(gaussians._opacity[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._scaling = nn.Parameter(gaussians._scaling[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._rotation = nn.Parameter(gaussians._rotation[keep_mask].detach().clone().requires_grad_(True))
+    if gaussians.max_radii2D.shape[0] == n_before:
+        gaussians.max_radii2D = gaussians.max_radii2D[keep_mask].detach().clone()
+    if gaussians.xyz_gradient_accum.shape[0] == n_before:
+        gaussians.xyz_gradient_accum = gaussians.xyz_gradient_accum[keep_mask].detach().clone()
+    if gaussians.denom.shape[0] == n_before:
+        gaussians.denom = gaussians.denom[keep_mask].detach().clone()
+    return n_remove
+
+
 def load_colmap_prior(colmap_path: str):
     sparse0 = os.path.join(os.path.abspath(colmap_path), "sparse", "0")
     images = read_extrinsics_binary(os.path.join(sparse0, "images.bin"))
@@ -209,10 +367,16 @@ def roi_intrinsic_analysis(
     gaussians: GaussianModel,
     roi_mask: Optional[torch.Tensor],
     cam_forwards: np.ndarray,
+    cam_centers: Optional[np.ndarray] = None,
+    v_front_method: str = "colmap_mean",
 ) -> Dict:
     """
     Perform weighted PCA on ROI Gaussians to find the object centre,
     principal axes, and a robust *front* direction.
+
+    v_front_method:
+        "colmap_mean": v_front from mean COLMAP view direction (minus v1 component).
+        "scene_center": v_front from ROI center toward scene center (cam_centers.mean), then v1 removed.
 
     Returns dict with keys:
         center, v1, v2, v3 (eigenvectors, descending eigenvalue),
@@ -251,16 +415,34 @@ def roi_intrinsic_analysis(
     # Object size: 2σ along the *median* axis (avoids elongation bias)
     object_size = float(2.0 * np.sqrt(np.median(np.abs(evals))))
 
-    # Front direction: direction from object centre toward cameras.
-    # cam_forwards points camera→scene, so negate to get scene→camera.
-    mean_fwd = _normalize(cam_forwards.mean(axis=0))
-    # Remove component along v1 (longest axis, e.g. vertical for a standing person)
-    proj_on_v1 = np.dot(mean_fwd, v1) * v1
-    v_front = _normalize(-(mean_fwd - proj_on_v1))
-    if np.linalg.norm(v_front) < 1e-6:
-        v_front = v3.copy()
-
     center_np = center.cpu().numpy()
+
+    # Front direction
+    if v_front_method == "scene_center":
+        if cam_centers is None or len(cam_centers) == 0:
+            raise ValueError("v_front_method=scene_center requires cam_centers")
+        scene_center = np.array(cam_centers, dtype=np.float64).mean(axis=0).astype(np.float32)
+        raw = scene_center - center_np
+        nrm = float(np.linalg.norm(raw))
+        if nrm < 1e-8:
+            v_front = v3.copy()
+            print("[Step1] v_front=scene_center: degenerate (scene_center≈ROI center), using v3")
+        else:
+            # Use direction to scene center as-is (no v1 removal), so it actually differs from colmap_mean.
+            # v1 removal would zero out when ROI→scene_center is parallel to v1, making result match v3/colmap_mean.
+            v_front = (raw / nrm).astype(np.float32)
+            print("[Step1] v_front=scene_center (ROI → scene center)")
+    else:
+        # colmap_mean: direction from object centre toward cameras (mean view direction)
+        # cam_forwards points camera→scene, so negate to get scene→camera.
+        mean_fwd = _normalize(cam_forwards.mean(axis=0))
+        proj_on_v1 = np.dot(mean_fwd, v1) * v1
+        v_front = _normalize(-(mean_fwd - proj_on_v1))
+        if np.linalg.norm(v_front) < 1e-6:
+            v_front = v3.copy()
+            print("[Step1] v_front=colmap_mean: degenerate, using v3")
+        else:
+            print("[Step1] v_front=colmap_mean")
 
     print(
         f"[Step1] ROI center={center_np}, "
@@ -1159,14 +1341,16 @@ def fibonacci_camera_candidates(
     hemisphere_only: bool = False,
     colmap_cam_centers: np.ndarray = None,
     cone_half_angle_deg: float = 90.0,
+    cone_axis_direction: Optional[np.ndarray] = None,
     device: str = "cuda",
 ) -> List[Simple_Camera]:
     """
     Place *n_candidates* cameras on a sphere of radius *distance* centred
     on *center*, each looking at the centre.
 
-    If *colmap_cam_centers* is provided, restrict candidates to a cone
-    around the mean COLMAP viewing direction (from cameras → center).
+    If cone filtering is used (via *cone_axis_direction* or *colmap_cam_centers*),
+    restrict candidates to a cone. Prefer *cone_axis_direction* (e.g. v_front)
+    so Step 3 aligns with the chosen front; else use mean COLMAP direction.
     """
     if world_up is None:
         world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -1179,9 +1363,17 @@ def fibonacci_camera_candidates(
         dots = directions @ up_axis
         directions = directions[dots > -0.1]  # allow slight below-horizon
 
-    # Constrain to cone around mean COLMAP viewing direction
-    if colmap_cam_centers is not None:
-        # Mean direction from center → COLMAP cameras
+    # Constrain to cone: use v_front (cone_axis_direction) when provided so
+    # left/right bias follows chosen front; else fall back to COLMAP mean direction.
+    if cone_axis_direction is not None:
+        cone_axis = _normalize(np.asarray(cone_axis_direction, dtype=np.float32))
+        cos_threshold = math.cos(math.radians(cone_half_angle_deg))
+        dots = directions @ cone_axis
+        directions = directions[dots > cos_threshold]
+        print(f"[Step3] Cone filter: {len(directions)} candidates within "
+              f"{cone_half_angle_deg}° of v_front")
+    elif colmap_cam_centers is not None:
+        # Mean direction from center → COLMAP cameras (legacy: can bias left/right)
         mean_cam_dir = _normalize(
             (colmap_cam_centers - center[None, :]).mean(axis=0)
         )
@@ -1488,6 +1680,7 @@ def run_generate_by_lens_pipeline(
     entropy_thresh: float = 0.97,
     override_opacity: Optional[torch.Tensor] = None,
     device: str = "cuda",
+    v_front_method: str = "colmap_mean",
 ) -> List[Simple_Camera]:
     """
     Run the full Generate-by-Lens pipeline. Returns list of Simple_Camera.
@@ -1516,7 +1709,11 @@ def run_generate_by_lens_pipeline(
         )
 
     # Step 1: ROI Intrinsic Analysis
-    roi_info = roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+    roi_info = roi_intrinsic_analysis(
+        gaussians, roi_mask, cam_forwards,
+        cam_centers=cam_centers,
+        v_front_method=v_front_method,
+    )
     colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
     colmap_median_dist = float(np.median(colmap_dists))
     roi_info["colmap_median_dist"] = colmap_median_dist
@@ -1533,7 +1730,7 @@ def run_generate_by_lens_pipeline(
         override_opacity=override_opacity, device=device,
     )
 
-    # Step 3: Fibonacci Manifold Sampling
+    # Step 3: Fibonacci Manifold Sampling (cone axis = v_front so candidates align with chosen front)
     candidates = fibonacci_camera_candidates(
         center=roi_info["center"],
         distance=optimal_distance,
@@ -1542,6 +1739,7 @@ def run_generate_by_lens_pipeline(
         hemisphere_only=hemisphere_only,
         colmap_cam_centers=cam_centers,
         cone_half_angle_deg=cone_half_angle_deg,
+        cone_axis_direction=roi_info["v_front"],
         device=device,
     )
 
@@ -1651,6 +1849,13 @@ def main():
         help="Half-angle (in degrees) of the COLMAP view cone used to filter Fibonacci candidates (Step 3)",
     )
     parser.add_argument(
+        "--v_front_method",
+        type=str,
+        default="colmap_mean",
+        choices=["colmap_mean", "scene_center"],
+        help="How to compute v_front: colmap_mean = mean COLMAP view direction (default); scene_center = from ROI toward scene center (reduces left/right bias for off-center objects)",
+    )
+    parser.add_argument(
         "--use_ip2p_scoring", action="store_true",
         help="Use IP2P attention for editability scoring (slower, requires model download)",
     )
@@ -1678,6 +1883,10 @@ def main():
     parser.add_argument(
         "--device", type=str, default="cuda",
         help="CUDA device to use (e.g. cuda, cuda:0, cuda:2). Default: cuda",
+    )
+    parser.add_argument(
+        "--gpu", type=int, default=None, metavar="N",
+        help="GPU index to use (e.g. 0, 1, 2). Overrides --device with cuda:N.",
     )
     parser.add_argument(
         "--guidance_scale", type=float, default=7.5,
@@ -1719,6 +1928,33 @@ def main():
         default=0.0,
         help="Prune Gaussians with opacity below this for rendering (0 = no pruning). Reduces floaters.",
     )
+    parser.add_argument(
+        "--prune_z_bottom_percent",
+        type=float,
+        default=0.0,
+        metavar="P",
+        help="Prune the bottom P%% of Gaussians by z value (e.g. 0.01 = remove bottom 0.01%%). 0 = disable.",
+    )
+    parser.add_argument(
+        "--prune_y_top_percent",
+        type=float,
+        default=0.0,
+        metavar="P",
+        help="Prune the top P%% of Gaussians by y value (e.g. 0.4 = remove top 0.4%%). 0 = disable.",
+    )
+    parser.add_argument(
+        "--prune_x_both_percent",
+        type=float,
+        default=0.0,
+        metavar="P",
+        help="Prune the top and bottom P%% of Gaussians by x value each (e.g. 3 = remove top 3%% and bottom 3%%). 0 = disable.",
+    )
+    parser.add_argument(
+        "--save_pruned_ply",
+        type=str,
+        default=None,
+        help="After pruning (opacity and/or below COLMAP z), save the pruned Gaussian model to this path (e.g. output/pruned.ply).",
+    )
 
     args = get_combined_args(parser)
     safe_state(args.quiet)
@@ -1738,6 +1974,12 @@ def main():
         latency_logger = None
 
     device = getattr(args, "device", "cuda") or "cuda"
+    if getattr(args, "gpu", None) is not None:
+        # CUDA_VISIBLE_DEVICES was set at startup so only one GPU is visible; use it.
+        device = "cuda"
+    elif device.startswith("cuda:") and ":" in device:
+        # Same when --device cuda:N was parsed and we set CUDA_VISIBLE_DEVICES.
+        device = "cuda"
     print(f"[lens] Using device: {device}")
 
     # Ensure ModelParams defaults exist for extract() compatibility
@@ -1796,6 +2038,59 @@ def main():
         )
 
     # ---------------------------------------------------------------
+    # Prune by z (bottom P%), y (top P%), x (top & bottom P% each) in-place, then optionally save
+    # ---------------------------------------------------------------
+    prune_z_pct = getattr(args, "prune_z_bottom_percent", 0.0)
+    prune_y_pct = getattr(args, "prune_y_top_percent", 0.0)
+    prune_x_pct = getattr(args, "prune_x_both_percent", 0.0)
+    if prune_z_pct > 0 or prune_y_pct > 0 or prune_x_pct > 0:
+        xyz = gaussians.get_xyz.detach()
+        n_pts = xyz.shape[0]
+        device = xyz.device
+        keep_mask = torch.ones(n_pts, dtype=torch.bool, device=device)
+        if prune_z_pct > 0:
+            z = xyz[:, 2]
+            k_z = max(0, int(round(n_pts * (prune_z_pct / 100.0))))
+            if k_z > 0:
+                _, idx_smallest_z = torch.topk(z, k_z, largest=False)
+                keep_mask[idx_smallest_z] = False
+        if prune_y_pct > 0:
+            y = xyz[:, 1]
+            k_y = max(0, int(round(n_pts * (prune_y_pct / 100.0))))
+            if k_y > 0:
+                _, idx_largest_y = torch.topk(y, k_y, largest=True)
+                keep_mask[idx_largest_y] = False
+        if prune_x_pct > 0:
+            x = xyz[:, 0]
+            k_x = max(0, int(round(n_pts * (prune_x_pct / 100.0))))
+            if k_x > 0:
+                _, idx_smallest_x = torch.topk(x, k_x, largest=False)
+                _, idx_largest_x = torch.topk(x, k_x, largest=True)
+                keep_mask[idx_smallest_x] = False
+                keep_mask[idx_largest_x] = False
+        n_remove = (~keep_mask).sum().item()
+        if n_remove > 0:
+            n_removed = _prune_gaussians_by_mask(gaussians, keep_mask)
+            msg = []
+            if prune_z_pct > 0:
+                msg.append(f"z bottom {prune_z_pct}%")
+            if prune_y_pct > 0:
+                msg.append(f"y top {prune_y_pct}%")
+            if prune_x_pct > 0:
+                msg.append(f"x top & bottom {prune_x_pct}% each")
+            print(
+                f"[Prune] Removed {n_removed} Gaussians ({', '.join(msg)}). "
+                f"Remaining: {gaussians.get_xyz.shape[0]}"
+            )
+        else:
+            print("[Prune] No points to remove (no change).")
+    if getattr(args, "save_pruned_ply", None):
+        save_path = args.save_pruned_ply
+        os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
+        gaussians.save_ply(save_path)
+        print(f"[Prune] Saved pruned Gaussians to {save_path}")
+
+    # ---------------------------------------------------------------
     # ROI mask (optional segmentation)
     # ---------------------------------------------------------------
     roi_mask = None
@@ -1839,9 +2134,17 @@ def main():
     if latency_logger:
         with latency_timeit(latency_logger, "step1", device):
             with latency_timeit(latency_logger, "step1.roi_intrinsic_analysis", device):
-                roi_info = roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+                roi_info = roi_intrinsic_analysis(
+                    gaussians, roi_mask, cam_forwards,
+                    cam_centers=cam_centers,
+                    v_front_method=getattr(args, "v_front_method", "colmap_mean"),
+                )
     else:
-        roi_info = roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+        roi_info = roi_intrinsic_analysis(
+            gaussians, roi_mask, cam_forwards,
+            cam_centers=cam_centers,
+            v_front_method=getattr(args, "v_front_method", "colmap_mean"),
+        )
 
     # Use COLMAP median distance to ROI center as a reference
     colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
@@ -1944,6 +2247,7 @@ def main():
                     hemisphere_only=args.hemisphere_only,
                     colmap_cam_centers=cam_centers,
                     cone_half_angle_deg=args.cone_half_angle_deg,
+                    cone_axis_direction=roi_info["v_front"],
                     device=device,
                 )
     else:
@@ -1957,6 +2261,7 @@ def main():
             hemisphere_only=args.hemisphere_only,
             colmap_cam_centers=cam_centers,
             cone_half_angle_deg=args.cone_half_angle_deg,
+            cone_axis_direction=roi_info["v_front"],
             device=device,
         )
 

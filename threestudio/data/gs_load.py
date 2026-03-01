@@ -244,6 +244,7 @@ class GSLoadDataModuleConfig:
     lens_w_can: float = 0.4  # Canonical alignment weight
     lens_top_fraction: float = 0.20  # Top fraction for FPS diversity selection
     lens_diversity_x_weight: float = 0.0  # Extra weight for azimuth (x-axis) diversity in Step 5
+    lens_diversity_y_variance_weight: float = 0.0  # Penalize elevation spread to lower variance in y (Step 5)
     lens_n_seg_views: int = 8  # Number of views for multi-view ROI segmentation
     lens_seg_threshold: float = 0.3  # Back-projection threshold for ROI mask
     lens_min_opacity: float = 0.0  # Prune Gaussians below this opacity
@@ -256,6 +257,9 @@ class GSLoadDataModuleConfig:
     lens_lambda_leak: float = 1.5  # SAGE leak penalty
     lens_lambda_ent: float = 2.0  # SAGE entropy penalty
     lens_entropy_thresh: float = 0.97  # SAGE entropy hard threshold
+    lens_prune_z_bottom_percent: float = 0.0  # Prune bottom P% by z (e.g. 0.01)
+    lens_prune_y_top_percent: float = 0.0  # Prune top P% by y (e.g. 0.4)
+    lens_prune_x_both_percent: float = 0.0  # Prune top & bottom P% each by x (e.g. 3)
 
 
 # ===================================================================
@@ -337,6 +341,67 @@ def _lens_c2w_to_RT(c2w: np.ndarray):
     R = R_c2w
     T = (-(R_c2w.T) @ cam_center).astype(np.float32)
     return R, T
+
+
+def _lens_prune_gaussians_by_mask(gaussians, keep_mask: torch.Tensor) -> int:
+    """Prune Gaussians in-place by keeping only points where keep_mask is True. Returns number removed."""
+    device = gaussians.get_xyz.device
+    keep_mask = keep_mask.to(device)
+    n_before = keep_mask.shape[0]
+    n_remove = n_before - int(keep_mask.sum().item())
+    if n_remove == 0:
+        return 0
+    gaussians._xyz = torch.nn.Parameter(gaussians._xyz[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._features_dc = torch.nn.Parameter(gaussians._features_dc[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._features_rest = torch.nn.Parameter(gaussians._features_rest[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._opacity = torch.nn.Parameter(gaussians._opacity[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._scaling = torch.nn.Parameter(gaussians._scaling[keep_mask].detach().clone().requires_grad_(True))
+    gaussians._rotation = torch.nn.Parameter(gaussians._rotation[keep_mask].detach().clone().requires_grad_(True))
+    if gaussians.max_radii2D.shape[0] == n_before:
+        gaussians.max_radii2D = gaussians.max_radii2D[keep_mask].detach().clone()
+    if gaussians.xyz_gradient_accum.shape[0] == n_before:
+        gaussians.xyz_gradient_accum = gaussians.xyz_gradient_accum[keep_mask].detach().clone()
+    if gaussians.denom.shape[0] == n_before:
+        gaussians.denom = gaussians.denom[keep_mask].detach().clone()
+    return n_remove
+
+
+def _lens_prune_gaussians_by_xyz_percent(
+    gaussians,
+    prune_z_bottom_percent: float,
+    prune_y_top_percent: float,
+    prune_x_both_percent: float,
+) -> int:
+    """Prune by z (bottom P%), y (top P%), x (top & bottom P% each). Returns total number removed."""
+    if prune_z_bottom_percent <= 0 and prune_y_top_percent <= 0 and prune_x_both_percent <= 0:
+        return 0
+    xyz = gaussians.get_xyz.detach()
+    n_pts = xyz.shape[0]
+    device = xyz.device
+    keep_mask = torch.ones(n_pts, dtype=torch.bool, device=device)
+    if prune_z_bottom_percent > 0:
+        z = xyz[:, 2]
+        k_z = max(0, int(round(n_pts * (prune_z_bottom_percent / 100.0))))
+        if k_z > 0:
+            _, idx_smallest_z = torch.topk(z, k_z, largest=False)
+            keep_mask[idx_smallest_z] = False
+    if prune_y_top_percent > 0:
+        y = xyz[:, 1]
+        k_y = max(0, int(round(n_pts * (prune_y_top_percent / 100.0))))
+        if k_y > 0:
+            _, idx_largest_y = torch.topk(y, k_y, largest=True)
+            keep_mask[idx_largest_y] = False
+    if prune_x_both_percent > 0:
+        x = xyz[:, 0]
+        k_x = max(0, int(round(n_pts * (prune_x_both_percent / 100.0))))
+        if k_x > 0:
+            _, idx_smallest_x = torch.topk(x, k_x, largest=False)
+            _, idx_largest_x = torch.topk(x, k_x, largest=True)
+            keep_mask[idx_smallest_x] = False
+            keep_mask[idx_largest_x] = False
+    if (~keep_mask).sum().item() == 0:
+        return 0
+    return _lens_prune_gaussians_by_mask(gaussians, keep_mask)
 
 
 def _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards) -> Dict:
@@ -727,10 +792,12 @@ def _lens_score_candidates(cameras, gaussians, roi_mask, roi_info, pipe_params, 
     return results
 
 
-def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, diversity_x_weight: float = 0.0):
+def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, diversity_x_weight: float = 0.0,
+                              diversity_y_variance_weight: float = 0.0):
     """
     Energy-weighted FPS: first select highest-energy camera, then iteratively
     select the one farthest from already selected (angular distance) and with high energy.
+    diversity_y_variance_weight > 0 penalizes elevation spread so selected views have lower variance in y.
     Returns list of indices in selection order (no azimuth sort).
     """
     n_pool = max(int(len(scored) * top_fraction), n_select)
@@ -756,6 +823,7 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, d
         for ci in remaining:
             min_ang = 1e9
             min_dphi = 1e9
+            min_dy = 1e9  # min elevation (y) difference from selected
             for si in selected:
                 v_ci = view_dirs[ci]
                 v_si = view_dirs[si]
@@ -771,7 +839,11 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, d
                     dphi = 2 * math.pi - dphi
                 min_dphi = min(min_dphi, dphi)
 
-            diversity_score = min_ang + diversity_x_weight * min_dphi
+                # Elevation (y) difference to lower variance in y when weight > 0
+                dy = abs(float(v_ci[1]) - float(v_si[1]))
+                min_dy = min(min_dy, dy)
+
+            diversity_score = min_ang + diversity_x_weight * min_dphi - diversity_y_variance_weight * min_dy
             combined = diversity_score * pool_energies[ci]
             if combined > best_sc:
                 best_sc = combined
@@ -836,6 +908,7 @@ def select_key_views_by_lens_fps(
         cameras, scored, center,
         n_select=n_key, top_fraction=top_fraction,
         diversity_x_weight=0.0,
+        diversity_y_variance_weight=0.0,
     )
     return selected
 
@@ -929,6 +1002,7 @@ def _lens_run_generate_by_lens_pipeline(
     w_can: float = 0.4,
     top_fraction: float = 0.20,
     diversity_x_weight: float = 0.0,
+    diversity_y_variance_weight: float = 0.0,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
@@ -1025,6 +1099,7 @@ def _lens_run_generate_by_lens_pipeline(
             candidates, scored, roi_info["center"],
             n_select=n_select, top_fraction=top_fraction,
             diversity_x_weight=diversity_x_weight,
+            diversity_y_variance_weight=diversity_y_variance_weight,
         )
     n_pool = max(int(len(scored) * top_fraction), n_select)
     pool_size = min(n_pool, len(scored))
@@ -2158,6 +2233,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 w_can=self.cfg.lens_w_can,
                 top_fraction=self.cfg.lens_top_fraction,
                 diversity_x_weight=getattr(self.cfg, "lens_diversity_x_weight", 0.0),
+                diversity_y_variance_weight=getattr(self.cfg, "lens_diversity_y_variance_weight", 0.0),
                 lambda_leak=self.cfg.lens_lambda_leak,
                 lambda_ent=self.cfg.lens_lambda_ent,
                 entropy_thresh=self.cfg.lens_entropy_thresh,
@@ -2491,6 +2567,20 @@ class GS_load(pl.LightningDataModule):
                     threestudio.info(f"[Lens] Pre-loading Gaussians from {self.cfg.lens_ply_path}")
                     self.lens_gaussian_model = GaussianModel(sh_degree=3)
                     self.lens_gaussian_model.load_ply(self.cfg.lens_ply_path)
+                    # Prune outlier Gaussians by x/y/z percent (same as generate_by_lens)
+                    pz = getattr(self.cfg, "lens_prune_z_bottom_percent", 0.0)
+                    py = getattr(self.cfg, "lens_prune_y_top_percent", 0.0)
+                    px = getattr(self.cfg, "lens_prune_x_both_percent", 0.0)
+                    if pz > 0 or py > 0 or px > 0:
+                        n_removed = _lens_prune_gaussians_by_xyz_percent(
+                            self.lens_gaussian_model, pz, py, px
+                        )
+                        if n_removed > 0:
+                            threestudio.info(
+                                f"[Lens] Pruned {n_removed} outlier Gaussians "
+                                f"(z_bottom={pz}%, y_top={py}%, x_both={px}%). "
+                                f"Remaining: {self.lens_gaussian_model.get_xyz.shape[0]}"
+                            )
             if latency_logger is not None:
                 self.train_dataset = GSLoadIterableDataset(
                     self.cfg, self.train_scene, latency_logger=latency_logger,
