@@ -243,6 +243,7 @@ class GSLoadDataModuleConfig:
     lens_w_vis: float = 0.6  # Visibility score weight
     lens_w_can: float = 0.4  # Canonical alignment weight
     lens_top_fraction: float = 0.20  # Top fraction for FPS diversity selection
+    lens_diversity_x_weight: float = 0.0  # Extra weight for azimuth (x-axis) diversity in Step 5
     lens_n_seg_views: int = 8  # Number of views for multi-view ROI segmentation
     lens_seg_threshold: float = 0.3  # Back-projection threshold for ROI mask
     lens_min_opacity: float = 0.0  # Prune Gaussians below this opacity
@@ -726,7 +727,7 @@ def _lens_score_candidates(cameras, gaussians, roi_mask, roi_info, pipe_params, 
     return results
 
 
-def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
+def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, diversity_x_weight: float = 0.0):
     """
     Energy-weighted FPS: first select highest-energy camera, then iteratively
     select the one farthest from already selected (angular distance) and with high energy.
@@ -737,9 +738,14 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
     pool_indices = [s[0] for s in pool]
     pool_energies = {s[0]: s[1] for s in pool}
     view_dirs = {}
+    azimuths = {}
     for ci in pool_indices:
         cc = cameras[ci].camera_center.cpu().numpy()
-        view_dirs[ci] = _lens_normalize(cc - center)
+        v = _lens_normalize(cc - center)
+        view_dirs[ci] = v
+        # Azimuth angle on x-z plane; emphasize horizontal (x-axis) diversity
+        vx, vz = float(v[0]), float(v[2])
+        azimuths[ci] = math.atan2(vx, vz)
     selected = []
     remaining = set(pool_indices)
     first = pool_indices[0]
@@ -749,11 +755,24 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction):
         best_idx, best_sc = None, -1e9
         for ci in remaining:
             min_ang = 1e9
+            min_dphi = 1e9
             for si in selected:
-                cos_sim = float(np.dot(view_dirs[ci], view_dirs[si]))
+                v_ci = view_dirs[ci]
+                v_si = view_dirs[si]
+                cos_sim = float(np.dot(v_ci, v_si))
                 ang = math.acos(np.clip(cos_sim, -1.0, 1.0))
                 min_ang = min(min_ang, ang)
-            combined = min_ang * pool_energies[ci]
+
+                # Azimuthal separation around vertical axis (x-z plane)
+                phi_ci = azimuths[ci]
+                phi_si = azimuths[si]
+                dphi = abs(phi_ci - phi_si)
+                if dphi > math.pi:
+                    dphi = 2 * math.pi - dphi
+                min_dphi = min(min_dphi, dphi)
+
+            diversity_score = min_ang + diversity_x_weight * min_dphi
+            combined = diversity_score * pool_energies[ci]
             if combined > best_sc:
                 best_sc = combined
                 best_idx = ci
@@ -816,6 +835,7 @@ def select_key_views_by_lens_fps(
     selected = _lens_diversity_selection(
         cameras, scored, center,
         n_select=n_key, top_fraction=top_fraction,
+        diversity_x_weight=0.0,
     )
     return selected
 
@@ -908,6 +928,7 @@ def _lens_run_generate_by_lens_pipeline(
     w_vis: float = 0.6,
     w_can: float = 0.4,
     top_fraction: float = 0.20,
+    diversity_x_weight: float = 0.0,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
@@ -1003,6 +1024,7 @@ def _lens_run_generate_by_lens_pipeline(
         selected_indices = _lens_diversity_selection(
             candidates, scored, roi_info["center"],
             n_select=n_select, top_fraction=top_fraction,
+            diversity_x_weight=diversity_x_weight,
         )
     n_pool = max(int(len(scored) * top_fraction), n_select)
     pool_size = min(n_pool, len(scored))
@@ -2116,39 +2138,41 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
 
         def _run_lens():
             return _lens_run_generate_by_lens_pipeline(
-            gaussians=gaussians,
-            cam_centers=cam_centers,
-            cam_forwards=cam_forwards,
-            fovy=fovy,
-            h=height,
-            w=width,
-            roi_mask=None,
-            seg_prompt=seg_prompt,
-            edit_prompt=self.cfg.lens_edit_prompt or "",
-            use_ip2p_scoring=self.cfg.lens_use_ip2p_scoring,
-            ip2p_pipe=ip2p_pipe,
-            distance_multipliers=dist_mults,
-            n_candidates=self.cfg.lens_n_candidates,
-            n_select=max_view_num,
-            hemisphere_only=self.cfg.lens_hemisphere_only,
-            cone_half_angle_deg=self.cfg.lens_cone_half_angle_deg,
-            w_vis=self.cfg.lens_w_vis,
-            w_can=self.cfg.lens_w_can,
-            top_fraction=self.cfg.lens_top_fraction,
-            lambda_leak=self.cfg.lens_lambda_leak,
-            lambda_ent=self.cfg.lens_lambda_ent,
-            entropy_thresh=self.cfg.lens_entropy_thresh,
-            ip2p_steps=self.cfg.lens_ip2p_steps,
-            ip2p_guidance_scale=self.cfg.lens_ip2p_guidance_scale,
-            ip2p_image_guidance_scale=self.cfg.lens_ip2p_image_guidance_scale,
-            override_opacity=override_opacity,
-            device=device,
-            latency_logger=self.latency_logger,
-            segmentor=self.segmentor,
-        )
+                gaussians=gaussians,
+                cam_centers=cam_centers,
+                cam_forwards=cam_forwards,
+                fovy=fovy,
+                h=height,
+                w=width,
+                roi_mask=None,
+                seg_prompt=seg_prompt,
+                edit_prompt=self.cfg.lens_edit_prompt or "",
+                use_ip2p_scoring=self.cfg.lens_use_ip2p_scoring,
+                ip2p_pipe=ip2p_pipe,
+                distance_multipliers=dist_mults,
+                n_candidates=self.cfg.lens_n_candidates,
+                n_select=max_view_num,
+                hemisphere_only=self.cfg.lens_hemisphere_only,
+                cone_half_angle_deg=self.cfg.lens_cone_half_angle_deg,
+                w_vis=self.cfg.lens_w_vis,
+                w_can=self.cfg.lens_w_can,
+                top_fraction=self.cfg.lens_top_fraction,
+                diversity_x_weight=getattr(self.cfg, "lens_diversity_x_weight", 0.0),
+                lambda_leak=self.cfg.lens_lambda_leak,
+                lambda_ent=self.cfg.lens_lambda_ent,
+                entropy_thresh=self.cfg.lens_entropy_thresh,
+                ip2p_steps=self.cfg.lens_ip2p_steps,
+                ip2p_guidance_scale=self.cfg.lens_ip2p_guidance_scale,
+                ip2p_image_guidance_scale=self.cfg.lens_ip2p_image_guidance_scale,
+                override_opacity=override_opacity,
+                device=device,
+                latency_logger=self.latency_logger,
+                segmentor=self.segmentor,
+            )
         if self.latency_logger is not None:
-            with self.latency_logger.timeit("camera_generation.lens"):
-                simple_cameras = _run_lens()
+            with self.latency_logger.timeit("camera_generation"):
+                with self.latency_logger.timeit("camera_generation.lens"):
+                    simple_cameras = _run_lens()
         else:
             simple_cameras = _run_lens()
 
@@ -2468,12 +2492,11 @@ class GS_load(pl.LightningDataModule):
                     self.lens_gaussian_model = GaussianModel(sh_degree=3)
                     self.lens_gaussian_model.load_ply(self.cfg.lens_ply_path)
             if latency_logger is not None:
-                with latency_logger.timeit("camera_generation"):
-                    self.train_dataset = GSLoadIterableDataset(
-                        self.cfg, self.train_scene, latency_logger=latency_logger,
-                        ip2p_pipe=self.ip2p_pipe, lens_gaussian_model=self.lens_gaussian_model,
-                        segmentor=getattr(self, "shared_segmentor", None),
-                    )
+                self.train_dataset = GSLoadIterableDataset(
+                    self.cfg, self.train_scene, latency_logger=latency_logger,
+                    ip2p_pipe=self.ip2p_pipe, lens_gaussian_model=self.lens_gaussian_model,
+                    segmentor=getattr(self, "shared_segmentor", None),
+                )
             else:
                 self.train_dataset = GSLoadIterableDataset(
                     self.cfg, self.train_scene,
