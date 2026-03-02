@@ -260,6 +260,7 @@ class GSLoadDataModuleConfig:
     lens_prune_z_bottom_percent: float = 0.0  # Prune bottom P% by z (e.g. 0.01)
     lens_prune_y_top_percent: float = 0.0  # Prune top P% by y (e.g. 0.4)
     lens_prune_x_both_percent: float = 0.0  # Prune top & bottom P% each by x (e.g. 3)
+    lens_v_front_method: str = "colmap_mean"  # Step1 front direction: "colmap_mean" or "scene_center" (same as generate_by_lens)
 
 
 # ===================================================================
@@ -404,7 +405,11 @@ def _lens_prune_gaussians_by_xyz_percent(
     return _lens_prune_gaussians_by_mask(gaussians, keep_mask)
 
 
-def _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards) -> Dict:
+def _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards, cam_centers=None, v_front_method: str = "colmap_mean") -> Dict:
+    """
+    Weighted PCA on ROI Gaussians. v_front_method: "colmap_mean" (default) or "scene_center".
+    Same logic as generate_by_lens.roi_intrinsic_analysis.
+    """
     from gaussiansplatting.utils.graphics_utils import focal2fov
     xyz = gaussians.get_xyz.detach()
     opacity = gaussians.get_opacity.detach().squeeze(-1)
@@ -425,12 +430,30 @@ def _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards) -> Dict:
     v3 = eigenvectors[:, 2].cpu().numpy()
     evals = eigenvalues.cpu().numpy()
     object_size = float(2.0 * np.sqrt(np.median(np.abs(evals))))
-    mean_fwd = _lens_normalize(cam_forwards.mean(axis=0))
-    proj_on_v1 = np.dot(mean_fwd, v1) * v1
-    v_front = _lens_normalize(-(mean_fwd - proj_on_v1))
-    if np.linalg.norm(v_front) < 1e-6:
-        v_front = v3.copy()
     center_np = center.cpu().numpy()
+
+    if v_front_method == "scene_center":
+        if cam_centers is None or len(cam_centers) == 0:
+            raise ValueError("v_front_method=scene_center requires cam_centers")
+        scene_center = np.array(cam_centers, dtype=np.float64).mean(axis=0).astype(np.float32)
+        raw = scene_center - center_np
+        nrm = float(np.linalg.norm(raw))
+        if nrm < 1e-8:
+            v_front = v3.copy()
+            print("[Step1] v_front=scene_center: degenerate (scene_center≈ROI center), using v3")
+        else:
+            v_front = (raw / nrm).astype(np.float32)
+            print("[Step1] v_front=scene_center (ROI → scene center)")
+    else:
+        mean_fwd = _lens_normalize(cam_forwards.mean(axis=0))
+        proj_on_v1 = np.dot(mean_fwd, v1) * v1
+        v_front = _lens_normalize(-(mean_fwd - proj_on_v1))
+        if np.linalg.norm(v_front) < 1e-6:
+            v_front = v3.copy()
+            print("[Step1] v_front=colmap_mean: degenerate, using v3")
+        else:
+            print("[Step1] v_front=colmap_mean")
+
     return dict(
         center=center_np, v1=v1, v2=v2, v3=v3,
         eigenvalues=evals, object_size=object_size, v_front=v_front,
@@ -744,15 +767,26 @@ def _lens_fibonacci_sphere_samples(n: int) -> np.ndarray:
 
 
 def _lens_fibonacci_camera_candidates(center, distance, n_candidates, world_up, fovy, h, w,
-                                      hemisphere_only, colmap_cam_centers, cone_half_angle_deg, device):
+                                      hemisphere_only, colmap_cam_centers, cone_half_angle_deg, device,
+                                      cone_axis_direction=None):
+    """
+    Same as generate_by_lens.fibonacci_camera_candidates: when cone_axis_direction (e.g. v_front)
+    is provided, use it for cone filtering; else use COLMAP mean direction.
+    """
     directions = _lens_fibonacci_sphere_samples(n_candidates)
     if hemisphere_only:
         up_axis = _lens_normalize(world_up)
         dots = directions @ up_axis
         directions = directions[dots > -0.1]
-    if colmap_cam_centers is not None:
+    cos_threshold = math.cos(math.radians(cone_half_angle_deg))
+    if cone_axis_direction is not None:
+        cone_axis = _lens_normalize(np.asarray(cone_axis_direction, dtype=np.float32))
+        dots = directions @ cone_axis
+        directions = directions[dots > cos_threshold]
+        print(f"[Step3] Cone filter: {len(directions)} candidates within "
+              f"{cone_half_angle_deg}° of v_front")
+    elif colmap_cam_centers is not None:
         mean_cam_dir = _lens_normalize((colmap_cam_centers - center[None, :]).mean(axis=0))
-        cos_threshold = math.cos(math.radians(cone_half_angle_deg))
         dots = directions @ mean_cam_dir
         directions = directions[dots > cos_threshold]
         print(f"[Step3] Cone filter: {len(directions)} candidates within "
@@ -813,6 +847,14 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, d
         # Azimuth angle on x-z plane; emphasize horizontal (x-axis) diversity
         vx, vz = float(v[0]), float(v[2])
         azimuths[ci] = math.atan2(vx, vz)
+    # Normalise pool energies to [0, 1] so the diversity term and energy term
+    # are on comparable scales and diversity_x_weight actually works.
+    energy_vals = list(pool_energies.values())
+    min_energy = min(energy_vals)
+    max_energy = max(energy_vals)
+    energy_range = max_energy - min_energy + 1e-8
+    pool_energies_norm = {ci: (e - min_energy) / energy_range for ci, e in pool_energies.items()}
+
     selected = []
     remaining = set(pool_indices)
     first = pool_indices[0]
@@ -844,7 +886,9 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, d
                 min_dy = min(min_dy, dy)
 
             diversity_score = min_ang + diversity_x_weight * min_dphi - diversity_y_variance_weight * min_dy
-            combined = diversity_score * pool_energies[ci]
+            # Additive combination: diversity and energy are independent terms so
+            # diversity_x_weight is not suppressed by low-energy cameras on the far side.
+            combined = diversity_score + pool_energies_norm[ci]
             if combined > best_sc:
                 best_sc = combined
                 best_idx = ci
@@ -1013,8 +1057,9 @@ def _lens_run_generate_by_lens_pipeline(
     device: str = "cuda",
     latency_logger=None,
     segmentor=None,
+    v_front_method: str = "colmap_mean",
 ):
-    """Inlined pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity."""
+    """Inlined pipeline: ROI Analysis → SAGE-Probing → Fibonacci Sampling → Energy Scoring → FPS Diversity. Same logic as generate_by_lens."""
     from argparse import Namespace
     from gaussiansplatting.arguments import PipelineParams
     from argparse import ArgumentParser
@@ -1042,7 +1087,10 @@ def _lens_run_generate_by_lens_pipeline(
 
     print("\n========== Step 1: ROI Intrinsic Analysis ==========")
     with _timeit("roi_analysis"):
-        roi_info = _lens_roi_intrinsic_analysis(gaussians, roi_mask, cam_forwards)
+        roi_info = _lens_roi_intrinsic_analysis(
+            gaussians, roi_mask, cam_forwards,
+            cam_centers=cam_centers, v_front_method=v_front_method,
+        )
         colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
         colmap_median_dist = float(np.median(colmap_dists))
         roi_info["colmap_median_dist"] = colmap_median_dist
@@ -1079,6 +1127,7 @@ def _lens_run_generate_by_lens_pipeline(
             colmap_cam_centers=cam_centers,
             cone_half_angle_deg=cone_half_angle_deg,
             device=device,
+            cone_axis_direction=roi_info["v_front"],
         )
 
     print("\n========== Step 4: Energy-based Scoring ==========")
@@ -2244,6 +2293,7 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 device=device,
                 latency_logger=self.latency_logger,
                 segmentor=self.segmentor,
+                v_front_method=getattr(self.cfg, "lens_v_front_method", "colmap_mean"),
             )
         if self.latency_logger is not None:
             with self.latency_logger.timeit("camera_generation"):

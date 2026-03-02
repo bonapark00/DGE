@@ -1008,6 +1008,12 @@ class DGE(BaseLift3DSystem):
     def _add_index_to_image(self, img, index):
         """이미지 상단에 인덱스 번호를 추가하는 헬퍼 메서드 (OpenCV 사용)"""
         try:
+            # If configured to not draw texts on grids, return the original image.
+            cfg = getattr(self, "cfg", None)
+            if cfg is not None and hasattr(cfg, "save_image_grid_draw_texts"):
+                if not bool(getattr(cfg, "save_image_grid_draw_texts")):
+                    return img
+
             # 원본 형식 저장 (나중에 복원하기 위해)
             original_is_tensor = isinstance(img, torch.Tensor)
             
@@ -1450,7 +1456,9 @@ class DGE(BaseLift3DSystem):
             if len(save_list) > 0:
                 with self._latency_logger.timeit("training_step_all.edit_multiview.save_image_grid"):
                     self.save_image_grid("edited_images_multiview.png", save_list, name="edited_images_multiview", step=self.true_global_step)
-            print("multiview edited images saved to:", self.get_save_path("edited_images_multiview.png"))
+            threestudio.info("multiview edited images saved to: %s" % self.get_save_path("edited_images_multiview.png"))
+
+            return # editing finished
 
     @torch.no_grad()
     def _render_single(self, cam) -> torch.Tensor:

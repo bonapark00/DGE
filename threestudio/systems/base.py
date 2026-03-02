@@ -28,6 +28,8 @@ class BaseSystem(pl.LightningModule, Updateable, SaverMixin):
         weights_ignore_modules: Optional[List[str]] = None
         cleanup_after_validation_step: bool = False
         cleanup_after_test_step: bool = False
+        # Whether to draw per-row texts (e.g. view numbers) on image grids
+        save_image_grid_draw_texts: bool = True
 
     cfg: Config
 
@@ -389,5 +391,7 @@ class BaseLift3DSystem(BaseSystem):
             ),
             name="train_step",
             step=self.true_global_step,
-            texts=guidance_eval_out["texts"],
+            texts=guidance_eval_out["texts"]
+            if self.cfg.save_image_grid_draw_texts
+            else None,
         )

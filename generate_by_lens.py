@@ -136,6 +136,24 @@ python generate_by_lens.py \
         --save_attn_grid output/attn_grid_dino_green.jpg \
         --gpu 1 \
         --v_front_method scene_center
+
+
+     python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
+        --seg_prompt "man" \
+        --edit_prompt "Turn the man into a spiderman with a mask" \
+        --use_ip2p_scoring \
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_man_to_spiderman.jpg \
+        --gpu 3 \
+        --n_candidates 900 \
+        --v_front_method scene_center \
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+
+
 """
 
 
@@ -249,7 +267,7 @@ def _normalize(v: np.ndarray, eps: float = 1e-8) -> np.ndarray:
 def look_at_c2w(
     eye: np.ndarray, target: np.ndarray, world_up: np.ndarray
 ) -> np.ndarray:
-    """Camera-to-world 4x4 (camera looks along +Z towards *target*)."""
+    # "Camera-to-world 4x4 (camera looks along +Z towards *target*)."
     eye = np.asarray(eye, dtype=np.float32)
     target = np.asarray(target, dtype=np.float32)
     up = _normalize(np.asarray(world_up, dtype=np.float32))
@@ -1480,31 +1498,42 @@ def diversity_selection(
     center: np.ndarray,
     n_select: int = 20,
     top_fraction: float = 0.20,
+    diversity_x_weight: float = 0.0,
+    diversity_y_variance_weight: float = 0.0,
     latency_logger: Optional[LatencyLogger] = None,
     device: str = "cuda",
 ) -> List[int]:
     """
     Select *n_select* cameras from the top-scoring pool using
-    Farthest Point Sampling (angular distance on the view sphere).
+    Energy-weighted FPS. diversity_x_weight adds azimuth separation bonus;
+    diversity_y_variance_weight > 0 penalizes elevation spread (lower variance in y).
     """
     with latency_timeit(latency_logger, "step5.diversity_selection.prepare_pool", device):
-        # Filter to top fraction
         n_pool = max(int(len(scored) * top_fraction), n_select)
-        pool = scored[:n_pool]  # already sorted descending by energy
+        pool = scored[:n_pool]
         pool_indices = [s[0] for s in pool]
         pool_energies = {s[0]: s[1] for s in pool}
 
     with latency_timeit(latency_logger, "step5.diversity_selection.view_dirs", device):
-        # Compute unit view directions for pool cameras
         view_dirs = {}
+        azimuths = {}
         for ci in pool_indices:
             cc = cameras[ci].camera_center.cpu().numpy()
-            view_dirs[ci] = _normalize(cc - center)
+            v = _normalize(cc - center)
+            view_dirs[ci] = v
+            vx, vz = float(v[0]), float(v[2])
+            azimuths[ci] = math.atan2(vx, vz)
+
+    # Normalise pool energies to [0, 1] so the diversity term and energy term
+    # are on comparable scales and diversity_x_weight actually works.
+    energy_vals = list(pool_energies.values())
+    min_energy = min(energy_vals)
+    max_energy = max(energy_vals)
+    energy_range = max_energy - min_energy + 1e-8
+    pool_energies_norm = {ci: (e - min_energy) / energy_range for ci, e in pool_energies.items()}
 
     selected = []
     remaining = set(pool_indices)
-
-    # Start with highest-energy camera
     first = pool_indices[0]
     selected.append(first)
     remaining.discard(first)
@@ -1513,14 +1542,24 @@ def diversity_selection(
         while len(selected) < n_select and remaining:
             best_idx, best_score = None, -1e9
             for ci in remaining:
-                # Min angular distance to any already-selected view
                 min_ang = 1e9
+                min_dphi = 1e9
+                min_dy = 1e9
                 for si in selected:
                     cos_sim = float(np.dot(view_dirs[ci], view_dirs[si]))
                     ang = math.acos(np.clip(cos_sim, -1.0, 1.0))
                     min_ang = min(min_ang, ang)
-                # Combined: diversity (angular distance) * energy
-                combined = min_ang * pool_energies[ci]
+                    phi_ci, phi_si = azimuths[ci], azimuths[si]
+                    dphi = abs(phi_ci - phi_si)
+                    if dphi > math.pi:
+                        dphi = 2 * math.pi - dphi
+                    min_dphi = min(min_dphi, dphi)
+                    dy = abs(float(view_dirs[ci][1]) - float(view_dirs[si][1]))
+                    min_dy = min(min_dy, dy)
+                diversity_score = min_ang + diversity_x_weight * min_dphi - diversity_y_variance_weight * min_dy
+                # Additive combination: diversity and energy are independent terms so
+                # diversity_x_weight is not suppressed by low-energy cameras on the far side.
+                combined = diversity_score + pool_energies_norm[ci]
                 if combined > best_score:
                     best_score = combined
                     best_idx = ci
@@ -1675,6 +1714,8 @@ def run_generate_by_lens_pipeline(
     w_vis: float = 0.6,
     w_can: float = 0.4,
     top_fraction: float = 0.20,
+    diversity_x_weight: float = 0.0,
+    diversity_y_variance_weight: float = 0.0,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
@@ -1753,7 +1794,10 @@ def run_generate_by_lens_pipeline(
     # Step 5: Diversity-aware Selection
     selected_indices = diversity_selection(
         candidates, scored, roi_info["center"],
-        n_select=n_select, top_fraction=top_fraction, device=device,
+        n_select=n_select, top_fraction=top_fraction,
+        diversity_x_weight=diversity_x_weight,
+        diversity_y_variance_weight=diversity_y_variance_weight,
+        device=device,
     )
 
     final_cameras = [candidates[i] for i in selected_indices]
@@ -1868,6 +1912,10 @@ def main():
     parser.add_argument("--w_vis", type=float, default=0.6, help="Visibility weight")
     parser.add_argument("--w_can", type=float, default=0.4, help="Canonical alignment weight")
     parser.add_argument("--top_fraction", type=float, default=0.20, help="Top fraction of candidates for FPS")
+    parser.add_argument("--diversity_x_weight", type=float, default=0.0,
+                        help="Extra weight for azimuth (x-axis) diversity in Step 5 (default: 0)")
+    parser.add_argument("--diversity_y_variance_weight", type=float, default=0.0,
+                        help="Penalize elevation spread to lower variance in y in Step 5 (default: 0)")
 
     # SAGE-Probing hyperparameters
     parser.add_argument("--lambda_leak", type=float, default=1.5,
@@ -2312,6 +2360,8 @@ def main():
                     roi_info["center"],
                     n_select=int(args.n_select),
                     top_fraction=args.top_fraction,
+                    diversity_x_weight=getattr(args, "diversity_x_weight", 0.0),
+                    diversity_y_variance_weight=getattr(args, "diversity_y_variance_weight", 0.0),
                     latency_logger=latency_logger,
                     device=device,
                 )
@@ -2322,6 +2372,9 @@ def main():
             roi_info["center"],
             n_select=int(args.n_select),
             top_fraction=args.top_fraction,
+            diversity_x_weight=getattr(args, "diversity_x_weight", 0.0),
+            diversity_y_variance_weight=getattr(args, "diversity_y_variance_weight", 0.0),
+            device=device,
         )
 
     final_cameras = [candidates[i] for i in selected_indices]
@@ -2390,6 +2443,22 @@ def main():
     else:
         _render_selected_views()
 
+  
+    # Save concatenated PNG of all generated views (horizontal strip)
+    if frames:
+        concat_path = os.path.join(args.out_dir, "generated_views.png")
+        try:
+            if latency_logger:
+                with latency_timeit(latency_logger, "save_generated_views_image", device):
+                    concat_img = np.concatenate(frames, axis=1)
+                    imageio.imwrite(concat_path, concat_img)
+            else:
+                concat_img = np.concatenate(frames, axis=1)
+                imageio.imwrite(concat_path, concat_img)
+            print(f"Concatenated views image saved to {concat_path}")
+        except Exception as e:  # pragma: no cover - best-effort visualisation
+            print(f"[WARN] Failed to save concatenated views image: {e}")
+    
     # Save video
     if args.video_path and frames:
         if latency_logger:

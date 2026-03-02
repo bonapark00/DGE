@@ -68,7 +68,7 @@
                 "data.lens_ip2p_guidance_scale=12.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
                 "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
-                "data.lens_cone_half_angle_deg=60",
+                "data.lens_cone_half_angle_deg=40",
                 "data.lens_lambda_leak=1.5",
                 "data.lens_lambda_ent=15.0",
 
@@ -85,7 +85,7 @@
         },
 
         {
-            "name": "DGE: camera-selection-lens-multiview",
+            "name": "DGE: multiview-in2n",
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/launch.py",
@@ -94,35 +94,147 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "1",
+                "--gpu", "3",
+                "trainer.max_steps=1500",
+
+                "data.edit_view_selection_strategy=lens",
+                "system.guidance.edit_view_selection_strategy=lens",
+
+                // face dataset
+                "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face",
+
+
+                // man -> clown
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.lens_edit_prompt=Turn the man into a clown",
+                "system.seg_prompt=a face",
+                "data.mmr_seg_prompt=a face",
+                "data.lens_seg_prompt=a face",
+                "system.target_prompt=clown",
+
+                // man with spiderman mask
+                // "system.prompt_processor.prompt=Turn the man into a spiderman with a mask",
+                // "data.lens_edit_prompt=Turn the man into a spiderman with a mask",
+                // "system.seg_prompt=a face",
+                // "data.mmr_seg_prompt=a face",
+                // "data.lens_seg_prompt=a face",
+                // "system.target_prompt=spiderman with a mask",
+
+
+                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
+                "data.lens_distance_multipliers=0.5,1.0,1.5,2.0,2.5,3.0",
+                "data.lens_distance_multipliers=3.0", // 하나로 지정해보기!! 
+                "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+
+                "system.save_image_grid_draw_texts=false",
+                "system.guidance.guidance_scale=7.5",
+
+                "data.lens_use_ip2p_scoring=true",
+                "data.lens_entropy_thresh=0.97",
+                "data.lens_ip2p_steps=5",
+                "data.lens_lambda_ent=2.0",
+
+                "data.lens_ip2p_guidance_scale=12.5",
+                "data.lens_ip2p_image_guidance_scale=1.5",
+                "data.lens_cone_half_angle_deg=60", // rabit sunglasses: 30
+                "system.guidance.camera_batch_size=3",
+                "data.lens_v_front_method=scene_center",
+                "data.lens_n_candidates=900",
+                "data.lens_diversity_x_weight=30.0", // 클수록! 좌우(azimuth 방향)로 더 퍼지게 만들려고 넣은 항.
+                "data.lens_diversity_y_variance_weight=3.0", //값을 키우면(예: 0.5, 1.0): 고도가 비슷한 뷰를 더 선호해 y축 방향 variance가 줄어듭니다.
+                // "data.lens_prune_z_bottom_percent=0.4",
+                // "data.lens_prune_y_top_percent=0.4",
+                // "data.lens_prune_x_both_percent=1",
+                // "data.lens_n_candidates=150",
+                // "data.lens_top_fraction=0.20",
+                // "data.lens_w_vis=0.6",
+                // "data.lens_w_can=0.4",
+
+
+                "system.guidance.feature_injection_mode=similarity",
+                // "system.guidance.injection_lambda=0.5",
+                // "system.guidance.injection_3d_anchor_style=gather",f
+                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
+                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
+
+                "system.mask_thres=0.6",
+                "system.mask_max_ratio=0.6",
+                "system.mask_min_ratio=0.01",
+                "system.mask_outlier_iqr=1.5",
+                "system.loss.lambda_d=0.0",
+                "system.loss.lambda_dds=0.0",
+                "system.dds_t_range=[0.02,0.5]",
+                "system.dds_cfg_scale=7.5",
+                "system.loss.lambda_ism=0.0",
+                "system.loss.use_sds=false",
+                "system.guidance.use_sds_dge=false",
+                "system.loss.lambda_sds=0.0",
+                
+                "system.use_multiview_edit=true",
+                "system.use_warp_refine=false",
+                "system.use_gaussian_provenance=false",
+                "system.guidance.skip_key_views_in_target_loop=false",
+                
+
+                "system.mask_view_population=train_cameras",
+                "system.mask_num_views=30",
+                "system.mask_update_view_num=30",
+                "system.mask_update_at_step=300",
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+
+
+
+                "system.densify_until_iter=1500",
+
+                "system.camera_update_per_step=1500",
+                "system.prune_floater_at_step=-1",
+                "checkpoint.save_top_k=0",
+
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: multiview-3d-ovs",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_camera-selection.yaml",
+                "--train",
+                "--gpu", "0",
                 "trainer.max_steps=1500",
 
                 "data.edit_view_selection_strategy=lens",
                 "system.guidance.edit_view_selection_strategy=lens",
 
                 // covered_desk dataset
-                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
 
                 // room dataset
-                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room",
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room",
                 
 
                 // pooh -> robot
-                // "system.prompt_processor.prompt=Make the pooh look like a robot",
-                // "data.lens_edit_prompt=Make the pooh look like a robot",
-                // "system.seg_prompt=pooh",
-                // "data.mmr_seg_prompt=pooh",
-                // "data.lens_seg_prompt=pooh",
-                // "system.target_prompt=robot",
+                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                "data.lens_edit_prompt=Make the pooh look like a robot",
+                "system.seg_prompt=pooh",
+                "data.mmr_seg_prompt=pooh",
+                "data.lens_seg_prompt=pooh",
+                "system.target_prompt=robot",
 
-                
-                // ---
                 // pooh -> sunglasses
                 // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his eyes",
                 // "data.lens_edit_prompt=Make the pooh wear sunglasses on his eyes",
@@ -131,28 +243,47 @@
                 // "data.lens_seg_prompt=head of the pooh",
                 // "system.target_prompt=sunglasses of the pooh",
 
+                // Change the pooh's sweater color to blue
+                // "system.prompt_processor.prompt=Change the sweater color to blue",
+                // "data.lens_edit_prompt=Change the pooh's sweater color to blue",
+                // "system.seg_prompt=red sweater of the pooh",
+                // "data.mmr_seg_prompt=red sweater of the pooh",
+                // "data.lens_seg_prompt=red sweater of the pooh",
+                // "system.target_prompt=blue sweater of the pooh",
+
                 // baseball -> tennis ball
-                "system.prompt_processor.prompt=Replace the baseball with a yellow tennis ball",
-                "data.lens_edit_prompt=Replace the baseball with a tennis ball",
+                // "system.prompt_processor.prompt=Replace the baseball with a yellow tennis ball",
+                // "data.lens_edit_prompt=Replace the baseball with a tennis ball",
                 // "system.prompt_processor.prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
                 // "data.lens_edit_prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
+                // "system.seg_prompt=white baseball",
+                // "data.mmr_seg_prompt=white baseball",
+                // "data.lens_seg_prompt=white baseball",
+                // "system.target_prompt=yellow tennis ball",
             
-                "system.seg_prompt=white baseball",
-                "data.mmr_seg_prompt=white baseball",
-                "data.lens_seg_prompt=white baseball",
-                "system.target_prompt=yellow tennis ball",
+                // rabit -> wear sunglasses
+                // "system.prompt_processor.prompt=Give the rabbit figure a pair of small sunglasses",
+                // "data.lens_edit_prompt=Give the rabbit figure a pair of small sunglasses",
+                // "system.seg_prompt=face of the rabbit",
+                // "data.mmr_seg_prompt=face of the rabbit",
+                // "data.lens_seg_prompt=face of the rabbit",
+                // "system.target_prompt=small sunglasses",
 
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
-                "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!!
+
+                // "data.lens_distance_multipliers=3.5", // 하나로 지정해보기!! -> rabbit sunglasses 1.6
                 "data.lens_use_ip2p_scoring=true",
                 "data.lens_entropy_thresh=0.97",
                 "data.lens_ip2p_steps=5",
                 "data.lens_lambda_ent=15.0",
-
-                "data.lens_ip2p_guidance_scale=12.5",
+                "data.lens_top_fraction=0.60",
+                "data.lens_ip2p_guidance_scale=7.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
-                "data.lens_cone_half_angle_deg=60",
+                "data.lens_cone_half_angle_deg=150", // rabit sunglasses: 30
+                "system.guidance.camera_batch_size=5",
+                
+                "system.guidance.guidance_scale=12.5",
                 // "data.lens_diversity_y_variance_weight=0.5", //값을 키우면(예: 0.5, 1.0): 고도가 비슷한 뷰를 더 선호해 y축 방향 variance가 줄어듭니다.
                 // "data.lens_prune_z_bottom_percent=0.4",
                 // "data.lens_prune_y_top_percent=0.4",
@@ -180,7 +311,6 @@
                 "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
                 // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
 
-                "system.guidance.guidance_scale=12.5",
                 "system.mask_thres=0.6",
                 "system.mask_max_ratio=0.6",
                 "system.mask_min_ratio=0.01",

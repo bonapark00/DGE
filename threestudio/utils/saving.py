@@ -310,7 +310,13 @@ class SaverMixin:
         save_path = self.get_save_path(filename)
         img = self.get_image_grid_(imgs, align=align)
 
-        if texts is not None:
+        # Optionally draw per-row texts (e.g. view numbers) if enabled in system cfg.
+        draw_texts = True
+        cfg = getattr(self, "cfg", None)
+        if cfg is not None and hasattr(cfg, "save_image_grid_draw_texts"):
+            draw_texts = bool(getattr(cfg, "save_image_grid_draw_texts"))
+
+        if texts is not None and draw_texts:
             img = Image.fromarray(img)
             draw = ImageDraw.Draw(img)
             black, white = (0, 0, 0), (255, 255, 255)
