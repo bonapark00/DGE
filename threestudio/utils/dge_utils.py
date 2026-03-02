@@ -668,7 +668,10 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
 
             # gather values from attn_output, using idx as indices, and get a tensor of shape 3, n_frames, seq_len, dim
             with latency_logger.timeit(f'{_latency_base}.dge_block.feature_injection') if latency_logger else nullcontext():
-                if not self.use_normal_attn:
+                # Optionally disable all feature-injection logic (keep self-attn output as-is).
+                if getattr(self, "disable_feature_injection", False):
+                    attn_output = self.attn_output
+                elif not self.use_normal_attn:
                     if not self.pivotal_pass:
                         # ---------------------------------------------------------- #
                         # Version C: 3D-Anchor canonical token injection               #

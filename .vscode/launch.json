@@ -94,7 +94,7 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "3",
+                "--gpu", "0",
                 "trainer.max_steps=1500",
 
                 "data.edit_view_selection_strategy=lens",
@@ -104,7 +104,7 @@
                 "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
                 "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
                 "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/ablation/in2n-GSEditor/face/",
 
 
                 // man -> clown
@@ -153,8 +153,11 @@
                 // "data.lens_w_vis=0.6",
                 // "data.lens_w_can=0.4",
 
-
-                "system.guidance.feature_injection_mode=similarity",
+                // tt x .  ft x. tf O. ff O.
+                // DGE extended-attention + feature-injection controls
+                "system.guidance.key_denoise_use_extended_attention=true",   // key loop: false=normal SA only, true=warmup->extended
+                "system.guidance.target_use_extended_attention=true",        // target loop: true=warmup->extended (default), false=always normal
+                "system.guidance.feature_injection_mode=similarity",       // similarity | 3d_anchor | none (none = no cross-view feature injection)
                 // "system.guidance.injection_lambda=0.5",
                 // "system.guidance.injection_3d_anchor_style=gather",f
                 "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual

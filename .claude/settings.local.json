@@ -6,7 +6,8 @@
       "Bash(python:*)",
       "Bash(ls:*)",
       "Bash(pip show:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Read(//working/style-transfer/VcEdit/infedit/**)"
     ]
   }
 }

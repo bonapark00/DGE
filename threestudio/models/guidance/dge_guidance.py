@@ -116,6 +116,11 @@ class ConsistentCrossAttnProcessor:
         if input_ndim == 4:
             batch_size, channel, height, width = hidden_states.shape
             hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+        elif input_ndim != 3:
+            # Unexpected rank (e.g. 5D); fall back to original processor for safety.
+            if self.backup_processor is not None:
+                return self.backup_processor(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
+            return self._default_forward(attn, hidden_states, encoder_hidden_states, attention_mask, temb)
         batch_size, sequence_length, channel = hidden_states.shape
         height = width = int(sequence_length ** 0.5) if sequence_length > 0 else 0
         attn_len = data.get("attn_len")
@@ -217,7 +222,8 @@ class DGEGuidance(BaseObject):
         camera_batch_size: int = 5
         edit_view_selection_strategy: str = ""
         skip_key_views_in_target_loop: bool = False
-        # Feature injection in edit_latents_multiview: "similarity" (cosine + gather) or "3d_anchor" (3DGS-based canonical tokens)
+        # Feature injection in edit_latents_multiview: "similarity" (cosine + gather) or "3d_anchor" (3DGS-based canonical tokens).
+        # Implementation also supports "none" (no cross-view feature injection, only extended/consistent attention).
         feature_injection_mode: str = "similarity"
         # For 3d_anchor: blend h_out = (1 - injection_lambda) * h_sa + injection_lambda * F(v,p). h_sa uses current hidden_states.
         injection_lambda: float = 0.5
@@ -225,6 +231,9 @@ class DGEGuidance(BaseObject):
         injection_3d_anchor_style: str = "blend"
         # Key-view denoise loop: if True, use extended (multi-frame) self-attention after warmup; if False, always use normal self-attention.
         key_denoise_use_extended_attention: bool = False
+        # Target-view denoise loop: if True, use extended attention after warmup (default behavior);
+        # if False, always use normal self-attention for target loop.
+        target_use_extended_attention: bool = True
 
     def configure(self, preloaded_pipe=None, **kwargs) -> None:
         self.weights_dtype = (
@@ -377,12 +386,13 @@ class DGEGuidance(BaseObject):
         latents: Float[Tensor, "B 4 DH DW"],
         image_cond_latents: Float[Tensor, "B 4 DH DW"],
         t: Int[Tensor, "B"],
-        cams= None,
+        cams=None,
         latency_logger=None,
         gp_cache=None,
         key_cam_indices=None,
+        latency_prefix: Optional[str] = None,
     ) -> Float[Tensor, "B 4 DH DW"]:
-        
+
         self.scheduler.config.num_train_timesteps = t.item() if len(t.shape) < 1 else t[0].item()
         self.scheduler.set_timesteps(self.cfg.diffusion_steps)
 
@@ -392,58 +402,91 @@ class DGEGuidance(BaseObject):
         camera_batch_size = self.cfg.camera_batch_size
         print("Start editing images...")
 
+        # Base prefix for non-multiview edit_latents path; overridden by caller
+        _base = latency_prefix or EDIT_ALL_VIEW_PREFIX
+        _p = f"{_base}.edit_latents"
+
         with torch.no_grad():
             # add noise
             noise = torch.randn_like(latents)
-            latents = self.scheduler.add_noise(latents, noise, t) 
+            latents = self.scheduler.add_noise(latents, noise, t)
 
             # sections of code used from https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/pipeline_stable_diffusion_instruct_pix2pix.py
             positive_text_embedding, negative_text_embedding, _ = text_embeddings.chunk(3)
             split_image_cond_latents, _, zero_image_cond_latents = image_cond_latents.chunk(3)
-            
-            with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop"):
+
+            with latency_logger.timeit(f"{_p}.diffusion_loop") if latency_logger else nullcontext():
                 for t in self.scheduler.timesteps:
-                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.timestep_setup"):
+                    with latency_logger.timeit(f"{_p}.diffusion_loop.timestep_setup") if latency_logger else nullcontext():
                         if t < 100:
                             self.use_normal_unet()
                         else:
                             register_normal_attn_flag(self.unet, False)
-                        
+
                     with torch.no_grad():
                         # pred noise
                         noise_pred_text = []
                         noise_pred_image = []
                         noise_pred_uncond = []
-                        
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.pivotal_setup"):
+
+                        with latency_logger.timeit(f"{_p}.diffusion_loop.pivotal_setup") if latency_logger else nullcontext():
                             if self.cfg.edit_view_selection_strategy == "manual-20":
-                                pivotal_idx = torch.tensor([2, 7, 12, 17]) # 카메라 uid가 [6, 32, 42, 20] 인 카메라를 가리키는 인덱스
+                                pivotal_idx = torch.tensor([2, 7, 12, 17])
                             elif self.cfg.edit_view_selection_strategy == "manual-15":
-                                pivotal_idx = torch.tensor([2, 7, 12]) # 카메라 uid가 [6, 32, 20] 인 카메라를 가리키는 인덱스
+                                pivotal_idx = torch.tensor([2, 7, 12])
                             else:
-                                pivotal_idx = torch.randint(camera_batch_size, (len(latents)//camera_batch_size,)) + torch.arange(0, len(latents), camera_batch_size) # ex)  [0, 2, 1, 2] + [0, 5, 10, 15]
+                                pivotal_idx = torch.randint(
+                                    camera_batch_size, (len(latents) // camera_batch_size,)
+                                ) + torch.arange(0, len(latents), camera_batch_size)
                             register_pivotal(self.unet, True)
-                            
+
                             key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
                             latent_model_input = torch.cat([latents[pivotal_idx]] * 3)
-                            pivot_text_embeddings = torch.cat([positive_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx], negative_text_embedding[pivotal_idx]], dim=0)
-                            pivot_image_cond_latetns = torch.cat([split_image_cond_latents[pivotal_idx], split_image_cond_latents[pivotal_idx], zero_image_cond_latents[pivotal_idx]], dim=0)
+                            pivot_text_embeddings = torch.cat(
+                                [
+                                    positive_text_embedding[pivotal_idx],
+                                    negative_text_embedding[pivotal_idx],
+                                    negative_text_embedding[pivotal_idx],
+                                ],
+                                dim=0,
+                            )
+                            pivot_image_cond_latetns = torch.cat(
+                                [
+                                    split_image_cond_latents[pivotal_idx],
+                                    split_image_cond_latents[pivotal_idx],
+                                    zero_image_cond_latents[pivotal_idx],
+                                ],
+                                dim=0,
+                            )
                             latent_model_input = torch.cat([latent_model_input, pivot_image_cond_latetns], dim=1)
 
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.pivotal_forward"):
+                        with latency_logger.timeit(f"{_p}.diffusion_loop.pivotal_forward") if latency_logger else nullcontext():
                             self.forward_unet(latent_model_input, t, encoder_hidden_states=pivot_text_embeddings)
                             register_pivotal(self.unet, False)
 
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing"):
+                        with latency_logger.timeit(f"{_p}.diffusion_loop.batch_processing") if latency_logger else nullcontext():
                             for i, b in enumerate(range(0, len(latents), camera_batch_size)):
-                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops"):
-                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_batch_idx"):
+                                with latency_logger.timeit(
+                                    f"{_p}.diffusion_loop.batch_processing.register_ops"
+                                ) if latency_logger else nullcontext():
+                                    with latency_logger.timeit(
+                                        f"{_p}.diffusion_loop.batch_processing.register_ops.register_batch_idx"
+                                    ) if latency_logger else nullcontext():
                                         register_batch_idx(self.unet, i)
 
-                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_cams"):
-                                        register_cams(self.unet, cams[b:b+camera_batch_size], pivotal_idx[i] % camera_batch_size, key_cams) 
-                                    
-                                    with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains"):
+                                    with latency_logger.timeit(
+                                        f"{_p}.diffusion_loop.batch_processing.register_ops.register_cams"
+                                    ) if latency_logger else nullcontext():
+                                        register_cams(
+                                            self.unet,
+                                            cams[b : b + camera_batch_size],
+                                            pivotal_idx[i] % camera_batch_size,
+                                            key_cams,
+                                        )
+
+                                    with latency_logger.timeit(
+                                        f"{_p}.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains"
+                                    ) if latency_logger else nullcontext():
                                         if gp_cache is not None:
                                             # Version B: skip dense epipolar computation entirely.
                                             # Register the stacked gaussian-provenance cache for all
@@ -453,26 +496,44 @@ class DGEGuidance(BaseObject):
                                         else:
                                             epipolar_constrains = {}
                                             # Create directory for saving epipolar constraint images in save_dir
-                                            epipolar_images_dir = os.path.join(self.save_dir, "epipolar_constraints_images")
+                                            epipolar_images_dir = os.path.join(
+                                                self.save_dir, "epipolar_constraints_images"
+                                            )
 
                                             # Warmup: run first epipolar compute once to avoid cam_0 including CUDA init time
                                             if torch.cuda.is_available() and key_cams:
                                                 _ = compute_epipolar_constrains(
-                                                    key_cams[0], cams[b], current_H=current_H // 1, current_W=current_W // 1, downsample_factor=1
+                                                    key_cams[0],
+                                                    cams[b],
+                                                    current_H=current_H // 1,
+                                                    current_W=current_W // 1,
+                                                    downsample_factor=1,
                                                 )
                                                 torch.cuda.synchronize()
 
                                             for down_sample_factor in [1, 2, 4, 8]:
-                                                with latency_logger.timeit(f"edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}"):
+                                                with latency_logger.timeit(
+                                                    f"{_p}.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}"
+                                                ) if latency_logger else nullcontext():
                                                     H = current_H // down_sample_factor
                                                     W = current_W // down_sample_factor
                                                     epipolar_constrains[H * W] = []
-                                                    for cam_idx, cam in enumerate(cams[b:b + camera_batch_size]):
-                                                        with latency_logger.timeit(f"edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}.cam_{cam_idx}"):
+                                                    for cam_idx, cam in enumerate(
+                                                        cams[b : b + camera_batch_size]
+                                                    ):
+                                                        with latency_logger.timeit(
+                                                            f"{_p}.diffusion_loop.batch_processing.register_ops.compute_epipolar_constrains.downsample_{down_sample_factor}.cam_{cam_idx}"
+                                                        ) if latency_logger else nullcontext():
                                                             cam_epipolar_constrains = []
                                                             for key_cam_idx, key_cam in enumerate(key_cams):
                                                                 # Pass downsample_factor to the function
-                                                                epipolar_constraint = compute_epipolar_constrains(key_cam, cam, current_H=H, current_W=W, downsample_factor=down_sample_factor)
+                                                                epipolar_constraint = compute_epipolar_constrains(
+                                                                    key_cam,
+                                                                    cam,
+                                                                    current_H=H,
+                                                                    current_W=W,
+                                                                    downsample_factor=down_sample_factor,
+                                                                )
                                                                 cam_epipolar_constrains.append(epipolar_constraint)
 
                                                                 ## Save epipolar constraints as image for visualization
@@ -484,31 +545,69 @@ class DGEGuidance(BaseObject):
                                                                 #     key_cam_idx,
                                                                 #     down_sample_factor
                                                                 # )
-                                                            epipolar_constrains[H * W].append(torch.stack(cam_epipolar_constrains, dim=0))
-                                                    epipolar_constrains[H * W] = torch.stack(epipolar_constrains[H * W], dim=0)
+                                                            epipolar_constrains[H * W].append(
+                                                                torch.stack(cam_epipolar_constrains, dim=0)
+                                                            )
+                                                    epipolar_constrains[H * W] = torch.stack(
+                                                        epipolar_constrains[H * W], dim=0
+                                                    )
 
-                                            with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.register_ops.register_epipolar_constrains"):
+                                            with latency_logger.timeit(
+                                                f"{_p}.diffusion_loop.batch_processing.register_ops.register_epipolar_constrains"
+                                            ) if latency_logger else nullcontext():
                                                 register_epipolar_constrains(self.unet, epipolar_constrains)
 
-                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.prepare_input"):
-                                    batch_model_input = torch.cat([latents[b:b + camera_batch_size]] * 3)
-                                    batch_text_embeddings = torch.cat([positive_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size], negative_text_embedding[b:b + camera_batch_size]], dim=0)
-                                    batch_image_cond_latents = torch.cat([split_image_cond_latents[b:b + camera_batch_size], split_image_cond_latents[b:b + camera_batch_size], zero_image_cond_latents[b:b + camera_batch_size]], dim=0)
-                                    batch_model_input = torch.cat([batch_model_input, batch_image_cond_latents], dim=1)
+                                with latency_logger.timeit(
+                                    f"{_p}.diffusion_loop.batch_processing.prepare_input"
+                                ) if latency_logger else nullcontext():
+                                    batch_model_input = torch.cat(
+                                        [latents[b : b + camera_batch_size]] * 3
+                                    )
+                                    batch_text_embeddings = torch.cat(
+                                        [
+                                            positive_text_embedding[b : b + camera_batch_size],
+                                            negative_text_embedding[b : b + camera_batch_size],
+                                            negative_text_embedding[b : b + camera_batch_size],
+                                        ],
+                                        dim=0,
+                                    )
+                                    batch_image_cond_latents = torch.cat(
+                                        [
+                                            split_image_cond_latents[b : b + camera_batch_size],
+                                            split_image_cond_latents[b : b + camera_batch_size],
+                                            zero_image_cond_latents[b : b + camera_batch_size],
+                                        ],
+                                        dim=0,
+                                    )
+                                    batch_model_input = torch.cat(
+                                        [batch_model_input, batch_image_cond_latents], dim=1
+                                    )
 
-                                with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.batch_processing.unet_forward"):
-                                    batch_noise_pred = self.forward_unet(batch_model_input, t, encoder_hidden_states=batch_text_embeddings)
-                                    batch_noise_pred_text, batch_noise_pred_image, batch_noise_pred_uncond = batch_noise_pred.chunk(3)
+                                with latency_logger.timeit(
+                                    f"{_p}.diffusion_loop.batch_processing.unet_forward"
+                                ) if latency_logger else nullcontext():
+                                    batch_noise_pred = self.forward_unet(
+                                        batch_model_input, t, encoder_hidden_states=batch_text_embeddings
+                                    )
+                                    (
+                                        batch_noise_pred_text,
+                                        batch_noise_pred_image,
+                                        batch_noise_pred_uncond,
+                                    ) = batch_noise_pred.chunk(3)
                                     noise_pred_text.append(batch_noise_pred_text)
                                     noise_pred_image.append(batch_noise_pred_image)
                                     noise_pred_uncond.append(batch_noise_pred_uncond)
 
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.concat_outputs"):
+                        with latency_logger.timeit(
+                            f"{_p}.diffusion_loop.concat_outputs"
+                        ) if latency_logger else nullcontext():
                             noise_pred_text = torch.cat(noise_pred_text, dim=0)
                             noise_pred_image = torch.cat(noise_pred_image, dim=0)
                             noise_pred_uncond = torch.cat(noise_pred_uncond, dim=0)
 
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.guidance_calc"):
+                        with latency_logger.timeit(
+                            f"{_p}.diffusion_loop.guidance_calc"
+                        ) if latency_logger else nullcontext():
                             # perform classifier-free guidance
                             noise_pred = (
                                 noise_pred_uncond
@@ -516,10 +615,12 @@ class DGEGuidance(BaseObject):
                                 + self.cfg.condition_scale * (noise_pred_image - noise_pred_uncond)
                             )
 
-                        with latency_logger.timeit("edit_all_view.guidance_batch.edit_latents.diffusion_loop.scheduler_step"):
+                        with latency_logger.timeit(
+                            f"{_p}.diffusion_loop.scheduler_step"
+                        ) if latency_logger else nullcontext():
                             # get previous sample, continue loop
                             latents = self.scheduler.step(noise_pred, t, latents).prev_sample
-                        
+
         print("Editing finished.")
         return latents
 
@@ -541,6 +642,7 @@ class DGEGuidance(BaseObject):
         injection_3d_anchor_style: Optional[str] = None,
         key_selection_strategy: Optional[str] = None,
         num_key_views: Optional[int] = None,
+        latency_prefix: Optional[str] = None,
     ) -> Float[Tensor, "B 4 DH DW"]:
         """
         Multiview edit: key views with cross-view attention; collect cross-attn from key views,
@@ -550,7 +652,9 @@ class DGEGuidance(BaseObject):
             only target views are denoised in target_denoise_loop, reducing UNet forwards by ~(n_key/n_views).
             if False, all views (including key views) are denoised in target_denoise_loop (original behavior).
         """
-        _p = f"{EDIT_MULTIVIEW_PREFIX}.edit_latents_multiview"  # so summary shows guidance_batch -> edit_latents_multiview -> setup, key_view_denoise_loop, ...
+        # Base prefix for multiview path; overridden by caller so it nests under training_step_all.*
+        _base = latency_prefix or EDIT_MULTIVIEW_PREFIX
+        _p = f"{_base}.edit_latents_multiview"  # so summary shows guidance_batch -> edit_latents_multiview -> setup, key_view_denoise_loop, ...
         _feature_injection_mode = feature_injection_mode if feature_injection_mode is not None else self.cfg.feature_injection_mode
         _injection_lambda = injection_lambda if injection_lambda is not None else self.cfg.injection_lambda
         _injection_3d_anchor_style = injection_3d_anchor_style if injection_3d_anchor_style is not None else self.cfg.injection_3d_anchor_style
@@ -602,12 +706,24 @@ class DGEGuidance(BaseObject):
                            if isinstance_str(m, "BasicTransformerBlock")]
             _attn2_modules = [(n, m) for n, m in self.unet.named_modules()
                               if n.endswith(".attn2") and hasattr(m, "processor")]
+            # Propagate feature-injection disable flag into DGE blocks when requested.
+            _disable_injection = (_feature_injection_mode == "none")
+            for _, mod in _dge_blocks:
+                setattr(mod, "disable_feature_injection", _disable_injection)
 
         with latency_logger.timeit(f"{_p}.valid_token_indices") if latency_logger else nullcontext():
             valid_indices = _get_valid_token_indices(self.pipe, prompt_text)
         attn_len = len(valid_indices)
         if attn_len == 0:
-            return self.edit_latents(text_embeddings, latents, image_cond_latents, t, cams, latency_logger=latency_logger)
+            return self.edit_latents(
+                text_embeddings,
+                latents,
+                image_cond_latents,
+                t,
+                cams,
+                latency_logger=latency_logger,
+                latency_prefix=_base,
+            )
 
         with latency_logger.timeit(f"{_p}.install_store_processor") if latency_logger else nullcontext():
             storing_processor = CrossAttentionStoreProcessor(valid_indices, target_resolutions)
@@ -882,14 +998,21 @@ class DGEGuidance(BaseObject):
             use_normal_attn_target = True
             for t_step in self.scheduler.timesteps:
                 with latency_logger.timeit(f"{_p}.target_denoise_loop.per_timestep_setup") if latency_logger else nullcontext():
-                    if t_step < 100:
+                    if self.cfg.target_use_extended_attention:
+                        # Warmup with normal attention, then switch to extended (current default behavior).
+                        if t_step < 100:
+                            if not use_normal_attn_target:
+                                self.use_normal_unet()
+                                use_normal_attn_target = True
+                        else:
+                            if use_normal_attn_target:
+                                register_normal_attn_flag(self.unet, False)
+                                use_normal_attn_target = False
+                    else:
+                        # Always use normal self-attention in target loop.
                         if not use_normal_attn_target:
                             self.use_normal_unet()
                             use_normal_attn_target = True
-                    else:
-                        if use_normal_attn_target:
-                            register_normal_attn_flag(self.unet, False)
-                            use_normal_attn_target = False
                     num_batches = (n_target + camera_batch_size - 1) // camera_batch_size
                     pivotal_idx = torch.randint(camera_batch_size, (num_batches,), device=device) + torch.arange(0, n_target, camera_batch_size, device=device)[:num_batches]
                     pivotal_idx = pivotal_idx.clamp(max=n_target - 1)
