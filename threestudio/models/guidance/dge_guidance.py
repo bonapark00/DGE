@@ -1272,7 +1272,7 @@ class DGEGuidance(BaseObject):
         rgb_BCHW_HW8 = F.interpolate(
             rgb_BCHW, (RH, RW), mode="bilinear", align_corners=False
         )
-        
+
         _kv = kwargs.get("key_indices", None)
         _strat = kwargs.get("key_selection_strategy", None)
         _nkv = kwargs.get("num_key_views", None)
@@ -1282,13 +1282,18 @@ class DGEGuidance(BaseObject):
             and kwargs.get("pipe", None) is not None
             and (_kv is not None and len(_kv) > 0 or _strat is not None and _nkv is not None)
         )
-        _prefix = EDIT_MULTIVIEW_PREFIX if use_multiview_path else EDIT_ALL_VIEW_PREFIX
+        # Optional override so DGE system can anchor hierarchy under training_step_all.*
+        _override_prefix = kwargs.get("latency_prefix", None)
+        if _override_prefix is not None:
+            _prefix = _override_prefix
+        else:
+            _prefix = EDIT_MULTIVIEW_PREFIX if use_multiview_path else EDIT_ALL_VIEW_PREFIX
 
         # So that DGE blocks (make_dge_block) can record latency under the correct hierarchy
         if latency_logger is not None:
             register_latency_logger(self.unet, latency_logger)
 
-        with latency_logger.timeit(f"{_prefix}.encode_images"):
+        with latency_logger.timeit(f"{_prefix}.encode_images") if latency_logger else nullcontext():
             latents = self.encode_images(rgb_BCHW_HW8)
 
         cond_rgb_BCHW = cond_rgb.permute(0, 3, 1, 2)
@@ -1299,12 +1304,12 @@ class DGEGuidance(BaseObject):
             align_corners=False,
         )
 
-        with latency_logger.timeit(f"{_prefix}.encode_cond_images"):
+        with latency_logger.timeit(f"{_prefix}.encode_cond_images") if latency_logger else nullcontext():
             cond_latents = self.encode_cond_images(cond_rgb_BCHW_HW8)
 
         temp = torch.zeros(batch_size).to(rgb.device)
 
-        with latency_logger.timeit(f"{_prefix}.text_embeddings"):
+        with latency_logger.timeit(f"{_prefix}.text_embeddings") if latency_logger else nullcontext():
             text_embeddings = prompt_utils.get_text_embeddings(temp, temp, temp, False)
             
         positive_text_embeddings, negative_text_embeddings = text_embeddings.chunk(2)
@@ -1321,7 +1326,7 @@ class DGEGuidance(BaseObject):
         ).repeat(batch_size)
 
         if self.cfg.use_sds:
-            with latency_logger.timeit(f"{EDIT_ALL_VIEW_PREFIX}.compute_grad_sds"):
+            with latency_logger.timeit(f"{_prefix}.compute_grad_sds") if latency_logger else nullcontext():
                 if self.cfg.use_sds_dge:
                     grad = self.compute_grad_sds_dge(text_embeddings, latents, cond_latents, t, cams)
                 else:
@@ -1344,27 +1349,43 @@ class DGEGuidance(BaseObject):
             pipe = kwargs.get("pipe", pipe)
             key_indices = kwargs.get("key_indices", None)
             prompt_text = kwargs.get("prompt_text", "") or getattr(prompt_utils, "prompt", "")
-            if use_multiview and gaussian is not None and pipe is not None and (key_indices is not None and len(key_indices) > 0 or _strat is not None and _nkv is not None):
+            if use_multiview and gaussian is not None and pipe is not None and (
+                key_indices is not None and len(key_indices) > 0 or _strat is not None and _nkv is not None
+            ):
                 key_view_camera_ids = kwargs.get("key_view_camera_ids", None)
-                with latency_logger.timeit(f"{_prefix}.edit_latents_multiview"):
+                with latency_logger.timeit(f"{_prefix}.edit_latents_multiview") if latency_logger else nullcontext():
                     edit_latents = self.edit_latents_multiview(
-                        text_embeddings, latents, cond_latents, t, cams,
-                        # key_indices=key_indices, 
+                        text_embeddings,
+                        latents,
+                        cond_latents,
+                        t,
+                        cams,
+                        # key_indices=key_indices,
                         # key_view_camera_ids=key_view_camera_ids,
-                        gaussian=gaussian, pipe=pipe, prompt_text=prompt_text,
+                        gaussian=gaussian,
+                        pipe=pipe,
+                        prompt_text=prompt_text,
                         latency_logger=latency_logger,
                         skip_key_views_in_target_loop=self.cfg.skip_key_views_in_target_loop,
                         key_selection_strategy=_strat,
                         num_key_views=_nkv,
+                        latency_prefix=_prefix,
                     )
             else:
                 gp_cache = kwargs.get("gp_cache", None)
                 key_cam_indices = kwargs.get("key_cam_indices", None)
                 edit_latents = self.edit_latents(
-                    text_embeddings, latents, cond_latents, t, cams, latency_logger,
-                    gp_cache=gp_cache, key_cam_indices=key_cam_indices,
+                    text_embeddings,
+                    latents,
+                    cond_latents,
+                    t,
+                    cams,
+                    latency_logger,
+                    gp_cache=gp_cache,
+                    key_cam_indices=key_cam_indices,
+                    latency_prefix=_prefix,
                 )
-            with latency_logger.timeit(f"{_prefix}.decode_latents"):
+            with latency_logger.timeit(f"{_prefix}.decode_latents") if latency_logger else nullcontext():
                 edit_images = self.decode_latents(edit_latents)
             edit_images = F.interpolate(edit_images, (H, W), mode="bilinear")
 

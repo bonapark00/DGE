@@ -1266,12 +1266,13 @@ class DGE(BaseLift3DSystem):
                 original_frames = torch.cat(original_frames, dim=0)
 
             with self._latency_logger.timeit("training_step_all.edit_all_view.guidance_batch"):
-                edited_images = self.guidance( ## DGEGuidance.__call__ 함수 호출
-                    images, ## 편집대상(latents): training 되고 있는 3dgs에서 렌더한 이미지. 
-                    original_frames, ## 이미지 조건(latents): 원본 이미지(Edit 전의 GT)
-                    self.prompt_processor(), ## 텍스트 조건(text_embeddings): 편집 프롬프트
-                    cams = cams_sorted,
-                    latency_logger = self._latency_logger
+                edited_images = self.guidance(  # DGEGuidance.__call__
+                    images,
+                    original_frames,
+                    self.prompt_processor(),
+                    cams=cams_sorted,
+                    latency_logger=self._latency_logger,
+                    latency_prefix="training_step_all.edit_all_view.guidance_batch",
                 )
 
             with self._latency_logger.timeit("training_step_all.edit_all_view.assign_outputs"):
@@ -1435,6 +1436,7 @@ class DGE(BaseLift3DSystem):
                         prompt_text=getattr(self.cfg, "target_prompt", "") or "",
                         key_selection_strategy=key_selection,
                         num_key_views=num_key_views,
+                        latency_prefix="training_step_all.edit_multiview.guidance_batch",
                     )
 
                 with self._latency_logger.timeit("training_step_all.edit_multiview.assign_outputs"):
@@ -1996,10 +1998,11 @@ class DGE(BaseLift3DSystem):
                     images,
                     original_frames,
                     self.prompt_processor(),
-                    cams            = cams_sorted,
-                    latency_logger  = self._latency_logger,
-                    gp_cache        = gp_cache,          # new: GP provenance cache
-                    key_cam_indices = key_cam_indices,   # new: which views are pivotal
+                    cams=cams_sorted,
+                    latency_logger=self._latency_logger,
+                    gp_cache=gp_cache,
+                    key_cam_indices=key_cam_indices,
+                    latency_prefix="training_step_all.edit_all_view_gaussian_provenance.guidance_batch",
                 )
 
         # ------------------------------------------------------------------ #
@@ -2292,6 +2295,7 @@ class DGE(BaseLift3DSystem):
                         self.prompt_processor(),
                         cams=[tgt_cam],
                         latency_logger=self._latency_logger,
+                        latency_prefix=f"training_step_all.edit_aw.denoise_view_{view_i}.guidance_batch",
                     )
                     edited_results[vid] = (
                         edited_out["edit_images"][0].unsqueeze(0).detach().clone()
@@ -2643,6 +2647,7 @@ class DGE(BaseLift3DSystem):
                     prompt_utils,
                     cams=batch["camera"],
                     latency_logger=self._latency_logger,
+                    latency_prefix="training_step_all.guidance_sds",
                 )
             loss += loss_dict["loss_sds"] * self.cfg.loss.lambda_sds
 
