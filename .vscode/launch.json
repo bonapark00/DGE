@@ -94,7 +94,7 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "0",
+                "--gpu", "2",
                 "trainer.max_steps=1500",
 
                 "data.edit_view_selection_strategy=lens",
@@ -108,26 +108,43 @@
 
 
                 // man -> clown
-                "system.prompt_processor.prompt=Turn the man into a clown",
-                "data.lens_edit_prompt=Turn the man into a clown",
-                "system.seg_prompt=a face",
-                "data.mmr_seg_prompt=a face",
-                "data.lens_seg_prompt=a face",
-                "system.target_prompt=clown",
-
-                // man with spiderman mask
-                // "system.prompt_processor.prompt=Turn the man into a spiderman with a mask",
-                // "data.lens_edit_prompt=Turn the man into a spiderman with a mask",
+                // "system.prompt_processor.prompt=Turn the man into a clown",
+                // "data.lens_edit_prompt=Turn the man into a clown",
                 // "system.seg_prompt=a face",
                 // "data.mmr_seg_prompt=a face",
                 // "data.lens_seg_prompt=a face",
-                // "system.target_prompt=spiderman with a mask",
+                // "system.target_prompt=clown",
+
+                // make man smile
+                // "system.prompt_processor.prompt=Make the man open his mouth and smile",
+                // "data.lens_edit_prompt=Make the man open his mouth and smile",
+                // "system.seg_prompt=a face",
+                // "data.mmr_seg_prompt=a face",
+                // "data.lens_seg_prompt=a face",
+                // "system.target_prompt=smiling mouth of the man",
+
+                // make man wear sunglasses
+                // "system.prompt_processor.prompt=Make the man wear sunglasses",
+                // "data.lens_edit_prompt=Make the man wear sunglasses",
+                // "system.seg_prompt=a face",
+                // "data.mmr_seg_prompt=a face",
+                // "data.lens_seg_prompt=a face",
+                // "system.target_prompt=sunglasses of the man",
+
+
+                // man with spiderman mask
+                "system.prompt_processor.prompt=Turn the man into a spiderman with a mask",
+                "data.lens_edit_prompt=Turn the man into a spiderman with a mask",
+                "system.seg_prompt=a man",
+                "data.mmr_seg_prompt=a man",
+                "data.lens_seg_prompt=a man",
+                "system.target_prompt=spiderman with a mask",
 
 
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=0.5,1.0,1.5,2.0,2.5,3.0",
-                "data.lens_distance_multipliers=3.0", // 하나로 지정해보기!! 
                 "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+                "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! 
 
                 "system.save_image_grid_draw_texts=false",
                 "system.guidance.guidance_scale=7.5",
@@ -140,7 +157,7 @@
                 "data.lens_ip2p_guidance_scale=12.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
                 "data.lens_cone_half_angle_deg=60", // rabit sunglasses: 30
-                "system.guidance.camera_batch_size=3",
+                "system.guidance.camera_batch_size=5",
                 "data.lens_v_front_method=scene_center",
                 "data.lens_n_candidates=900",
                 "data.lens_diversity_x_weight=30.0", // 클수록! 좌우(azimuth 방향)로 더 퍼지게 만들려고 넣은 항.
@@ -155,13 +172,21 @@
 
                 // tt x .  ft x. tf O. ff O.
                 // DGE extended-attention + feature-injection controls
-                "system.guidance.key_denoise_use_extended_attention=true",   // key loop: false=normal SA only, true=warmup->extended
                 "system.guidance.target_use_extended_attention=true",        // target loop: true=warmup->extended (default), false=always normal
                 "system.guidance.feature_injection_mode=similarity",       // similarity | 3d_anchor | none (none = no cross-view feature injection)
+                
+                "system.guidance.per_step_cross_attn_consistency=true",    // ! per-step: 매 timestep 마다 pivotal의 cross-attn을 3D경유→모든뷰에 일관 적용 (Phase1 cross-attn 파이프라인 비활성화)
+                "system.guidance.per_step_cross_attn_t_start=500",         // t_step >= 이 값일 때만 per-step consistency 적용 (높을수록 초기에만)
                 // "system.guidance.injection_lambda=0.5",
                 // "system.guidance.injection_3d_anchor_style=gather",f
                 "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
                 // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
+
+                "system.guidance.target_batch_strategy=adaptive", // fixed | adaptive
+                "system.guidance.target_batch_neighbor_threshold=900", // “값을 키워야” 더 일찍 sliding_window(late_mode)로 넘어갑니다.
+                "system.guidance.target_batch_late_mode=sliding_window", // sliding_window( timestep이 지날수록 시작 인덱스가 조금씩 밀리는 연속 배치) | random
+                "system.guidance.target_batch_sliding_stride=5", // 
+                "system.guidance.target_key_selection_mode=canonical_progressive", // random | canonical_progressive (early=frontal key, late=least-used key) | fixed (always first in batch)
 
                 "system.mask_thres=0.6",
                 "system.mask_max_ratio=0.6",
@@ -179,7 +204,6 @@
                 "system.use_multiview_edit=true",
                 "system.use_warp_refine=false",
                 "system.use_gaussian_provenance=false",
-                "system.guidance.skip_key_views_in_target_loop=false",
                 
 
                 "system.mask_view_population=train_cameras",
@@ -330,7 +354,6 @@
                 "system.use_multiview_edit=true",
                 "system.use_warp_refine=false",
                 "system.use_gaussian_provenance=false",
-                "system.guidance.skip_key_views_in_target_loop=false",
                 
 
                 "system.mask_view_population=train_cameras",

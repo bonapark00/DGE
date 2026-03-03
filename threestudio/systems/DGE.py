@@ -2494,12 +2494,13 @@ class DGE(BaseLift3DSystem):
                     gp_alpha_tau=self.cfg.gp_alpha_tau,
                 )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_multiview_edit and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
-            self.edit_multiview(
-                original_render_name='origin_render',
-                cache_name="edited_views_multiview",
-                update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
-                global_step=self.true_global_step,
-            )
+            with self._latency_logger.timeit("training_step_all.edit_multiview"):
+                self.edit_multiview(
+                    original_render_name='origin_render',
+                    cache_name="edited_views_multiview",
+                    update_camera=self.true_global_step >= self.cfg.camera_update_per_step,
+                    global_step=self.true_global_step,
+                )
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("training_step_all.edit_all_view"):
                 self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step)
@@ -2513,7 +2514,8 @@ class DGE(BaseLift3DSystem):
             with self._latency_logger.timeit(f"training_step_all.prune_floater"):
                 self.prune_distant_floater_gaussians()
 
-        self.gaussian.update_learning_rate(self.true_global_step)
+        with self._latency_logger.timeit("training_step_all.lr_update"):
+            self.gaussian.update_learning_rate(self.true_global_step)
         batch_index = batch["index"]
 
         if isinstance(batch_index, int):
@@ -2532,16 +2534,16 @@ class DGE(BaseLift3DSystem):
         # nerf2nerf loss
         if self.cfg.loss.lambda_l1 > 0 or self.cfg.loss.lambda_p > 0:
             prompt_utils = self.prompt_processor()
-            gt_images = []
-            for img_index, cur_index in enumerate(batch_index):
-                # if cur_index not in self.edit_frames:
-                #     # cur_index = self.view_list[0]
-                if cur_index in self.edit_frames:
-                    gt_images.append(self.edit_frames[cur_index])
+            with self._latency_logger.timeit("training_step_all.collect_gt_images"):
+                gt_images = []
+                for img_index, cur_index in enumerate(batch_index):
+                    # if cur_index not in self.edit_frames:
+                    #     # cur_index = self.view_list[0]
+                    if cur_index in self.edit_frames:
+                        gt_images.append(self.edit_frames[cur_index])
 
-                else: # CLIP LOSS
-                    pass
-
+                    else: # CLIP LOSS
+                        pass
 
             loss_dict = {}
             ## L1 + Perceptual loss
@@ -2626,12 +2628,13 @@ class DGE(BaseLift3DSystem):
                 loss_dict["loss_l1"] = z
                 loss_dict["loss_p"] = z
 
-            for name, value in loss_dict.items():
-                self.log(f"train/{name}", value)
-                if name.startswith("loss_"):
-                    loss += value * self.C(
-                        self.cfg.loss[name.replace("loss_", "lambda_")]
-                    )
+            with self._latency_logger.timeit("training_step_all.loss_combine"):
+                for name, value in loss_dict.items():
+                    self.log(f"train/{name}", value)
+                    if name.startswith("loss_"):
+                        loss += value * self.C(
+                            self.cfg.loss[name.replace("loss_", "lambda_")]
+                        )
 
 
         # sds loss

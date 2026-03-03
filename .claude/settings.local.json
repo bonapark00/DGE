@@ -7,7 +7,8 @@
       "Bash(ls:*)",
       "Bash(pip show:*)",
       "Bash(find:*)",
-      "Read(//working/style-transfer/VcEdit/infedit/**)"
+      "Read(//working/style-transfer/VcEdit/infedit/**)",
+      "Read(//root/.cursor/projects/working-style-transfer-DGE/terminals/**)"
     ]
   }
 }

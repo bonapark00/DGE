@@ -836,8 +836,7 @@ def make_dge_block(block_class: Type[torch.nn.Module]) -> Type[torch.nn.Module]:
                     norm_hidden_states = (
                         self.norm2(hidden_states, timestep) if self.use_ada_layer_norm else self.norm2(hidden_states)
                     )
-
-                    # 2. Cross-Attention
+                    # Cross-attention: always use the original path (no cross-attention exchange).
                     attn_output = self.attn2(
                         norm_hidden_states,
                         encoder_hidden_states=encoder_hidden_states,
