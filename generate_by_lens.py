@@ -31,14 +31,12 @@ python generate_by_lens.py \
         --distance_multipliers "5.0, 6.0, 7.0, 8.0, 9.0, 10.0" \
         --visualize_roi \
         --n_select 20 \
-        --guidance_scale 4.0 \
+        --guidance_scale 7.5 \
         --save_attn_grid output/attn_grid_pooh_sunglasses.jpg \
         --gpu 0 \
         --v_front_method scene_center \
-        --prune_z_bottom_percent 0.4 \
-        --prune_y_top_percent 0.4 \
-        --prune_x_both_percent 1 \
-        --save_pruned_ply output/pruned.ply
+        --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
+        
 
  python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
@@ -115,15 +113,30 @@ python generate_by_lens.py \
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
-        --seg_prompt "eyes of the rabbit" \
-        --edit_prompt "Make the rabbit wear sunglasses on his eyes" \
+        --seg_prompt "face of the grey rabbit figure" \
+        --edit_prompt "Give the rabbit figure a pair of small sunglasses" \
         --use_ip2p_scoring \
-        --distance_multipliers "0.7, 1.0, 1.2, 1.4, 1.6, 2.0" \
+        --distance_multipliers " 1.0, 1.5, 2.0, 2.5" \
         --visualize_roi \
         --n_select 20 \
         --save_attn_grid output/attn_grid_rabbit_sunglasses.jpg \
         --gpu 1 \
+        --v_front_method scene_center --guidance_scale 7.5
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
+        --seg_prompt "neck of the white rabbit" \
+        --edit_prompt "Add a tiny bow tie to the rabbit's neck" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.7, 1.0, 1.5, 2.0, 3.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_rabbit_bow_tie.jpg \
+        --gpu 1 \
         --v_front_method scene_center --guidance_scale 5.0
+
+
  python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
@@ -152,6 +165,71 @@ python generate_by_lens.py \
         --n_candidates 900 \
         --v_front_method scene_center \
         --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+  
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
+        --seg_prompt "a face" \
+        --edit_prompt "Turn the man into a clown" \
+        --use_ip2p_scoring \
+        --distance_multipliers "3.0, 3.5, 4.0, 4.5, 5.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_man_to_clown.jpg \
+        --gpu 2 \
+        --n_candidates 900 \
+        --v_front_method scene_center \
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 \
+        --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
+  
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
+        --seg_prompt "speaker" \
+        --edit_prompt "Change the speaker to a shiny gold texture" \
+        --use_ip2p_scoring \
+        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 5.5 \
+        --save_attn_grid output/attn_grid_speaker_to_gold.jpg \
+        --gpu 0 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --guidance_scale 5.5 --ip2p_batch_size 2
+  
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
+        --seg_prompt "plush toy" \
+        --edit_prompt "Change the plush toy's color to pink" \
+        --use_ip2p_scoring \
+        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 5.5 \
+        --save_attn_grid output/attn_grid_plush_toy_pink.jpg \
+        --gpu 1 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --guidance_scale 5.5 --ip2p_batch_size 2
+  
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
+        --seg_prompt "neck of the yellow rubber chicken" \
+        --edit_prompt "Add a necktie to the rubber chicken's neck" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.7, 1.0, 1.2, 1.4, 1.6, 2.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_chicken_necktie.jpg \
+        --gpu 0 \
+        --v_front_method scene_center --guidance_scale 7.5 \
+        --n_candidates 900 \
+        --v_front_method scene_center \
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
 
 
 """
@@ -597,6 +675,89 @@ class _StoringAttnProcessor:
         return hidden_states
 
 
+class _StoringSAOnlySmallProcessor:
+    """SA processor that only captures attention at a target spatial resolution.
+
+    For self-attention layers whose sequence_length matches *target_spatial*
+    (default 64 = 8×8), this behaves like _StoringAttnProcessor: explicit
+    Q·K^T → softmax so we can store the attention map.
+
+    For all other resolutions (16×16, 32×32, 64×64) it uses
+    F.scaled_dot_product_attention (FlashAttention) — no attention map is
+    materialised and no data is stored.  This avoids the O(n²) cost of
+    naive attention at high resolutions while still capturing the 8×8 SA
+    maps needed by _compute_sa_propagation_leakage.
+    """
+
+    def __init__(self, target_spatial: int = 64):
+        self.target_spatial = target_spatial
+        self.attn_probs_list: List[torch.Tensor] = []
+
+    def reset(self):
+        self.attn_probs_list = []
+
+    def __call__(self, attn, hidden_states, encoder_hidden_states=None,
+                 attention_mask=None, temb=None):
+        import torch.nn.functional as F
+
+        residual = hidden_states
+
+        if attn.spatial_norm is not None:
+            hidden_states = attn.spatial_norm(hidden_states, temb)
+
+        input_ndim = hidden_states.ndim
+        if input_ndim == 4:
+            batch_size, channel, height, width = hidden_states.shape
+            hidden_states = hidden_states.view(batch_size, channel, height * width).transpose(1, 2)
+
+        batch_size, sequence_length, _ = (
+            hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
+        )
+
+        if attn.group_norm is not None:
+            hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
+
+        query = attn.to_q(hidden_states)
+
+        if encoder_hidden_states is None:
+            encoder_hidden_states = hidden_states
+        elif attn.norm_cross:
+            encoder_hidden_states = attn.norm_encoder_hidden_states(encoder_hidden_states)
+
+        key = attn.to_k(encoder_hidden_states)
+        value = attn.to_v(encoder_hidden_states)
+
+        query = attn.head_to_batch_dim(query)
+        key = attn.head_to_batch_dim(key)
+        value = attn.head_to_batch_dim(value)
+
+        if sequence_length == self.target_spatial:
+            # Small resolution → explicit attention + store
+            attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            self.attn_probs_list.append(attention_probs.detach().cpu())
+            hidden_states = torch.bmm(attention_probs, value)
+        else:
+            # Large resolution → FlashAttention (no storage)
+            hidden_states = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attention_mask,
+            )
+
+        hidden_states = attn.batch_to_head_dim(hidden_states)
+
+        hidden_states = attn.to_out[0](hidden_states)
+        hidden_states = attn.to_out[1](hidden_states)
+
+        if input_ndim == 4:
+            hidden_states = hidden_states.transpose(-1, -2).reshape(batch_size, channel, height, width)
+
+        if attn.residual_connection:
+            hidden_states = hidden_states + residual
+
+        hidden_states = hidden_states / attn.rescale_output_factor
+        return hidden_states
+
+
 def _tokenize_and_find_keyword_indices(
     ip2p_pipe, prompt: str
 ) -> List[int]:
@@ -611,6 +772,86 @@ def _tokenize_and_find_keyword_indices(
         if tid not in (tokenizer.bos_token_id, tokenizer.eos_token_id, tokenizer.pad_token_id):
             indices.append(i)
     return indices if indices else list(range(1, min(len(input_ids) - 1, 10)))
+
+
+def _compute_sa_propagation_leakage(
+    sa_storing_processors: Dict,
+    roi_mask_2d: torch.Tensor,
+    target_spatial: int = 256,
+) -> float:
+    """Measure self-attention propagation leakage from ROI to background.
+
+    For each background pixel q, compute: sum of attention weights to ROI pixels.
+    This captures how much the edit signal "flows" from ROI → background through
+    self-attention, which cross-attention maps cannot reveal.
+
+    Fast implementation:
+    - Uses the smallest available SA spatial resolution (8×8=64) to avoid
+      materializing large (256,256) matrices.
+    - Online-averages across timesteps/layers instead of torch.stack,
+      keeping memory at O(spatial²) = O(64) rather than O(N × spatial²).
+    - Computes the leakage scalar directly from (bg_vec @ avg_sa @ roi_vec)
+      without materializing the masked (spatial,spatial) product.
+
+    Returns:
+        sa_leakage in [0, 1]: average attention that background pixels pay to ROI.
+        Higher = more edit signal leaks to background.
+    """
+    # Prefer the coarsest (smallest) resolution: 8×8=64 tokens.
+    # If unavailable fall back upward through 16×16=256, 32×32=1024.
+    PREFERRED = [64, 256, 1024]
+    use_spatial: Optional[int] = None
+    for sp_pref in PREFERRED:
+        for sp in sa_storing_processors.values():
+            for ap in sp.attn_probs_list:
+                if ap.shape[-1] == sp_pref and ap.shape[-2] == sp_pref:
+                    use_spatial = sp_pref
+                    break
+            if use_spatial is not None:
+                break
+        if use_spatial is not None:
+            break
+
+    if use_spatial is None:
+        return 0.0
+
+    side = int(math.sqrt(use_spatial))
+
+    # --- Build ROI / BG masks at this resolution (cheap) ---
+    M = roi_mask_2d.float().squeeze(0)  # (H, W)
+    M_small = torch.nn.functional.interpolate(
+        M[None, None], size=(side, side), mode="bilinear",
+    ).squeeze().cpu()  # (side, side)
+    M_flat = (M_small > 0.3).float().flatten()  # (use_spatial,)
+    bg_flat = 1.0 - M_flat
+    n_bg = float(bg_flat.sum())
+    n_roi = float(M_flat.sum())
+    if n_bg < 1 or n_roi < 1:
+        return 0.0
+
+    # --- Online mean over all SA maps at this resolution ---
+    # avg_sa: (use_spatial, use_spatial) — accumulated in float32 on CPU
+    # We never stack all maps; we add them one by one to save memory.
+    avg_sa = torch.zeros(use_spatial, use_spatial, dtype=torch.float32)
+    count = 0
+    for sp in sa_storing_processors.values():
+        for ap in sp.attn_probs_list:
+            if ap.shape[-1] == use_spatial and ap.shape[-2] == use_spatial:
+                # ap: (batch*heads, spatial, spatial) — average over head dim on-the-fly
+                avg_sa += ap.float().mean(dim=0)  # (spatial, spatial)
+                count += 1
+    if count == 0:
+        return 0.0
+    avg_sa /= count  # true mean over timesteps × layers
+
+    # --- Leakage scalar: bg_flat @ avg_sa @ roi_flat / n_bg ---
+    # Uses two matrix-vector products instead of element-wise (spatial, spatial) mask:
+    #   step 1: roi_attn_col = avg_sa @ roi_flat  → (spatial,)  "how much each pixel attends to ROI"
+    #   step 2: bg_attention_to_roi = bg_flat · roi_attn_col    → scalar
+    roi_attn_col = avg_sa.mv(M_flat)       # (spatial,) — sum of attention to ROI per query pixel
+    sa_leakage = float((bg_flat * roi_attn_col).sum() / n_bg)
+
+    return sa_leakage
 
 
 def _aggregate_attention_at_resolution(
@@ -644,6 +885,112 @@ def _aggregate_attention_at_resolution(
     return A_flat.view(side, side)
 
 
+def _aggregate_attention_at_resolution_batched(
+    storing_processors: Dict,
+    target_spatial: int,
+    keyword_indices: List[int],
+    batch_size: int,
+) -> List[Optional[torch.Tensor]]:
+    """Per-image cross-attention maps from a batched IP2P run.
+
+    With batch_size B, the stored attention probs have shape
+    (3·B·H, spatial, tokens) where 3 is for CFG copies and H is heads.
+    We reshape and average over CFG/heads to get one map per image.
+    """
+    collected = []
+    for sp in storing_processors.values():
+        for ap in sp.attn_probs_list:
+            if ap.shape[-2] == target_spatial:
+                collected.append(ap.float())
+    if not collected:
+        return [None] * batch_size
+
+    B = batch_size
+    side = int(math.sqrt(target_spatial))
+    if side * side != target_spatial:
+        return [None] * batch_size
+
+    all_maps = torch.stack(collected)  # (N, 3*B*H, spatial, tokens)
+    N_maps, total_bh, spatial, tokens = all_maps.shape
+    H = total_bh // (3 * B)
+    if H < 1 or total_bh != 3 * B * H:
+        return [None] * batch_size
+
+    all_maps = all_maps.reshape(N_maps, 3, B, H, spatial, tokens)
+    per_image = all_maps.mean(dim=(0, 1, 3))  # (B, spatial, tokens)
+
+    results = []
+    for b in range(B):
+        avg_map = per_image[b]
+        token_sel = [i for i in keyword_indices if i < avg_map.shape[-1]]
+        if token_sel:
+            avg_map = avg_map[:, token_sel]
+        A_flat = avg_map.max(dim=-1).values
+        results.append(A_flat.view(side, side))
+    return results
+
+
+def _compute_sa_propagation_leakage_batched(
+    sa_storing_processors: Dict,
+    roi_masks_2d: List[torch.Tensor],
+    batch_size: int,
+) -> List[float]:
+    """Batched SA propagation leakage — one scalar per image."""
+    B = batch_size
+    PREFERRED = [64, 256]
+    use_spatial: Optional[int] = None
+    for sp_pref in PREFERRED:
+        for sp in sa_storing_processors.values():
+            for ap in sp.attn_probs_list:
+                if ap.shape[-1] == sp_pref and ap.shape[-2] == sp_pref:
+                    use_spatial = sp_pref
+                    break
+            if use_spatial is not None:
+                break
+        if use_spatial is not None:
+            break
+    if use_spatial is None:
+        return [0.0] * B
+
+    side = int(math.sqrt(use_spatial))
+    masks_flat = []
+    for mask_2d in roi_masks_2d:
+        M = mask_2d.float().squeeze(0)
+        M_small = torch.nn.functional.interpolate(
+            M[None, None], size=(side, side), mode="bilinear",
+        ).squeeze().cpu()
+        masks_flat.append((M_small > 0.3).float().flatten())
+
+    avg_sa = torch.zeros(B, use_spatial, use_spatial, dtype=torch.float32)
+    count = 0
+    for sp in sa_storing_processors.values():
+        for ap in sp.attn_probs_list:
+            if ap.shape[-1] == use_spatial and ap.shape[-2] == use_spatial:
+                total_bh = ap.shape[0]
+                H = total_bh // (3 * B)
+                if total_bh != 3 * B * H or H < 1:
+                    continue
+                per_img = ap.float().reshape(3, B, H, use_spatial, use_spatial).mean(dim=(0, 2)).cpu()
+                avg_sa += per_img
+                count += 1
+    if count == 0:
+        return [0.0] * B
+    avg_sa /= count
+
+    results = []
+    for b in range(B):
+        M_flat = masks_flat[b]
+        bg_flat = 1.0 - M_flat
+        n_bg = float(bg_flat.sum())
+        n_roi = float(M_flat.sum())
+        if n_bg < 1 or n_roi < 1:
+            results.append(0.0)
+            continue
+        roi_attn_col = avg_sa[b].mv(M_flat)
+        results.append(float((bg_flat * roi_attn_col).sum() / n_bg))
+    return results
+
+
 def _run_ip2p_and_collect(
     rendered_rgb: torch.Tensor,
     ip2p_pipe,
@@ -671,13 +1018,20 @@ def _run_ip2p_and_collect(
 
     with latency_timeit(latency_logger, "step2.ip2p.hook_attn_processors", device):
         original_processors = {}
-        storing_processors = {}
+        storing_processors = {}      # cross-attention (attn2)
+        sa_storing_processors = {}   # self-attention (attn1)
         for name, mod in ip2p_pipe.unet.named_modules():
-            if name.endswith(".attn2") and hasattr(mod, "processor"):
-                original_processors[name] = mod.processor
-                sp = _StoringAttnProcessor()
-                storing_processors[name] = sp
-                mod.set_processor(sp)
+            if hasattr(mod, "processor"):
+                if name.endswith(".attn2"):
+                    original_processors[name] = mod.processor
+                    sp = _StoringAttnProcessor()
+                    storing_processors[name] = sp
+                    mod.set_processor(sp)
+                elif name.endswith(".attn1"):
+                    original_processors[name] = mod.processor
+                    sp = _StoringSAOnlySmallProcessor(target_spatial=64)
+                    sa_storing_processors[name] = sp
+                    mod.set_processor(sp)
 
     # Optional deterministic generator so repeated calls with the same seed
     # produce identical attention maps (used to align CLI vs grid entropy).
@@ -712,7 +1066,7 @@ def _run_ip2p_and_collect(
         if result and result.images:
             edited_t = ToTensor()(result.images[0])  # (3, 512, 512)
 
-    return storing_processors, keyword_indices, edited_t
+    return storing_processors, sa_storing_processors, keyword_indices, edited_t
 
 
 def _extract_attention_map(
@@ -733,7 +1087,7 @@ def _extract_attention_map(
     Returns:
         (H, W) attention map tensor on CPU, or None if extraction failed.
     """
-    storing_processors, keyword_indices, _ = _run_ip2p_and_collect(
+    storing_processors, _sa_procs, keyword_indices, _ = _run_ip2p_and_collect(
         rendered_rgb, ip2p_pipe, prompt, num_steps, seed=seed,
     )
 
@@ -766,7 +1120,7 @@ def _extract_attention_all_resolutions(
 
     Returns dict ``{"8x8": Tensor, "16x16": Tensor, ...}``.
     """
-    storing_processors, keyword_indices, _ = _run_ip2p_and_collect(
+    storing_processors, _sa_procs, keyword_indices, _ = _run_ip2p_and_collect(
         rendered_rgb, ip2p_pipe, prompt, num_steps, seed=seed,
     )
 
@@ -842,7 +1196,7 @@ def _run_ip2p_unified(
         (sage_score, sage_details, all_res_attn_dict, edited_tensor)
     """
     with latency_timeit(latency_logger, "step2.ip2p_collect", device):
-        storing_processors, keyword_indices, edited_t = _run_ip2p_and_collect(
+        storing_processors, sa_storing_processors, keyword_indices, edited_t = _run_ip2p_and_collect(
             rendered_rgb,
             ip2p_pipe,
             prompt,
@@ -872,6 +1226,12 @@ def _run_ip2p_unified(
                 if A_16 is not None:
                     break
 
+    # --- Compute SA propagation leakage ---
+    with latency_timeit(latency_logger, "step2.sa_leakage", device):
+        sa_leak = _compute_sa_propagation_leakage(
+            sa_storing_processors, roi_mask_2d, target_spatial=TARGET_SPATIAL,
+        )
+
     # --- Compute SAGE score ---
     with latency_timeit(latency_logger, "step2.sage_score", device):
         if A_16 is not None:
@@ -880,6 +1240,7 @@ def _run_ip2p_unified(
                 lambda_leak=lambda_leak,
                 lambda_ent=lambda_ent,
                 entropy_thresh=entropy_thresh,
+                sa_leakage=sa_leak,
             )
             sage_details["mode"] = "sage"
         else:
@@ -892,7 +1253,7 @@ def _run_ip2p_unified(
                 size_penalty = 10.0
             sage_score = focus - size_penalty
             sage_details = dict(
-                focus=focus, leakage=0.0, entropy=0.0,
+                focus=focus, leakage=0.0, sa_leakage=sa_leak, entropy=0.0,
                 occupancy=occupancy, size_penalty=size_penalty,
                 total_score=sage_score, mode="fallback",
             )
@@ -908,34 +1269,181 @@ def _run_ip2p_unified(
     return sage_score, sage_details, all_res, edited_t
 
 
+def _run_ip2p_unified_batch(
+    rendered_rgbs: List[torch.Tensor],
+    roi_masks_2d: List[torch.Tensor],
+    ip2p_pipe,
+    prompt: str,
+    batch_size: int = 4,
+    lambda_leak: float = 1.5,
+    lambda_ent: float = 2.0,
+    entropy_thresh: float = 0.97,
+    num_steps: int = 20,
+    seed: Optional[int] = None,
+    guidance_scale: float = 7.5,
+    image_guidance_scale: float = 1.5,
+    latency_logger: Optional[LatencyLogger] = None,
+    device: str = "cuda",
+) -> List[Tuple[float, Dict, Dict[str, torch.Tensor], Optional[torch.Tensor]]]:
+    """Batched IP2P: process multiple views per UNet forward pass.
+
+    Groups inputs into mini-batches of *batch_size* and runs them through
+    the IP2P pipeline in a single call, dramatically reducing per-view
+    overhead (encoding, scheduling, etc.) and improving GPU utilisation.
+
+    Returns a list (one entry per input image) of
+        (sage_score, sage_details, all_res_attn_dict, edited_tensor).
+    """
+    from PIL import Image as PILImage
+    from torchvision.transforms import ToPILImage, ToTensor
+
+    N_total = len(rendered_rgbs)
+    all_results: List[Optional[Tuple]] = [None] * N_total
+
+    keyword_indices = _tokenize_and_find_keyword_indices(ip2p_pipe, prompt)
+
+    for batch_start in range(0, N_total, batch_size):
+        batch_end = min(batch_start + batch_size, N_total)
+        B = batch_end - batch_start
+
+        pil_images = []
+        for idx in range(batch_start, batch_end):
+            pil_img = ToPILImage()(rendered_rgbs[idx].cpu().clamp(0, 1))
+            pil_img = pil_img.resize((512, 512), PILImage.BICUBIC)
+            pil_images.append(pil_img)
+
+        # Hook attention processors
+        original_processors: Dict = {}
+        storing_processors: Dict = {}
+        sa_storing_processors: Dict = {}
+        for name, mod in ip2p_pipe.unet.named_modules():
+            if hasattr(mod, "processor"):
+                if name.endswith(".attn2"):
+                    original_processors[name] = mod.processor
+                    sp = _StoringAttnProcessor()
+                    storing_processors[name] = sp
+                    mod.set_processor(sp)
+                elif name.endswith(".attn1"):
+                    original_processors[name] = mod.processor
+                    sp = _StoringSAOnlySmallProcessor(target_spatial=64)
+                    sa_storing_processors[name] = sp
+                    mod.set_processor(sp)
+
+        generator = None
+        if seed is not None:
+            exec_device = getattr(ip2p_pipe, "_execution_device", None) or ip2p_pipe.unet.device
+            generator = torch.Generator(device=str(exec_device)).manual_seed(seed)
+
+        with latency_timeit(latency_logger, f"step2.ip2p_batch_{batch_start}", device):
+            with torch.no_grad():
+                result = ip2p_pipe(
+                    prompt=[prompt] * B,
+                    image=pil_images,
+                    num_inference_steps=num_steps,
+                    guidance_scale=guidance_scale,
+                    image_guidance_scale=image_guidance_scale,
+                    output_type="pil",
+                    generator=generator,
+                )
+
+        # Restore processors
+        for name, mod in ip2p_pipe.unet.named_modules():
+            if name in original_processors:
+                mod.set_processor(original_processors[name])
+
+        edited_tensors: List[Optional[torch.Tensor]] = []
+        if result and result.images:
+            for img in result.images:
+                edited_tensors.append(ToTensor()(img))
+        while len(edited_tensors) < B:
+            edited_tensors.append(None)
+
+        # Per-image CA maps at all resolutions
+        per_image_all_res: List[Dict[str, torch.Tensor]] = [{} for _ in range(B)]
+        for target_spatial, label in [(64, "8x8"), (256, "16x16"), (1024, "32x32"), (4096, "64x64")]:
+            maps = _aggregate_attention_at_resolution_batched(
+                storing_processors, target_spatial, keyword_indices, B,
+            )
+            for b in range(B):
+                if maps[b] is not None:
+                    per_image_all_res[b][label] = maps[b]
+
+        A_16_list = _aggregate_attention_at_resolution_batched(
+            storing_processors, 256, keyword_indices, B,
+        )
+        batch_masks = [roi_masks_2d[batch_start + b] for b in range(B)]
+        sa_leak_list = _compute_sa_propagation_leakage_batched(
+            sa_storing_processors, batch_masks, B,
+        )
+
+        for b in range(B):
+            idx = batch_start + b
+            A_16 = A_16_list[b]
+            sa_leak = sa_leak_list[b]
+            mask_2d = roi_masks_2d[idx]
+
+            if A_16 is not None:
+                sage_score, sage_details = _compute_sage_score(
+                    A_16, mask_2d,
+                    lambda_leak=lambda_leak,
+                    lambda_ent=lambda_ent,
+                    entropy_thresh=entropy_thresh,
+                    sa_leakage=sa_leak,
+                )
+                sage_details["mode"] = "sage"
+            else:
+                M = mask_2d.float()
+                occupancy = float(M.mean())
+                optimal_ratio = 0.30
+                focus = max(0.0, 1.0 - abs(occupancy - optimal_ratio) / optimal_ratio)
+                size_penalty = 0.0
+                if occupancy < 0.10 or occupancy > 0.70:
+                    size_penalty = 10.0
+                sage_score = focus - size_penalty
+                sage_details = dict(
+                    focus=focus, leakage=0.0, sa_leakage=sa_leak, entropy=0.0,
+                    occupancy=occupancy, size_penalty=size_penalty,
+                    total_score=sage_score, mode="fallback",
+                )
+
+            all_results[idx] = (sage_score, sage_details, per_image_all_res[b], edited_tensors[b])
+
+    return all_results
+
+
 def _compute_sage_score(
     A_spatial: torch.Tensor,
     roi_mask_2d: torch.Tensor,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
-    occupancy_lo: float = 0.10,
+    occupancy_lo: float = 0.02,
     occupancy_hi: float = 0.70,
-    size_penalty_val: float = 10.0,
+    size_penalty_val: float = 1.0,
+    sa_leakage: float = 0.0,
+    lambda_sa: float = 5.0,
 ) -> Tuple[float, Dict]:
     """
-    SAGE (Sharpness-Aware Guided Editability) scoring.
+    SAGE v2 scoring with Contrast + Thresholded Precision-Recall + SA Leakage.
+
+    Cross-attention shows *where the text directs edits*, but actual edit signal
+    propagates through self-attention. SA leakage measures how much BG pixels
+    attend to ROI pixels, predicting unwanted background changes.
 
     Computes:
-      S_total = S_focus - λ₁·S_leakage - λ₂·H_ratio(A) - Penalty_size
-
-    Entropy is expressed as a ratio of the theoretical maximum (0 = perfectly
-    sharp, 1 = uniform). Hard constraint: H_ratio > τ → score = -inf.
+      S_total = contrast * precision_f1 - λ₁·leakage_top90 - λ_sa·sa_leakage - Penalty_size
 
     Args:
-        A_spatial: (H_a, W_a) raw attention map (will be resized to mask).
+        A_spatial: (H_a, W_a) raw cross-attention map (will be resized to mask).
         roi_mask_2d: (1, H, W) binary ROI mask.
-        lambda_leak: weight for leakage penalty.
-        lambda_ent: weight for entropy ratio penalty (default 2.0).
-        entropy_thresh: hard threshold for entropy ratio filtering (default 0.97).
+        lambda_leak: weight for CA leakage penalty.
+        lambda_ent: (unused, kept for API compatibility).
+        entropy_thresh: (unused, kept for API compatibility).
         occupancy_lo: minimum acceptable occupancy ratio.
         occupancy_hi: maximum acceptable occupancy ratio.
         size_penalty_val: penalty value for out-of-range occupancy.
+        sa_leakage: self-attention propagation leakage score (0-1).
+        lambda_sa: weight for SA leakage penalty (default 2.0).
 
     Returns:
         (total_score, details_dict) where details_dict contains individual metrics.
@@ -943,18 +1451,7 @@ def _compute_sage_score(
     M = roi_mask_2d.float().squeeze(0)  # (H, W)
     h_m, w_m = M.shape
 
-    # --- 3. Entropy (Sharpness) — compute as ratio on NATIVE resolution ---
-    # Compute on the original attention map and normalise by the theoretical
-    # maximum entropy at that resolution so the value lies in [0, 1].
-    # This makes the threshold resolution-independent (default 0.97 means
-    # "reject views whose attention is >97% of maximum entropy").
-    A_native = A_spatial.float()
-    A_native_norm = (A_native - A_native.min()) / (A_native.max() - A_native.min() + 1e-8)
-    raw_entropy = compute_entropy(A_native_norm)
-    max_entropy = math.log(A_native.numel()) + 1e-8
-    entropy = raw_entropy / max_entropy  # ratio in [0, 1]
-
-    # Resize attention map to mask resolution for focus/leakage computation
+    # Resize attention map to mask resolution
     A_resized = (
         torch.nn.functional.interpolate(
             A_spatial[None, None].float(), size=(h_m, w_m), mode="bilinear"
@@ -965,12 +1462,33 @@ def _compute_sage_score(
     # Normalize to [0, 1]
     A = (A - A.min()) / (A.max() - A.min() + 1e-8)
 
-    # --- 1. Focus Score ---
-    focus = float((A * M).sum() / (A.sum() + 1e-8))
-
-    # --- 2. Leakage Score ---
     bg = 1.0 - M
-    leakage = float((A * bg).sum() / (bg.sum() + 1e-8))
+
+    # --- 1. Contrast Ratio ---
+    # Measures how much stronger attention is inside ROI vs outside.
+    # +1 = all attention on ROI, 0 = uniform, -1 = all on background
+    roi_mean = float((A * M).sum() / (M.sum() + 1e-8))
+    bg_mean = float((A * bg).sum() / (bg.sum() + 1e-8))
+    contrast = (roi_mean - bg_mean) / (roi_mean + bg_mean + 1e-8)
+
+    # --- 2. Thresholded Precision-Recall (F1) ---
+    # Binarize attention at top-25% to find "strongly edited" regions,
+    # then compute F1 overlap with ROI mask.
+    A_flat = A.flatten()
+    threshold = float(A_flat.quantile(0.75))
+    A_thresh = (A >= threshold).float()
+
+    precision = float((A_thresh * M).sum() / (A_thresh.sum() + 1e-8))
+    recall = float((A_thresh * M).sum() / (M.sum() + 1e-8))
+    precision_f1 = 2.0 * precision * recall / (precision + recall + 1e-8)
+
+    # --- 3. Strong Leakage (top-90th percentile on background) ---
+    # Instead of mean background attention, capture the strongest leak.
+    bg_attention = A[bg > 0.5]
+    if bg_attention.numel() > 0:
+        leakage_top90 = float(bg_attention.quantile(0.9))
+    else:
+        leakage_top90 = 0.0
 
     # --- 4. Occupancy Penalty ---
     occupancy = float(M.mean())
@@ -978,16 +1496,24 @@ def _compute_sage_score(
     if occupancy < occupancy_lo or occupancy > occupancy_hi:
         size_penalty = size_penalty_val
 
-    # --- Hard Filtering ---
-    if entropy > entropy_thresh:
-        total_score = -float("inf")
-    else:
-        total_score = focus - (lambda_leak * leakage) - (lambda_ent * entropy) - size_penalty
+    # --- Legacy metrics for logging compatibility ---
+    focus = float((A * M).sum() / (A.sum() + 1e-8))
+
+    # --- Final Score ---
+    total_score = (
+        contrast * precision_f1
+        - (lambda_leak * leakage_top90)
+        - (lambda_sa * sa_leakage)
+        - size_penalty
+    )
 
     details = dict(
         focus=focus,
-        leakage=leakage,
-        entropy=entropy,
+        contrast=contrast,
+        precision_f1=precision_f1,
+        leakage=leakage_top90,
+        sa_leakage=sa_leakage,
+        entropy=0.0,  # kept for API compatibility
         occupancy=occupancy,
         size_penalty=size_penalty,
         total_score=total_score,
@@ -1028,7 +1554,8 @@ def _compute_editability_score(
             size_penalty = 10.0
         score = focus - size_penalty
         details = dict(
-            focus=focus, leakage=0.0, entropy=0.0,
+            focus=focus, leakage=0.0, sa_leakage=0.0, precision_f1=0.0,
+            contrast=0.0, entropy=0.0,
             occupancy=occupancy, size_penalty=size_penalty,
             total_score=score, mode="heuristic",
         )
@@ -1071,6 +1598,8 @@ def _save_attention_grid(
     ],
     save_path: str,
     res_labels: Optional[List[str]] = None,
+    roi_masks: Optional[Dict[float, torch.Tensor]] = None,
+    sa_leakage_scores: Optional[Dict[float, float]] = None,
 ) -> None:
     """Save a distance×resolution attention map grid as an image.
 
@@ -1078,6 +1607,8 @@ def _save_attention_grid(
         grid_data: ``{multiplier: (rgb_cpu_3HW, {"8x8": A, ...}, edited_cpu or None)}``
         save_path: output image path.
         res_labels: resolution labels to include (default all four).
+        roi_masks: ``{multiplier: (1, H, W) binary mask}`` for contrast/pF1 overlay.
+        sa_leakage_scores: ``{multiplier: float}`` SA propagation leakage per view.
     """
     from PIL import Image as PILImage, ImageDraw
     from torchvision.transforms import ToPILImage
@@ -1115,6 +1646,14 @@ def _save_attention_grid(
             rgb_t.unsqueeze(0), size=(cell, cell), mode="bilinear",
         ).squeeze(0)
         canvas.paste(ToPILImage()(rgb_rs.clamp(0, 1)), (label_w + ci * cell, header_h))
+        # SA leakage label on render row
+        if sa_leakage_scores is not None and mult in sa_leakage_scores:
+            sa_val = sa_leakage_scores[mult]
+            ImageDraw.Draw(canvas).text(
+                (label_w + ci * cell + 5, header_h + 5),
+                f"SA={sa_val:.3f}",
+                fill="yellow",
+            )
 
     # Attention rows
     for ri, res_label in enumerate(res_labels):
@@ -1133,12 +1672,33 @@ def _save_attention_grid(
             heatmap = torch.stack([A_vis, A_vis * 0.5, torch.zeros_like(A_vis)], dim=0)
             canvas.paste(ToPILImage()(heatmap.clamp(0, 1)), (label_w + ci * cell, y))
 
-            # Entropy ratio label
+            # Compute per-cell metrics for overlay
             raw_ent = compute_entropy(A_norm)
             max_ent = math.log(A.numel()) + 1e-8
+            label_text = f"H={raw_ent / max_ent:.3f}"
+
+            # If ROI mask available, compute contrast and pF1
+            if roi_masks is not None and mult in roi_masks:
+                M_cell = roi_masks[mult].float().squeeze(0)
+                h_m, w_m = M_cell.shape
+                A_rs = torch.nn.functional.interpolate(
+                    A_norm[None, None].float(), size=(h_m, w_m), mode="bilinear",
+                ).squeeze()
+                bg_cell = 1.0 - M_cell
+                roi_m = float((A_rs * M_cell).sum() / (M_cell.sum() + 1e-8))
+                bg_m = float((A_rs * bg_cell).sum() / (bg_cell.sum() + 1e-8))
+                ctr = (roi_m - bg_m) / (roi_m + bg_m + 1e-8)
+                # Thresholded precision-recall F1
+                thr = float(A_rs.flatten().quantile(0.75))
+                A_thr = (A_rs >= thr).float()
+                prec = float((A_thr * M_cell).sum() / (A_thr.sum() + 1e-8))
+                rec = float((A_thr * M_cell).sum() / (M_cell.sum() + 1e-8))
+                pf1 = 2.0 * prec * rec / (prec + rec + 1e-8)
+                label_text = f"C={ctr:.2f} F1={pf1:.2f}"
+
             ImageDraw.Draw(canvas).text(
                 (label_w + ci * cell + 5, y + 5),
-                f"H={raw_ent / max_ent:.3f}",
+                label_text,
                 fill="white",
             )
 
@@ -1185,6 +1745,7 @@ def scale_probing(
     ip2p_guidance_scale: float = 7.5,
     ip2p_image_guidance_scale: float = 1.5,
     ip2p_num_inference_steps: int = 20,
+    ip2p_batch_size: int = 1,
     latency_logger: Optional[LatencyLogger] = None,
 ) -> float:
     """
@@ -1192,8 +1753,10 @@ def scale_probing(
     views at several distances along v_front and scoring each with the
     Sharpness-Aware Guided Editability metric.
 
-    Score = Focus - λ₁·Leakage - λ₂·Entropy(A) - Penalty_size
-    Hard constraint: views with H(A) > τ_entropy are marked unsafe (-inf).
+    Score = Contrast · PrecisionF1 - λ₁·Leakage_top90 - Penalty_size
+
+    When ip2p_batch_size > 1, multiple views are processed in a single
+    IP2P forward pass for significantly faster execution.
 
     Returns the optimal distance d*.
     """
@@ -1203,100 +1766,157 @@ def scale_probing(
     center = roi_info["center"]
     v_front = roi_info["v_front"]
     eigenvalues = roi_info["eigenvalues"]
-    # r_obj = sqrt(lambda_max) — use the largest eigenvalue as object radius
     r_obj = float(np.sqrt(np.abs(eigenvalues[0])))
     world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
     print(f"[Step2] r_obj (sqrt(lambda_max)) = {r_obj:.4f}")
     print(f"[Step2] Candidate distances: {[f'{m}x r_obj = {m * r_obj:.4f}' for m in distance_multipliers]}")
 
-    best_d = distance_multipliers[1] * r_obj  # default fallback
+    best_d = distance_multipliers[1] * r_obj if len(distance_multipliers) > 1 else distance_multipliers[0] * r_obj
     best_score = -float("inf")
     results = []
 
-    # Collect data for attention grid visualisation
     attn_grid_data: Dict[float, Tuple[torch.Tensor, Dict[str, torch.Tensor]]] = {}
+    attn_grid_masks: Dict[float, torch.Tensor] = {}
+    attn_grid_sa_scores: Dict[float, float] = {}
 
+    # --- Phase 1: Pre-render all views and ROI masks ---
+    rendered_rgbs: List[torch.Tensor] = []
+    rendered_masks: List[torch.Tensor] = []
     for i, mult in enumerate(distance_multipliers):
         cand_prefix = f"step2.cand_{i}"
         d = mult * r_obj
         eye = center + v_front * d
         with latency_timeit(latency_logger, f"{cand_prefix}.make_camera", device):
             cam = _make_camera(eye, center, world_up, fovy, h, w, uid=i, device=device)
-
         with latency_timeit(latency_logger, f"{cand_prefix}.render", device):
-            out = render(
-                cam, gaussians, pipe_params, background, override_opacity=override_opacity
-            )
-            rgb = out["render"]  # (3, H, W)
-
-        # Project ROI mask to 2D
+            out = render(cam, gaussians, pipe_params, background, override_opacity=override_opacity)
+            rgb = out["render"]
         if roi_mask is not None:
             with latency_timeit(latency_logger, f"{cand_prefix}.project_roi_mask", device):
                 mask_2d = _project_roi_mask(
                     gaussians, roi_mask, cam, pipe_params, background,
-                    override_opacity=override_opacity,
-                    device=device,
+                    override_opacity=override_opacity, device=device,
                 )
         else:
             mask_2d = torch.ones(1, h, w, device=device)
+        rendered_rgbs.append(rgb)
+        rendered_masks.append(mask_2d)
 
-        # Use a deterministic seed per candidate so that the SAGE
-        # score entropy and the attention-grid entropy match.
-        per_view_seed = 1337 + i
-        per_view_seed = 5 # 5가 x4에서 잘됐음
+    per_view_seed = 5
 
-        if ip2p_pipe is not None:
-            # Single unified IP2P pass: SAGE score + all-res attention + edited image
-            with latency_timeit(latency_logger, f"{cand_prefix}.ip2p_unified", device):
-                score, details, all_res, edited_t = _run_ip2p_unified(
-                    rgb, mask_2d, ip2p_pipe, edit_prompt,
-                    lambda_leak=lambda_leak,
-                    lambda_ent=lambda_ent,
-                    entropy_thresh=entropy_thresh,
-                    num_steps=ip2p_num_inference_steps,
-                    seed=per_view_seed,
-                    guidance_scale=ip2p_guidance_scale,
-                    image_guidance_scale=ip2p_image_guidance_scale,
-                    latency_logger=latency_logger,
-                    device=device,
-                )
-            if save_attn_grid:
-                attn_grid_data[mult] = (rgb.cpu(), all_res, edited_t)
-        else:
-            score, details = _compute_editability_score(
-                rgb, mask_2d, None, edit_prompt,
-                lambda_leak=lambda_leak,
-                lambda_ent=lambda_ent,
+    # --- Phase 2: IP2P scoring ---
+    if ip2p_pipe is not None and ip2p_batch_size > 1:
+        print(f"[Step2] Batched IP2P (batch_size={ip2p_batch_size}, {len(distance_multipliers)} views)")
+        with latency_timeit(latency_logger, "step2.ip2p_batch", device):
+            batch_results = _run_ip2p_unified_batch(
+                rendered_rgbs, rendered_masks, ip2p_pipe, edit_prompt,
+                batch_size=ip2p_batch_size,
+                lambda_leak=lambda_leak, lambda_ent=lambda_ent,
                 entropy_thresh=entropy_thresh,
-                seed=per_view_seed,
+                num_steps=ip2p_num_inference_steps, seed=per_view_seed,
+                guidance_scale=ip2p_guidance_scale,
+                image_guidance_scale=ip2p_image_guidance_scale,
+                latency_logger=latency_logger, device=device,
             )
-        results.append((mult, d, score, details))
+        for i, mult in enumerate(distance_multipliers):
+            d = mult * r_obj
+            score, details, all_res, edited_t = batch_results[i]
+            results.append((mult, d, score, details))
+            if save_attn_grid:
+                attn_grid_data[mult] = (rendered_rgbs[i].cpu(), all_res, edited_t)
+                attn_grid_masks[mult] = rendered_masks[i].cpu()
+                if 'sa_leakage' in details:
+                    attn_grid_sa_scores[mult] = details['sa_leakage']
+    else:
+        for i, mult in enumerate(distance_multipliers):
+            d = mult * r_obj
+            rgb, mask_2d = rendered_rgbs[i], rendered_masks[i]
+            if ip2p_pipe is not None:
+                cand_prefix = f"step2.cand_{i}"
+                with latency_timeit(latency_logger, f"{cand_prefix}.ip2p_unified", device):
+                    score, details, all_res, edited_t = _run_ip2p_unified(
+                        rgb, mask_2d, ip2p_pipe, edit_prompt,
+                        lambda_leak=lambda_leak, lambda_ent=lambda_ent,
+                        entropy_thresh=entropy_thresh,
+                        num_steps=ip2p_num_inference_steps, seed=per_view_seed,
+                        guidance_scale=ip2p_guidance_scale,
+                        image_guidance_scale=ip2p_image_guidance_scale,
+                        latency_logger=latency_logger, device=device,
+                    )
+                if save_attn_grid:
+                    attn_grid_data[mult] = (rgb.cpu(), all_res, edited_t)
+                    attn_grid_masks[mult] = mask_2d.cpu()
+                    if 'sa_leakage' in details:
+                        attn_grid_sa_scores[mult] = details['sa_leakage']
+            else:
+                score, details = _compute_editability_score(
+                    rgb, mask_2d, None, edit_prompt,
+                    lambda_leak=lambda_leak, lambda_ent=lambda_ent,
+                    entropy_thresh=entropy_thresh, seed=per_view_seed,
+                )
+            results.append((mult, d, score, details))
 
-        status = "UNSAFE" if score == -float("inf") else f"{score:.4f}"
+    # --- Phase 3: Two-phase SAGE selection ---
+    # Phase 3a: SA Containment Filter
+    #   Compute mean(sa_leak) across all candidates; keep only those with sa_leak <= mean.
+    #   This eliminates views where self-attention spreads the edit signal to the background.
+    # Phase 3b: Attention Quality Ranking
+    #   Among filtered candidates, pick the one with highest F1 * (1 - ca_leak).
+    #   F1 measures how well the high-attention region covers the ROI.
+    #   (1 - ca_leak) penalises strong background cross-attention activation.
+
+    sa_vals = [
+        details.get("sa_leakage", 0.0) for _, _, _, details in results
+    ]
+    sa_threshold = sum(sa_vals) / len(sa_vals) if sa_vals else 0.0
+
+    for mult, d, score, details in results:
+        contrast_str = f"  contrast={details['contrast']:.3f}" if 'contrast' in details else ""
+        pf1_str = f"  pF1={details['precision_f1']:.3f}" if 'precision_f1' in details else ""
+        sa_str = f"  sa_leak={details['sa_leakage']:.3f}" if 'sa_leakage' in details else ""
+        ca_str = f"  ca_leak={details['leakage']:.3f}" if 'leakage' in details else ""
+        new_score = details.get("precision_f1", 0.0) * (1.0 - details.get("leakage", 0.0))
+        passed = details.get("sa_leakage", 0.0) <= sa_threshold
         print(
             f"[Step2]  d={d:.4f} ({mult}x) | "
-            f"focus={details['focus']:.3f}  leak={details['leakage']:.3f}  "
-            f"entropy={details['entropy']:.3f}  occ={details['occupancy']:.3f}  "
-            f"penalty={details['size_penalty']:.1f} | "
-            f"S_total={status}"
+            f"focus={details['focus']:.3f}"
+            f"{contrast_str}{pf1_str}{sa_str}{ca_str}"
+            f"  occ={details['occupancy']:.3f} | "
+            f"F1*(1-ca)={new_score:.4f}"
+            f"{'  [pass]' if passed else '  [filtered]'}"
         )
 
-        if score > best_score:
-            best_score = score
-            best_d = d
+    filtered = [
+        (mult, d, details)
+        for mult, d, _, details in results
+        if details.get("sa_leakage", 0.0) <= sa_threshold
+    ]
+    if not filtered:
+        filtered = [(mult, d, details) for mult, d, _, details in results]
 
-    if best_score == -float("inf"):
-        # All views were unsafe — fall back to median multiplier
-        fallback_mult = distance_multipliers[len(distance_multipliers) // 2]
-        best_d = fallback_mult * r_obj
-        print(f"[Step2] WARNING: All views unsafe. Falling back to {fallback_mult}x → d*={best_d:.4f}")
-    else:
-        print(f"[Step2] Best distance d*={best_d:.4f} (mult={best_d / r_obj:.2f}x, score={best_score:.4f})")
+    def _sage_quality(details: Dict) -> float:
+        return details.get("precision_f1", 0.0) * (1.0 - details.get("leakage", 0.0))
 
-    # Save attention grid
+    best_mult, best_d, best_details = max(filtered, key=lambda x: _sage_quality(x[2]))
+    best_score = _sage_quality(best_details)
+
+    print(
+        f"[Step2] SA filter: mean(sa)={sa_threshold:.3f}, "
+        f"{len(filtered)}/{len(results)} views passed"
+    )
+    print(
+        f"[Step2] Best distance d*={best_d:.4f} "
+        f"(mult={best_d / r_obj:.2f}x, "
+        f"F1*(1-ca)={best_score:.4f})"
+    )
+
     if save_attn_grid and attn_grid_data:
-        _save_attention_grid(attn_grid_data, save_attn_grid)
+        _save_attention_grid(
+            attn_grid_data, save_attn_grid,
+            roi_masks=attn_grid_masks,
+            sa_leakage_scores=attn_grid_sa_scores,
+        )
 
     return best_d
 
@@ -1722,6 +2342,7 @@ def run_generate_by_lens_pipeline(
     override_opacity: Optional[torch.Tensor] = None,
     device: str = "cuda",
     v_front_method: str = "colmap_mean",
+    ip2p_batch_size: int = 1,
 ) -> List[Simple_Camera]:
     """
     Run the full Generate-by-Lens pipeline. Returns list of Simple_Camera.
@@ -1769,6 +2390,7 @@ def run_generate_by_lens_pipeline(
         distance_multipliers=dist_mults,
         lambda_leak=lambda_leak, lambda_ent=lambda_ent, entropy_thresh=entropy_thresh,
         override_opacity=override_opacity, device=device,
+        ip2p_batch_size=ip2p_batch_size,
     )
 
     # Step 3: Fibonacci Manifold Sampling (cone axis = v_front so candidates align with chosen front)
@@ -1947,6 +2569,13 @@ def main():
     parser.add_argument(
         "--num_inference_steps", type=int, default=20,
         help="IP2P diffusion steps used for attention/editing (default 20). Lower is faster.",
+    )
+    parser.add_argument(
+        "--ip2p_batch_size", type=int, default=1,
+        help="Batch size for IP2P scale probing (default 1). Higher values process "
+             "multiple distance candidates in a single UNet forward pass, reducing "
+             "wall time roughly proportionally. Set to number of distance_multipliers "
+             "for maximum speed. Requires more VRAM (~proportional to batch size).",
     )
 
     # Output
@@ -2246,6 +2875,7 @@ def main():
                     ip2p_guidance_scale=getattr(args, "guidance_scale", 7.5),
                     ip2p_image_guidance_scale=getattr(args, "image_guidance_scale", 1.5),
                     ip2p_num_inference_steps=getattr(args, "num_inference_steps", 20),
+                    ip2p_batch_size=getattr(args, "ip2p_batch_size", 1),
                     latency_logger=latency_logger,
                 )
     else:
@@ -2270,6 +2900,7 @@ def main():
             ip2p_guidance_scale=getattr(args, "guidance_scale", 7.5),
             ip2p_image_guidance_scale=getattr(args, "image_guidance_scale", 1.5),
             ip2p_num_inference_steps=getattr(args, "num_inference_steps", 20),
+            ip2p_batch_size=getattr(args, "ip2p_batch_size", 1),
             latency_logger=None,
         )
 
