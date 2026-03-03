@@ -281,8 +281,8 @@ class CrossAttentionStoreProcessor:
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         )
-        # For cross-attn storage we need spatial resolution (query length), not text length
         seq_spatial = hidden_states.shape[1]
+        _should_store = seq_spatial in self.target_resolutions
         attention_mask = attn.prepare_attention_mask(attention_mask, sequence_length, batch_size)
         if attn.group_norm is not None:
             hidden_states = attn.group_norm(hidden_states.transpose(1, 2)).transpose(1, 2)
@@ -296,14 +296,17 @@ class CrossAttentionStoreProcessor:
         query = attn.head_to_batch_dim(query)
         key = attn.head_to_batch_dim(key)
         value = attn.head_to_batch_dim(value)
-        attention_probs = attn.get_attention_scores(query, key, attention_mask)
-        # Store at any spatial resolution (UNet may use 64*64, 32*32, 16*16, 8*8, etc. depending on input)
-        probs = attention_probs.detach().float()
-        valid = [i for i in self.valid_token_indices if i < probs.shape[-1]]
-        if valid:
-            probs_valid = probs[:, :, valid]
-            self.maps[seq_spatial].append(probs_valid)
-        hidden_states = torch.bmm(attention_probs, value)
+        if _should_store:
+            attention_probs = attn.get_attention_scores(query, key, attention_mask)
+            probs = attention_probs.detach()
+            valid = [i for i in self.valid_token_indices if i < probs.shape[-1]]
+            if valid:
+                self.maps[seq_spatial].append(probs[:, :, valid])
+            hidden_states = torch.bmm(attention_probs, value)
+        else:
+            hidden_states = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attention_mask,
+            )
         hidden_states = attn.batch_to_head_dim(hidden_states)
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
@@ -493,6 +496,10 @@ class DGEGuidance(BaseObject):
         per_step_cross_attn_consistency: bool = False
         # Apply per-step consistency only when t_step >= this value (high = early denoising).
         per_step_cross_attn_t_start: int = 500
+        # Spatial resolutions (H*W) whose pivotal cross-attention maps are explicitly stored
+        # and passed through the 3D consistency pipeline. Non-listed resolutions use the
+        # fast fused attention path only.
+        per_step_cross_attn_resolutions: Tuple[int, ...] = (32 * 32, 64 * 64)
 
     def configure(self, preloaded_pipe=None, **kwargs) -> None:
         self.weights_dtype = (
@@ -956,7 +963,13 @@ class DGEGuidance(BaseObject):
                 raise ValueError("edit_latents_multiview requires key_indices or (key_selection_strategy and num_key_views)")
 
 
-            target_resolutions = (32 * 32, 64 * 64)
+            target_resolutions = tuple(
+                getattr(
+                    self.cfg,
+                    "per_step_cross_attn_resolutions",
+                    (32 * 32, 64 * 64),
+                )
+            )
             # Cache module lists once to avoid repeated named_modules() traversal in the loop
             _dge_blocks = [(n, m) for n, m in self.unet.named_modules()
                            if isinstance_str(m, "BasicTransformerBlock")]
