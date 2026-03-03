@@ -231,6 +231,40 @@ python generate_by_lens.py \
         --v_front_method scene_center \
         --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
 
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/bear \
+        --seg_prompt "the bear's face" \
+        --edit_prompt "Change the yellow face markings to red" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.1,0.3,0.5,1.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_bear_markings_red.jpg \
+        --gpu 1 \
+        --v_front_method scene_center --guidance_scale 7.5 \
+        --n_candidates 900 \
+        --cone_half_angle_deg 180 \
+        --v_front_method scene_center \
+         --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/bear \
+        --seg_prompt "the entire bear statue" \
+        --edit_prompt "Change the material of the bear statue to bronze" \
+        --use_ip2p_scoring \
+        --distance_multipliers "0.1,0.3,0.5,1.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_bear_statue_bronze.jpg \
+        --gpu 1 \
+        --v_front_method scene_center --guidance_scale 7.5 \
+        --n_candidates 900 \
+        --cone_half_angle_deg 180 \
+        --v_front_method scene_center \
+        --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
+
 
 """
 
@@ -1993,6 +2027,52 @@ def fibonacci_camera_candidates(
     if world_up is None:
         world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
+    # Special case: when hemisphere_only is False, place cameras on a circular orbit
+    # that follows the COLMAP camera path. Infer the orbit plane from COLMAP
+    # (PCA: smallest-variance axis = orbit normal), then sample uniformly on that
+    # circle with a small elevation wobble so views are not all at the same height.
+    if not hemisphere_only:
+        world_up = _normalize(np.asarray(world_up, dtype=np.float32))
+        n = max(1, n_candidates)
+
+        if colmap_cam_centers is not None and len(colmap_cam_centers) >= 3:
+            vecs = colmap_cam_centers - center[None, :]
+            vecs = vecs.astype(np.float64)
+            C = np.cov(vecs.T)
+            evals, evecs = np.linalg.eigh(C)
+            idx = np.argsort(evals)
+            polar_axis = evecs[:, idx[0]].astype(np.float32)
+            polar_axis = _normalize(polar_axis)
+            v2 = evecs[:, idx[1]].astype(np.float32)
+            u1 = v2 - np.dot(v2, polar_axis) * polar_axis
+            if np.linalg.norm(u1) < 1e-6:
+                u1 = evecs[:, idx[2]].astype(np.float32)
+            u1 = _normalize(u1)
+            u2 = np.cross(polar_axis, u1).astype(np.float32)
+            u2 = _normalize(u2)
+        else:
+            polar_axis = world_up
+            u1 = _normalize(np.array([1, 0, 0], dtype=np.float32))
+            u2 = _normalize(np.array([0, 0, 1], dtype=np.float32))
+
+        angles = np.linspace(0.0, 2.0 * math.pi, n, endpoint=False)
+        directions = []
+        for theta in angles:
+            d = math.cos(theta) * u1 + math.sin(theta) * u2
+            d = d + 0.06 * math.sin(theta) * polar_axis
+            d = _normalize(d.astype(np.float32))
+            directions.append(d)
+        directions = np.stack(directions, axis=0)
+
+        cameras = []
+        for i, d in enumerate(directions):
+            eye = center + d * distance
+            cam = _make_camera(eye, center, world_up, fovy, h, w, uid=i, device=device)
+            cameras.append(cam)
+
+        print(f"[Step3] Generated {len(cameras)} circular-orbit candidates (d={distance:.4f}, plane from COLMAP)")
+        return cameras
+
     directions = fibonacci_sphere_samples(n_candidates)
 
     if hemisphere_only:
@@ -2372,15 +2452,36 @@ def run_generate_by_lens_pipeline(
 
     # Step 1: ROI Intrinsic Analysis
     roi_info = roi_intrinsic_analysis(
-        gaussians, roi_mask, cam_forwards,
+        gaussians,
+        roi_mask,
+        cam_forwards,
         cam_centers=cam_centers,
         v_front_method=v_front_method,
     )
+
     colmap_dists = np.linalg.norm(cam_centers - roi_info["center"][None, :], axis=1)
     colmap_median_dist = float(np.median(colmap_dists))
     roi_info["colmap_median_dist"] = colmap_median_dist
     if roi_info["object_size"] > colmap_median_dist:
         roi_info["object_size"] = colmap_median_dist
+
+    # When hemisphere_only=False, v_front = one of the COLMAP view directions directly
+    # (no PCA/mean; just pick the view closest to mean direction as representative).
+    if (not hemisphere_only) and cam_centers is not None and len(cam_centers) > 0:
+        center = roi_info["center"]
+        vecs = cam_centers - center[None, :]
+        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+        valid = norms.squeeze(-1) > 1e-6
+        if np.any(valid):
+            dirs = np.zeros_like(vecs, dtype=np.float32)
+            dirs[valid] = vecs[valid] / norms[valid]
+            mean_dir = _normalize(dirs[valid].mean(axis=0))
+            dots = dirs @ mean_dir
+            best_idx = int(np.argmax(dots))
+            roi_info["v_front"] = dirs[best_idx]
+            print(
+                f"[Step1] hemisphere_only=False: v_front = COLMAP view index {best_idx}"
+            )
 
     # Step 2: Scale Probing
     dist_mults = distance_multipliers or [1.5, 2.0, 2.5, 3.0, 3.5]
