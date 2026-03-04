@@ -107,10 +107,10 @@
                 "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face/",
 
                 // bear dataset
-                "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/bear",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
+                // "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/bear",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
 
                 // man -> clown
                 "system.prompt_processor.prompt=Turn the man into a clown",
@@ -122,28 +122,28 @@
 
 
                 // man -> elf
-                "system.prompt_processor.prompt=Make his ear like an elf's ear",
-                "data.lens_edit_prompt=Make his ear like an elf's ear",
-                "system.seg_prompt=ears of the man",
-                "data.mmr_seg_prompt=ears of the man",
-                "data.lens_seg_prompt=ears of the man",
-                "system.target_prompt=man's pointed, elf-like right ear",
+                // "system.prompt_processor.prompt=Make his ear like an elf's ear",
+                // "data.lens_edit_prompt=Make his ear like an elf's ear",
+                // "system.seg_prompt=ears of the man",
+                // "data.mmr_seg_prompt=ears of the man",
+                // "data.lens_seg_prompt=ears of the man",
+                // "system.target_prompt=man's pointed, elf-like right ear",
 
                 // Change the jacket material to blue denim
-                "system.prompt_processor.prompt=Change the jacket material to blue denim",
-                "data.lens_edit_prompt=Change the jacket material to blue denim",
-                "system.seg_prompt=entire fleece jacket",
-                "data.mmr_seg_prompt=entire fleece jacket",
-                "data.lens_seg_prompt=entire fleece jacket",
-                "system.target_prompt=a blue denim jacket",
+                // "system.prompt_processor.prompt=Change the jacket material to blue denim",
+                // "data.lens_edit_prompt=Change the jacket material to blue denim",
+                // "system.seg_prompt=entire fleece jacket",
+                // "data.mmr_seg_prompt=entire fleece jacket",
+                // "data.lens_seg_prompt=entire fleece jacket",
+                // "system.target_prompt=a blue denim jacket",
 
                 // statue_bronze Change the material of the bear statue to bronze",
-                "system.prompt_processor.prompt=Change the material of the bear statue to bronze",
-                "data.lens_edit_prompt=Change the material of the bear statue to bronze",
-                "system.seg_prompt=entire bear statue",
-                "data.mmr_seg_prompt=entire bear statue",
-                "data.lens_seg_prompt=entire bear statue",
-                "system.target_prompt=bronze bear statue",
+                // "system.prompt_processor.prompt=Change the material of the bear statue to bronze",
+                // "data.lens_edit_prompt=Change the material of the bear statue to bronze",
+                // "system.seg_prompt=entire bear statue",
+                // "data.mmr_seg_prompt=entire bear statue",
+                // "data.lens_seg_prompt=entire bear statue",
+                // "system.target_prompt=bronze bear statue",
                 
                 // make man smile
                 // "system.prompt_processor.prompt=Make the man open his mouth and smile",
@@ -173,16 +173,16 @@
 
 
                 // bear -> markings red 
-                "system.prompt_processor.prompt=Change the yellow face markings to red",
-                "data.lens_edit_prompt=Change the yellow face markings to red",
-                "system.seg_prompt=masking's on the bear's face",
-                "data.mmr_seg_prompt=the bear's face",
-                "data.lens_seg_prompt=the bear's face",
-                "system.target_prompt=red markings on the bear's face",
+                // "system.prompt_processor.prompt=Change the yellow face markings to red",
+                // "data.lens_edit_prompt=Change the yellow face markings to red",
+                // "system.seg_prompt=masking's on the bear's face",
+                // "data.mmr_seg_prompt=the bear's face",
+                // "data.lens_seg_prompt=the bear's face",
+                // "system.target_prompt=red markings on the bear's face",
 
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
-                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face
                 "data.lens_distance_multipliers=0.1,0.3", // bear(bear가 커서 멀리 있어야 함)
+                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face
                 // "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! 
 
                 "system.save_image_grid_draw_texts=false",
@@ -196,8 +196,8 @@
 
                 "data.lens_ip2p_guidance_scale=7.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
-                "data.lens_hemisphere_only=false",    
-                "data.lens_cone_half_angle_deg=180", // rabit sunglasses: 30
+                "data.lens_hemisphere_only=true",    
+                "data.lens_cone_half_angle_deg=60", // 60: man
                 "system.guidance.camera_batch_size=5",
                 "data.lens_v_front_method=scene_center",
                 "data.lens_n_candidates=900",

@@ -2,7 +2,7 @@
 
 ## 1. 개요
 
-`_generate_cameras_by_lens`는 3D Gaussian Splatting(3DGS) 기반 diffusion 편집에서 **편집 비용을 최소화하면서 3D 일관성을 유지하는 소수의 편집 뷰**를 자동으로 선택하는 핵심 함수이다. 이 함수는 내부적으로 `_lens_run_generate_by_lens_pipeline`을 호출하며, **ROI 분석 → SAGE-Probing(또는 Two-Phase SAGE) → Fibonacci 샘플링 → 에너지 스코어링 → FPS 다양성 선택**의 5단계 파이프라인을 수행한다.
+`_generate_cameras_by_lens`는 3D Gaussian Splatting(3DGS) 기반 diffusion 편집에서 **편집 비용을 최소화하면서 3D 일관성을 유지하는 소수의 편집 뷰**를 자동으로 선택하는 핵심 함수이다. 이 함수는 내부적으로 `_lens_run_generate_by_lens_pipeline`을 호출하며, **ROI 분석 → SAGE-Probing → Fibonacci 샘플링 → 에너지 스코어링 → FPS 다양성 선택**의 5단계 파이프라인을 수행한다.
 
 ### 1.1 동기
 
@@ -49,7 +49,7 @@ Diffusion 기반 3DGS 편집에서 편집 비용은 뷰 수에 비례하여 선�
     $$
     즉, ROI가 전체 씬 중심을 향하도록 하는 방향을 전방으로 사용하며, COLMAP 카메라의 전방 벡터에는 더 이상 의존하지 않는다.
 
-### 3.3 Step 2: SAGE-Probing / Two-Phase SAGE Selection
+### 3.3 Step 2: SAGE-Probing (Unified SAGE Selection)
 
 이 단계에서 **최적 카메라-객체 거리 $d^*$**를 결정한다.
 
@@ -65,25 +65,36 @@ $$
 - **Cross-attention 맵** $A_i$: IP2P UNet의 편집 텍스트 토큰에 대한 cross-attention (timestep·head 평균)
 - **Self-attention leakage** $\sigma_i$: ROI → 배경으로의 편집 신호 확산 강도
 
-#### 3.3.2 Two-Phase SAGE Selection (IP2P 사용 시)
+#### 3.3.2 Unified SAGE Selection (IP2P 사용 시)
 
-**Phase 1: Self-Attention Containment Gate**
+다음 **단일 스코어**로 최적 거리를 선택한다:
 
-- Self-attention leakage $\sigma_i$로 "편집 신호가 배경까지 과도하게 확산되는 뷰"를 제거
-- Adaptive threshold: $\tau_{\text{sa}} = \frac{1}{N}\sum_{i=1}^{N} \sigma_i$
-- 안전 후보: $\mathcal{I}*{\text{safe}} = i \mid \sigma_i \leq \tau*{\text{sa}}$
+$$
+\tau_{\text{sa}} = \frac{1}{N}\sum_{j=1}^{N} \sigma_j, \quad
+\mathcal{I}_{\text{safe}} = \bigl\{ i : \sigma_i \leq \tau_{\text{sa}} \bigr\}
+$$
 
-**Phase 2: Cross-Attention Quality Ranking**
+$$
+S_i = F_i \cdot (1 - \ell_i) \cdot \mathbb{1}\bigl[\sigma_i \leq \tau_{\text{sa}}\bigr], \quad
+\text{단, } \mathcal{I}_{\text{safe}} = \emptyset \text{ 이면 } \mathbb{1}[\cdot] \equiv 1
+$$
 
-- 안전 후보에 대해 품질 지표 계산:
-  - **F1** $F_i$: Thresholded precision-recall (상위 25% quantile 이진화 후 ROI와의 F1)
-  - **Background leakage** $\ell_i$: 배경 픽셀에서 attention의 90th percentile
-- 최적 선택: $d^* = d_{i^*}$, $i^* = \arg\max_{i \in \mathcal{I}_{\text{safe}}} F_i \cdot (1 - \ell_i)$
+$$
+d^* = d_{i^*}, \quad i^* = \arg\max_i S_i
+$$
+
+**변수 정의:**
+- $\sigma_i$: Self-attention leakage (ROI → 배경 편집 신호 확산 강도)
+- $F_i$: Thresholded precision-recall F1 (상위 25% quantile 이진화 후 ROI와의 F1)
+- $\ell_i$: Cross-attention background leakage (배경 픽셀 attention 90th percentile)
+- $\tau_{\text{sa}}$: Adaptive threshold (후보들의 $\sigma$ 산술 평균)
+
+**해석:** $\mathbb{1}[\sigma_i \leq \tau_{\text{sa}}]$가 "편집 신호가 배경까지 과도하게 확산되는 뷰"를 차단하는 게이트 역할을 하고, $F_i \cdot (1 - \ell_i)$가 ROI 집중도와 배경 오염을 반영한 품질 점수이다. 구현상 두 단계(필터 → 랭킹)로 나뉘지만 수식적으로는 위와 같이 하나로 표현된다.
 
 #### 3.3.3 Heuristic 모드 (IP2P 미사용 시)
 
 - `_lens_compute_editability_score`: occupancy 기반 focus, size_penalty 등 휴리스틱 점수
-- SAGE 점수: $\text{S}*{\text{total}} = \text{focus} - \lambda*{\text{leak}} \cdot \text{leakage} - \lambda_{\text{ent}} \cdot \text{entropy} - \text{sizepenalty}$
+- SAGE 점수: $\text{S}_{\text{total}} = \text{focus} - \lambda_{\text{leak}} \cdot \text{leakage} - \lambda_{\text{ent}} \cdot \text{entropy} - \text{sizepenalty}$
 
 ### 3.4 Step 3: Fibonacci Manifold Sampling
 
@@ -132,22 +143,22 @@ $$
 | `lens_w_vis`, `lens_w_can`            | 가시성/정면 가중치                | 0.6, 0.4              |
 | `lens_top_fraction`                   | 에너지 상위 비율                 | 0.20                  |
 | `lens_lambda_leak`, `lens_lambda_ent` | SAGE leakage/entropy      | 1.5, 2.0              |
-| `lens_use_ip2p_scoring`               | IP2P 기반 Two-Phase SAGE 사용 | True                  |
+| `lens_use_ip2p_scoring`               | IP2P 기반 Unified SAGE 사용  | True                  |
 
 
 ---
 
 ## 5. 특성 및 장점
 
-- **장면·객체 크기 적응성**: Phase 1 adaptive threshold가 장면별 leakage 분포에 자동 적응
-- **하이퍼파라미터 의존성 감소**: per-run 상대적 필터링, 가중치 없는 품질 점수 곱셈
-- **해석 가능성**: Phase 1(안전성) vs Phase 2(품질) 역할 분리
+- **장면·객체 크기 적응성**: $\tau_{\text{sa}}$ adaptive threshold가 장면별 leakage 분포에 자동 적응
+- **하이퍼파라미터 의존성 감소**: per-run 상대적 게이트, 가중치 없는 품질 점수 곱셈
+- **해석 가능성**: 게이트 $\mathbb{1}[\sigma \leq \tau_{\text{sa}}]$(안전성) × 품질 $F \cdot (1-\ell)$(ROI 집중도)로 역할 분리
 - **다양성 보장**: FPS로 기하학적으로 분산된 뷰 집합 구성
 
 ---
 
 ## 6. 한계 및 향후 과제
 
-- Phase 1 임계값: 산술 평균 기반 → median/percentile 기반 ablation 검토
+- $\tau_{\text{sa}}$ 임계값: 산술 평균 기반 → median/percentile 기반 ablation 검토
 - Attention proxy metric 의존: noise prediction 차이(denoising direction) 등 픽셀 도메인 metric과의 결합 가능성
 
