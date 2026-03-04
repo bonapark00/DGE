@@ -38,7 +38,7 @@ import wandb
 # Fixed configuration
 # ==========================
 
-CONFIG = "configs/dge.yaml"
+CONFIG = "configs/dge_camera-selection.yaml"
 GPU = "0,1,2,3"  # default; override with --gpu (e.g. "0" or "0,1,2" for multi-GPU per run)
 
 DATA_TYPE = "in2n-GSEditor"
@@ -49,9 +49,44 @@ RENDER_SUBDIR = "colmap_render_full"
 
 GUIDANCE_SCALE = "12.5"
 MASK_THRES = "0.6"
+MASK_MAX_RATIO = "0.6"
+MASK_MIN_RATIO = "0.01"
+MASK_OUTLIER_IQR = "1.5"
 MAX_VIEW_NUM = "25"
+MAX_EDIT_VIEW_NUM = "20"
+
+# (max_view_num, max_edit_view_num) 쌍 조합 — sweep에서 view_config로 선택
+VIEW_CONFIG_PAIRS = [
+    ("20", "20"),
+    ("15", "15"),
+    ("10", "10"),
+    ("5", "5"),
+]
 CAMERA_UPDATE_PER_STEP = "1500"
+MASK_UPDATE_AT_STEP = "600"
+MASK_UPDATE_VIEW_NUM = "5"
+PRUNE_FLOATER_AT_STEP = "-1"
 MAX_STEPS = "1500"
+
+# Loss / guidance (3d-ovs sweep와 동일 기본값)
+LAMBDA_D_DEFAULT = "0.0"
+LAMBDA_DDS = "0.0"
+DDS_T_RANGE = "0.02,0.5"
+DDS_CFG_SCALE = "7.5"
+USE_SDS = False
+USE_SDS_DGE = False
+LAMBDA_SDS = "0.0"
+LAMBDA_ISM_DEFAULT = 0.0
+
+# Multiview edit (3d-ovs sweep와 동일 기본값)
+MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY = "lens_fps"
+USE_MULTIVIEW_EDIT_DEFAULT = True
+USE_GAUSSIAN_PROVENANCE_DEFAULT = False
+# SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
+
+# Warp refine (3d-ovs sweep와 동일 기본값)
+USE_WARP_REFINE_DEFAULT = False
+WARP_REFINE_COLOR_FIT_STEPS_DEFAULT = 100
 
 INTERVAL = 1
 DEVICE = "cuda"
@@ -89,7 +124,7 @@ CAMERA_BATCH_SIZE = "5"
 LENS_DISTANCE_MULTIPLIERS = "2.0,2.5,3.0,3.5"
 
 # 출력 루트: 여기 아래에 sweep/3d-ovs/... 가 생성됨 (dge.yaml exp_root_dir 오버라이드)
-EXP_ROOT_DIR = "/data/users/jaeyeonpark/DGE-orig-outputs"
+EXP_ROOT_DIR = "/data/users/jaeyeonpark/DGE-ours-outputs"
 
 # ==========================
 # TASK 정의 (원본과 동일)
@@ -380,7 +415,7 @@ TASKS_BY_NAME = {t["name"]: t for t in TASKS}
 
 SWEEP_CONFIG = {
     "name": WANDB_SWEEP_NAME,
-    "method": "grid",  # grid = 30 task × 2 steps = 60 run 한 번씩 돌리고 끝. bayes는 같은 조합 반복 제안함.
+    "method": "grid",  # grid = task × steps × view_config 조합
     "metric": {
         "name": "clip_dir_similarity",
         "goal": "maximize",
@@ -390,9 +425,10 @@ SWEEP_CONFIG = {
         "task": {
             "values": [t["name"] for t in TASKS],
         },
-        # 학습 길이 및 카메라 업데이트 주기 (동일 값으로 사용)
-        "steps": {
-            "values": [500, 1500],
+
+        # (max_view_num, max_edit_view_num) 쌍 — "25_20" 형식
+        "view_config": {
+            "values": [f"{m}_{e}" for m, e in VIEW_CONFIG_PAIRS],
         },
     },
 }
@@ -429,39 +465,99 @@ def get_root_dir() -> Path:
     # Fallback: 현재 구조 가정 (script/ 바로 위가 repo root)
     return Path(__file__).parent.parent.absolute()
 
-
 def find_save_directory(launch_output: str, name: str) -> Optional[Path]:
-    """Find save directory from launch.py stdout."""
-    # 1) log 안의 "Test results saved to ..." 경로 그대로 사용
-    pattern = r"Test results saved to (.+)"
-    matches = re.findall(pattern, launch_output)
-    if matches:
-        p = Path(matches[-1].strip())
+    """Find save directory from launch.py stdout. 로그 파싱만 사용 (여러 프로세스 시 fallback은 잘못된 trial 반환 가능)."""
+    prefix = "Test results saved to "
+    if prefix not in launch_output:
+        # 로그에 없으면 fallback (단일 프로세스용)
+        exp_root = Path(EXP_ROOT_DIR)
+        for exp_dir in [exp_root / name, exp_root / name / str(MAX_VIEW_NUM)]:
+            if not exp_dir.exists():
+                continue
+            trial_saves = []
+            for d in exp_dir.iterdir():
+                if not d.is_dir():
+                    continue
+                if "@" in d.name:
+                    save = d / "save"
+                    if save.exists():
+                        trial_saves.append((save, save.stat().st_mtime))
+                    continue
+                for sub in d.iterdir():
+                    if sub.is_dir() and "@" in sub.name:
+                        save = sub / "save"
+                        if save.exists():
+                            trial_saves.append((save, save.stat().st_mtime))
+                        break
+            if trial_saves:
+                trial_saves.sort(key=lambda x: x[1], reverse=True)
+                return trial_saves[0][0]
+        return None
+
+    # 로그에 있으면 반드시 파싱해서 사용 (fallback 사용 안 함)
+    # tqdm 출력이 [INFO] 앞에 붙어서 한 줄로 합쳐지는 경우를 처리:
+    #   "100%|██████| 65/65 [00:09<00:00, 7.17it/s][INFO] Test results saved to /path/to/save"
+    for pattern in [
+        r"Test results saved to\s+(/[^\s\r\n]+)",  # 절대경로 (공백/줄바꿈 전까지)
+        r"Test results saved to\s+(.+?)(?:\r?\n|$)",  # \r\n, \n 처리
+        r"Test results saved to\s+(.+?/save)(?:\s|[\r\n]|$)",  # /save로 끝나는 경로
+        r"Test results saved to\s+(.+)",
+    ]:
+        matches = re.findall(pattern, launch_output)
+        if matches:
+            raw = matches[-1].strip().rstrip("\r")  # tqdm \r 등 제거
+            p = Path(raw)
+            if p.exists():
+                return p
+    # 모든 패턴 실패 시, 마지막으로 절대경로를 직접 추출 시도
+    # (tqdm \r로 인해 줄이 덮어쓰여 regex가 실패하는 경우)
+    abs_pattern = r"Test results saved to\s+(/\S+)"
+    abs_matches = re.findall(abs_pattern, launch_output)
+    if abs_matches:
+        raw = abs_matches[-1].strip().rstrip("\r")
+        p = Path(raw)
         if p.exists():
             return p
-
-    # 2) fallback: EXP_ROOT_DIR 기준으로 최신 trial 검색
-    exp_root = Path(EXP_ROOT_DIR)
-    for exp_dir in [exp_root / name, exp_root / name / str(MAX_VIEW_NUM)]:
-        if exp_dir.exists():
-            trial_dirs = sorted(
-                [d for d in exp_dir.iterdir() if d.is_dir() and "@" in d.name],
-                key=lambda x: x.stat().st_mtime,
-                reverse=True,
-            )
-            if trial_dirs:
-                save = trial_dirs[0] / "save"
-                if save.exists():
-                    return save
+        # 경로가 존재하지 않더라도, /save로 끝나면 반환 (아직 생성 중일 수 있음)
+        if raw.endswith("/save") or "/save" in raw:
+            print(f"[Sweep] Path does not exist yet, but returning anyway: {p}")
+            return p
+    print("[Sweep] Found 'Test results saved to' in output but could not extract valid path.")
+    print(f"[Sweep] Attempted to match in output (last 500 chars): {launch_output[-500:]}")
     return None
 
 
 def find_render_directory(save_dir: Path) -> Optional[Path]:
+    """Find it*-test render dir; search save_dir, parent, and recursively."""
+    # 1) save_dir/it{MAX_STEPS}-test
     render_dir = save_dir / f"it{MAX_STEPS}-test"
-    if render_dir.exists():
+    if render_dir.exists() and list(render_dir.glob("*.png")):
         return render_dir
-    test_dirs = list(save_dir.glob("it*-test"))
-    return test_dirs[0] if test_dirs else None
+    # 2) save_dir/it*-test (any step)
+    test_dirs = sorted(save_dir.glob("it*-test"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for d in test_dirs:
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 3) trial_dir/it*-test (save_dir parent)
+    parent = save_dir.parent
+    test_dirs = sorted(parent.glob("it*-test"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for d in test_dirs:
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 4) recursive under save_dir
+    for d in save_dir.rglob("it*-test"):
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 5) save_dir itself has .png (flat structure)
+    if list(save_dir.glob("*.png")):
+        return save_dir
+    # 6) search entire trial tree (save_dir.parent and above)
+    for parent in [save_dir.parent, save_dir.parent.parent]:
+        if parent.exists():
+            for d in parent.rglob("it*-test"):
+                if d.is_dir() and list(d.glob("*.png")):
+                    return d
+    return None
 
 
 def parse_metrics(output: str) -> dict:
@@ -515,10 +611,14 @@ def train_and_evaluate():
         data_name, "lens"
     )
 
-    # steps: system.camera_update_per_step에만 사용 (trainer.max_steps는 고정)
-    steps = int(getattr(cfg, "steps", int(CAMERA_UPDATE_PER_STEP)))
+    # # steps: system.camera_update_per_step에만 사용 (trainer.max_steps는 고정)
+    # steps = int(getattr(cfg, "steps", int(CAMERA_UPDATE_PER_STEP)))
 
-    name = f"sweep/{DATA_TYPE}/{data_name}/camstep{steps}/{task_name}"
+    # view_config: "25_20" → max_view_num=25, max_edit_view_num=20
+    view_config_str = getattr(cfg, "view_config", "25_20")
+    max_view_num, max_edit_view_num = view_config_str.split("_")
+
+    name = f"sweep/{DATA_TYPE}/{data_name}/view{view_config_str}/{task_name}"
 
     root_dir = get_root_dir()
     os.chdir(root_dir)
@@ -537,10 +637,33 @@ def train_and_evaluate():
         f"data.source={data_source}",
         f"system.guidance.guidance_scale={GUIDANCE_SCALE}",
         f"system.gs_source={gs_source}",
-        f"system.mask_thres={MASK_THRES}",
-        f"data.max_view_num={MAX_VIEW_NUM}",
         f"system.seg_prompt={seg_prompt}",
-        f"system.camera_update_per_step={steps}",
+        f"data.mmr_seg_prompt={seg_prompt}",
+        f"system.target_prompt={target_prompt}",
+        f"system.mask_thres={MASK_THRES}",
+        f"system.mask_max_ratio={MASK_MAX_RATIO}",
+        f"system.mask_min_ratio={MASK_MIN_RATIO}",
+        f"system.mask_outlier_iqr={MASK_OUTLIER_IQR}",
+        f"system.loss.lambda_d={LAMBDA_D_DEFAULT}",
+        f"system.loss.lambda_dds={LAMBDA_DDS}",
+        f"system.dds_t_range=[{DDS_T_RANGE}]",
+        f"system.dds_cfg_scale={DDS_CFG_SCALE}",
+        f"system.loss.lambda_ism={LAMBDA_ISM_DEFAULT}",
+        f"system.loss.use_sds={str(USE_SDS).lower()}",
+        f"system.guidance.use_sds_dge={str(USE_SDS_DGE).lower()}",
+        f"system.loss.lambda_sds={LAMBDA_SDS}",
+        f"system.warp_refine_color_fit_steps={WARP_REFINE_COLOR_FIT_STEPS_DEFAULT}",
+        f"system.use_warp_refine={str(USE_WARP_REFINE_DEFAULT).lower()}",
+        f"data.max_view_num={max_view_num}",
+        f"data.max_edit_view_num={max_edit_view_num}",
+        f"system.multiview_edit_key_selection_strategy={MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY}",
+        f"system.use_multiview_edit={str(USE_MULTIVIEW_EDIT_DEFAULT).lower()}",
+        f"system.use_gaussian_provenance={str(USE_GAUSSIAN_PROVENANCE_DEFAULT).lower()}",
+        # f"system.guidance.skip_key_views_in_target_loop={str(SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT).lower()}",
+        # f"system.camera_update_per_step={steps}",
+        f"system.mask_update_at_step={MASK_UPDATE_AT_STEP}",
+        f"system.mask_update_view_num={MASK_UPDATE_VIEW_NUM}",
+        f"system.prune_floater_at_step={PRUNE_FLOATER_AT_STEP}",
         f"exp_root_dir={EXP_ROOT_DIR}",
         f"name={name}",
         f"data.edit_view_selection_strategy={edit_view_strategy}",
@@ -572,7 +695,7 @@ def train_and_evaluate():
             f"system.guidance.camera_batch_size={CAMERA_BATCH_SIZE}",
         ])
 
-    print(f"\n[Sweep] Running: task={task_name}, edit_view_strategy={edit_view_strategy}")
+    print(f"\n[Sweep] Running: task={task_name}, edit_view_strategy={edit_view_strategy}, view_config={view_config_str}")
     print(f"[Sweep] name={name}\n")
 
     # ---- Run training ----

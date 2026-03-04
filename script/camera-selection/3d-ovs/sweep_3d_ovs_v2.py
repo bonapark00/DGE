@@ -79,7 +79,7 @@ FEATURE_INJECTION_MODE = "similarity" # `"similarity"`(내 논문) , `"3d_anchor
 MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY = "lens_fps"
 USE_MULTIVIEW_EDIT_DEFAULT = True
 USE_GAUSSIAN_PROVENANCE_DEFAULT = False
-SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
+# SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
 
 LENS_USE_IP2P_SCORING = "true"
 LENS_IP2P_STEPS = "5"
@@ -543,6 +543,7 @@ def get_root_dir() -> Path:
 
     # Fallback: 예전 구조 가정
     return Path(__file__).parent.parent.parent.parent.absolute()
+
 
 
 def find_save_directory(launch_output: str, name: str) -> Optional[Path]:
