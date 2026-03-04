@@ -1,0 +1,156 @@
+% ============================================================
+% Geometry-Aware Multi-view Consistent Editing — Method Section
+% Second method section for Overleaf paper
+% ============================================================
+
+\subsection{Geometry-Aware Multi-view Consistent Editing}
+\label{sec:geom_consistent_editing}
+
+Given the view set selected by AGEVS (\S\ref{sec:agevs}), we now describe how to edit all views simultaneously while maintaining multi-view geometric consistency.
+When applying a 2D diffusion editor (IP2P-style guidance) to multi-view renders of a 3DGS scene, independently denoising each view produces three failure modes: (i)~\emph{geometric inconsistency}, where the same 3D point is edited into different 2D locations across views; (ii)~\emph{style drift}, where color or texture varies per viewpoint; and (iii)~\emph{edit dropout}, where some views ignore the instruction entirely.
+Among these, geometric inconsistency is the most destructive: it provides contradictory supervision for subsequent 3DGS optimization and may trigger mode collapse.
+
+The root cause is that cross-attention (attn2) in each view independently decides the mapping from text tokens to spatial locations.
+In a standard U-Net forward pass the cross-attention output is $\mathbf{O}=\mathrm{softmax}(QK^\top/\!\sqrt{d})\,V$, where $Q$ comes from the noisy latent and $K,V$ from the text embedding.
+Because $Q$ is view-dependent, two views of the same 3D point can attend to different text tokens, yielding spatially inconsistent ``where-to-edit'' decisions.
+
+We address all three failure modes with a two-pronged strategy executed at \emph{every diffusion timestep}: (1) cross-attention synchronization through 3D Gaussians, and (2) cross-view self-attention feature injection.
+Unlike prior training-free approaches that regularize only self-attention~\cite{chen_gaussianeditor_2024} or operate in 2D feature space~\cite{wang_vcedit_2025}, our method explicitly routes attention through the 3D scene representation, making spatial grounding consistent by construction.
+
+% ---------------------------------------------------------------
+\paragraph{Per-step 3D cross-attention synchronization.}
+At each diffusion timestep $t$, we first run a set of \emph{reference views} (chosen by the canonical-progressive strategy described below) through the U-Net.
+During this \emph{pivotal forward pass}, we install a \texttt{CrossAttentionStoreProcessor} on every attn2 module that materializes the full attention probability matrix $\mathrm{softmax}(QK^\top/\!\sqrt{d})$ and stores only the columns corresponding to edit-relevant text tokens (excluding BOS, EOS, and padding).
+Let $A_v^{(t)} \in \mathbb{R}^{HW \times L}$ denote the resulting cross-attention probability for reference view $v$ at timestep $t$, where $L$ is the number of valid text tokens and $HW$ the spatial resolution.
+We collect maps at the resolutions where cross-attention is most influential for spatial layout (by default $32{\times}32$ and $64{\times}64$ in the U-Net).
+
+We then lift these 2D attentions into a shared 3D attention field on Gaussians via a custom CUDA inverse-splatting kernel (\texttt{apply\_weights}).
+For each Gaussian $g$ and token $l$, we aggregate attention values from reference views where $g$ is visible:
+\begin{equation}
+M_{3D}^{(t)}(g,l)
+=
+\frac{\sum_{v \in \mathcal{V}_{\mathrm{ref}}} w_v(g)\; A_v^{(t)}\!\bigl(\pi_v(g), l\bigr)}
+     {\sum_{v \in \mathcal{V}_{\mathrm{ref}}} w_v(g) + \epsilon},
+\label{eq:3d_lift}
+\end{equation}
+where $\pi_v(g)$ is the 2D projection of $g$ in view $v$, and $w_v(g)$ is the alpha-compositing visibility weight.
+Concretely, the kernel traverses Gaussians in depth-sorted order per pixel, accumulating $\alpha$-weighted attention values with early termination when cumulative opacity exceeds $0.9999$, matching the standard Gaussian splatting forward pass.
+
+To make the 3D$\to$2D re-rendering efficient, we aggregate over the token dimension before splatting (i.e., we render a single channel $\bar{M}_{3D}^{(t)}(g) = \frac{1}{L}\sum_l M_{3D}^{(t)}(g,l)$), then expand the result back to $L$ tokens per pixel.
+Using a pre-built \texttt{FastAttnRenderer} that caches the rasterizer state (screenspace points, covariance, opacity), we render consistent cross-attention maps for every target view $i$:
+\begin{equation}
+\hat{A}_i^{(t)}(p, l) = \mathrm{GS\text{-}Render}\!\bigl(\bar{M}_{3D}^{(t)},\;\mathrm{cam}_i,\;p\bigr), \quad \forall\, l.
+\label{eq:3d_render}
+\end{equation}
+
+During the subsequent \emph{batch forward pass} for view $i$, we replace the standard attn2 processor with a \texttt{ConsistentCrossAttnProcessor} that bypasses the $\mathrm{softmax}(QK^\top)$ computation entirely.
+The processor expands $\hat{A}_i^{(t)}$ for the three classifier-free guidance (CFG) conditions (text, image, unconditional) and across attention heads, then computes:
+\begin{equation}
+\mathbf{O}_{\mathrm{cross}}^{(t)} = \hat{A}_i^{(t)} \; \mathbf{V}_{\mathrm{valid}},
+\label{eq:cross_replace}
+\end{equation}
+where $\mathbf{V}_{\mathrm{valid}}$ are the value vectors for valid text tokens.
+Because all views query the same 3D field $M_{3D}^{(t)}$, the token$\to$spatial decision becomes consistent across viewpoints.
+This directly prevents geometric drift, such as facial features appearing at different 3D locations across views.
+
+A key advantage over static map approaches (including the original DGE Phase~1, which ran a separate 20-step denoise loop to pre-collect maps~\cite{chen_gaussianeditor_2024}) is that our maps are \emph{fresh} at every timestep: they reflect the current latent state rather than a stale pre-computed snapshot.
+This eliminates Phase~1 entirely, saving $20 \times$ U-Net forward passes while producing temporally coherent guidance.
+
+% ---------------------------------------------------------------
+\paragraph{Cross-view self-attention with feature injection.}
+Cross-attention synchronization aligns \emph{where} the instruction applies; to also align \emph{how} the edit manifests (texture, structure), we share self-attention features across views.
+During the pivotal forward pass, self-attention (attn1) outputs are cached for all reference views.
+We provide three complementary injection modes, selectable per experiment:
+
+\textbf{(A) Epipolar similarity injection} (default).
+For each target view, we find the nearest reference view by camera center distance.
+We compute token-level cosine similarity between the target's layer-normalized hidden state and the reference's cached state:
+\begin{equation}
+\mathrm{sim}(p,q)=
+\frac{\langle \tilde{\mathbf{h}}_{i}(p),\; \tilde{\mathbf{h}}_{\mathrm{ref}}(q)\rangle}
+{\|\tilde{\mathbf{h}}_{i}(p)\|\;\|\tilde{\mathbf{h}}_{\mathrm{ref}}(q)\|},
+\qquad
+q^{\star}(p)=\arg\max_q \mathrm{sim}(p,q),
+\label{eq:sim_nn}
+\end{equation}
+where $p,q$ index spatial tokens.
+When two reference views are available, we blend their features with inverse-distance sigmoid weighting: $w_1 = \sigma\!\bigl(d_2/(d_1{+}d_2)\bigr)$.
+Crucially, we mask geometrically invalid correspondences via epipolar constraints: from the fundamental matrix $F$ between the target and reference cameras, we zero out similarity scores for pixel pairs whose epipolar distance exceeds one pixel, ensuring that feature matching respects 3D geometry.
+
+\textbf{(B) Gaussian-provenance sparse attention.}
+We pre-build a provenance cache that maps each target pixel to its top-$K$ contributing Gaussians (by splatting weight), then projects those Gaussians into the reference view to obtain candidate correspondences.
+A lightweight dot-product attention over these $K$ candidates replaces the dense similarity search, reducing complexity from $O(HW \times HW)$ to $O(HW \times K)$.
+
+\textbf{(C) 3D-anchor canonical token injection.}
+We construct a canonical feature per Gaussian by inverse-projecting reference features through the 3D representation:
+\begin{equation}
+\mathbf{t}_j = \frac{\sum_{k} w_k(j) \; \boldsymbol{\varphi}_k\!\bigl(\pi_k(j)\bigr)}
+                    {\sum_{k} w_k(j)},
+\label{eq:canonical_token}
+\end{equation}
+where $\boldsymbol{\varphi}_k(u)$ denotes the cached self-attention feature at pixel $u$ in reference view $k$, and $w_k(j)$ is the visibility weight of Gaussian $j$ in view $k$.
+For each target pixel $p$, the injected feature is a weighted sum over its top-$K$ contributing Gaussians:
+$F(i,p) = \sum_{a} w_a \, \mathbf{t}_{j_a}$.
+The injection is applied as a scaled residual:
+$\mathbf{h} \leftarrow \mathbf{h} + \lambda\,(F - \mathbf{h})$,
+blending canonical 3D features with the target's own self-attention output.
+
+All three modes share the same interface: they modify the self-attention residual update $\mathbf{h} \leftarrow \mathbf{h} + \mathbf{o}_{\mathrm{self}}$ by replacing or blending $\mathbf{o}_{\mathrm{self}}$ with cross-view features.
+
+% ---------------------------------------------------------------
+\paragraph{Canonical-progressive reference selection.}
+The choice of reference (pivotal) views affects both the quality of the 3D attention field and the diversity of feature propagation.
+We employ a two-phase strategy:
+
+\textit{Early timesteps} ($t \geq \tau$): We select the view $v^*$ in each batch that is most representative of the scene, measured by canonicality:
+\begin{equation}
+v^* = \arg\max_{v \in \mathcal{B}} \;\cos\!\bigl(\mathbf{d}_v,\; \bar{\mathbf{d}}\bigr),
+\label{eq:canonical_score}
+\end{equation}
+where $\mathbf{d}_v = \mathrm{normalize}(\mathbf{c}_{\mathrm{obj}} - \mathbf{c}_v)$ is the direction from camera $v$ to the object center (mean of Gaussian positions $\bar{\mathbf{x}}$), and $\bar{\mathbf{d}}$ is the mean viewing direction across all cameras.
+Selecting the most frontal view early ensures that the initial structure---which strongly shapes the final edit---is anchored to a canonical perspective.
+
+\textit{Late timesteps} ($t < \tau$): We switch to progressive coverage, selecting the view that has been chosen as reference least often:
+\begin{equation}
+v^* = \arg\min_{v \in \mathcal{B}} \;\mathrm{count}(v), \qquad \text{ties broken by canonicality}.
+\label{eq:progressive}
+\end{equation}
+This ensures that over the course of denoising, every viewpoint contributes to the 3D attention field, preventing information blind spots.
+
+% ---------------------------------------------------------------
+\paragraph{Adaptive batching.}
+Processing all $N$ views simultaneously is memory-prohibitive.
+We partition views into batches of size $B$ with a timestep-dependent strategy:
+
+\textit{Early timesteps}: Sequential neighboring batches (views $\{0,\ldots,B{-}1\}$, $\{B,\ldots,2B{-}1\}$, \ldots), grouping spatially adjacent cameras to prioritize local structural consistency during layout formation.
+
+\textit{Late timesteps}: Sliding-window batches with stride $s = \lfloor B/2 \rfloor$, where the window offset shifts by $s$ positions per timestep:
+$\mathrm{offset}(t) = (t \cdot s) \bmod N$.
+This ensures that different view pairs co-occur in the same batch across timesteps, enabling global cross-view information propagation during the detail refinement phase.
+
+% ---------------------------------------------------------------
+\paragraph{Comparison with prior methods.}
+Table~\ref{tab:method_comparison} summarizes the key differences.
+DGE~\cite{chen_gaussianeditor_2024} addresses multi-view consistency only through extended self-attention with epipolar masking, leaving cross-attention---the mechanism that decides spatial placement of edit content---entirely unregulated.
+VCEdit~\cite{wang_vcedit_2025} introduces a 2D cross-attention consistency module, but it operates in feature space without access to the underlying 3D geometry, requiring iterative optimization (10--25 minutes on an A100).
+Our method (i) directly synchronizes cross-attention through 3D Gaussians at every timestep, (ii) provides multiple self-attention injection modes that all leverage 3D correspondences, and (iii) eliminates the need for a separate key-view denoise loop, achieving both stronger geometric consistency and faster editing.
+
+\begin{table}[t]
+\centering
+\caption{Comparison of training-free multi-view consistent editing methods for 3DGS.}
+\label{tab:method_comparison}
+\small
+\begin{tabular}{l c c c c}
+\toprule
+& DGE & VCEdit & TokenFlow & \textbf{Ours} \\
+\midrule
+Self-attn consistency & Ext.~SA + Epi. & --- & Token prop. & Ext.~SA + Inj. \\
+Cross-attn consistency & \xmark & 2D module & \xmark & \textbf{3D per-step} \\
+3D geometry usage & Epipolar & \xmark & \xmark & \textbf{GS inv./re-render} \\
+Dynamic update & \xmark\,(1-shot) & Iterative & \xmark & \textbf{Per-step} \\
+Reference selection & Random & --- & --- & \textbf{Canon.-Prog.} \\
+Extra denoise loop & 20 steps & --- & --- & \textbf{None} \\
+Training-free & \cmark & \cmark & \cmark & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}

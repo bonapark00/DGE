@@ -1,203 +1,244 @@
-## 1. 문제 정의
+## Attention-Guided Editing View Selection (AGEVS) — 기술 보고서
 
-본 연구의 목표는 텍스트 기반 이미지 편집 모델(예: InstructPix2Pix)을 활용하여 3D 장면의 특정 객체(Region of Interest, ROI)를 편집할 때, **여러 카메라 거리 후보 중에서 가장 국소적으로 편집이 잘 되는 뷰를 자동으로 선택**하는 것이다.
+### 1. 개요
 
-구체적으로, Gaussian Splatting으로 표현된 3D 장면과 LangSAM 기반의 3D ROI 마스크가 주어졌다고 하자. 카메라 전방 방향 벡터를 따라 여러 거리 d_i 에서 2D 뷰를 렌더링하고, 각 뷰에 대해 다음 정보를 얻는다.
+Diffusion 기반 3DGS 편집에서 편집 비용은 뷰의 수에 비례하여 증가한다. 편집 뷰 수를 최소화하면서 3D 일관성을 유지하기 위해, 본 연구에서는 (i) ROI(Region of Interest)에 대한 안정적이고 국소적인 편집을 보장하고, (ii) 기하학적으로 다양한 커버리지를 제공하는 컴팩트한 카메라 집합을 자동으로 선택하는 **Attention-Guided Editing View Selection (AGEVS)** 파이프라인을 제안한다.
 
-- 2D ROI 마스크 M_i (0/1 바이너리 마스크, 크기 H×W)
-- 텍스트 조건 하에서 InstructPix2Pix UNet의 **cross-attention 맵** A_i
-- UNet self-attention으로부터 추출한 **self-attention leakage** 척도 sa_i (ROI → 배경 전파량)
+AGEVS는 다음 다섯 단계로 구성된다:
 
-이들 신호를 이용해, **원하는 객체만 잘 바뀌고 주변 배경은 최대한 유지되는 카메라 거리 d\*** 를 선택하는 것이 문제의 핵심이다.
-
----
-
-## 2. 기존 SAGE 기반 접근과 한계
-
-### 2.1 기존 점수식 개요
-
-이전 버전의 SAGE(SHarpness-Aware Guided Editability) 스코어는 대략 다음과 같은 형태를 가진다.
-
-> S_i = C_i * F1_i − λ_ca * L_CA_i − λ_sa * sa_i − SizePenalty_i
-
-- **C_i**: ROI와 배경 간 cross-attention의 대비(contrast ratio)  
-- **F1_i**: 상위 attention 영역과 ROI 마스크 사이의 정밀도–재현율 F1 점수  
-- **L_CA_i**: 배경 픽셀에서의 상위 90% cross-attention(강한 background leakage)  
-- **sa_i**: self-attention을 통한 ROI→배경 전파량(self-attention leakage)  
-- **SizePenalty_i**: ROI 점유율이 너무 작거나 클 때 부과되는 패널티
-
-직관적으로는,  
-**“ROI 쪽으로 집중된 attention은 보상하고, 배경으로 새어 나가는 attention과 부적절한 크기의 ROI는 벌점 준다”** 는 설계이다.
-
-### 2.2 Self-attention leakage와 ROI 비율의 강한 상관
-
-실험적으로, 각 거리에서의 ROI 점유율 occ_i = mean(M_i) 와  
-self-attention leakage sa_i 사이의 상관계수를 계산해 보면, 거의 항상
-
-> corr(sa_i, occ_i) ≈ 0.96
-
-수준으로 매우 높음을 확인할 수 있었다.
-
-- ROI가 화면에서 차지하는 비율이 커질수록(occ_i 증가)  
-  self-attention으로 배경 픽셀이 ROI 픽셀을 참조하는 정도 sa_i 도 기계적으로 증가한다.
-- 즉, sa_i 는 “편집이 배경으로 번지는 정도”뿐 아니라, **ROI 크기 자체**에 강하게 묶여 있다.
-
-이 상태에서 occ_i 와 sa_i 를 동시에 점수식에 포함시키면,
-
-- ROI가 적절히 크게 잡힌 뷰도, “크다 = leakage 크다”는 이유로 이중 벌점을 받게 되고,
-- 실제로는 **작은 객체인데 근거리에서 장면 전체가 함께 바뀌는 나쁜 leakage**와  
-  **얼굴 전체를 잘 담아서 편집하기 좋은 큰 ROI**를 구분하기 어려워진다.
-
-### 2.3 단일 스칼라 점수의 구조적 한계
-
-여러 장면(작은 피규어, 사람 얼굴, 중간 크기 물체 등)에 대해 사용자가 선호하는 거리를 수집하고,
-
-> S_i = C_i^a * F1_i^b * (1 − sa_i)^k
-
-형태(혹은 이와 유사한 곱셈 형태)에 다양한 가중치를 부여해 보았으나, 아래와 같은 구조적 문제가 드러났다.
-
-- **작은 ROI**(예: 방 한켠의 작은 피규어):
-  - 근거리에서 edit가 장면 전체로 쉽게 전파되므로, leakage에 매우 민감해야 한다.  
-  - → k 가 크게 필요
-- **큰 ROI**(예: 얼굴, 스피커 등):
-  - 일정 수준 근거리에서 edit가 가장 잘 드러나므로, leakage를 지나치게 강하게 벌점 주면  
-    항상 지나치게 먼 뷰가 선택된다.  
-  - → k 가 작게 필요
-
-두 요구사항을 동시에 만족하는 (a, b, k) 조합이 존재하지 않음을,  
-부등식 수준의 분석을 통해 확인할 수 있었다.  
-즉, **하나의 스칼라 점수와 고정 하이퍼파라미터로는 상충하는 선호를 모두 만족시키기 어렵다**는 것이 한계이다.
+1. **ROI Intrinsic Analysis**: ROI 포인트 클라우드의 가중 PCA 분석으로 중심, 주축, 특성 반경 추출
+2. **SAGE Scale Probing**: Diffusion attention 기반 2-Phase 선택으로 최적 카메라 거리 결정
+3. **Manifold Camera Sampling**: 최적 거리 구면/궤도상에 후보 카메라 균등 배치
+4. **Energy-based Scoring**: 가시성과 기하 정렬에 기반한 후보 에너지 평가
+5. **Diversity-aware Selection**: 에너지 가중 Farthest-Point Sampling으로 최종 다양 뷰 선택
 
 ---
 
-## 3. 제안 방법: 2-Phase SAGE Selection
+### 2. Step 1: ROI Intrinsic Analysis
 
-이러한 한계를 해결하기 위해, 본 연구에서는 SAGE 점수를
+3D Gaussian Splatting으로 표현된 장면에서 ROI에 해당하는 가우시안 부분집합을 추출하고, opacity-가중 PCA를 수행하여 ROI의 기하학적 특성을 분석한다.
 
-- **Phase 1: Self-attention 기반 “안전성 필터”**,  
-- **Phase 2: Cross-attention 기반 “편집 품질 순위”**
+**가중 중심 및 공분산.** ROI 가우시안의 좌표 $\{\mathbf{x}_j\}_{j=1}^{J}$와 opacity $\{w_j\}$에 대해:
 
-의 두 단계로 분리하는 **2-Phase SAGE Selection**을 제안한다.
+$$
+\mathbf{c} = \frac{\sum_j w_j \mathbf{x}_j}{\sum_j w_j}, \qquad
+\mathbf{\Sigma} = \frac{\sum_j w_j (\mathbf{x}_j - \mathbf{c})(\mathbf{x}_j - \mathbf{c})^\top}{\sum_j w_j}
+$$
 
-핵심 아이디어는 다음과 같다.
+$\mathbf{\Sigma}$의 고유값 분해 $\mathbf{\Sigma} = \mathbf{V}\,\mathrm{diag}(\lambda_1, \lambda_2, \lambda_3)\,\mathbf{V}^\top$ ($\lambda_1 \geq \lambda_2 \geq \lambda_3$)로부터 주축 $\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3$을 얻는다. ROI의 특성 반경은 $r_{\text{obj}} = \sqrt{\lambda_1}$로 정의된다.
 
-- self-attention leakage sa_i 는 “편집 신호가 ROI 밖으로 퍼지는 위험도”를 나타내지만,  
-  절대값보다는 **동일 장면·동일 프롬프트에서의 상대적인 크기**가 더 중요하다.
-- cross-attention 기반 품질 지표(F1_i, L_CA_i) 는  
-  **SA leakage가 과도하지 않은 후보에 대해서만** 신뢰할 수 있는 품질 척도이다.
-
-### 3.1 Phase 1: Self-Attention 기반 Containment Filter
-
-동일 장면·동일 편집 프롬프트에 대해 여러 거리 d_i 에서 self-attention leakage sa_i 를 계산한다.
-
-1. 후보 집합 { i = 1, …, N } 에 대해 평균 leakage를 구한다.
-   - sa_bar = (1/N) * Σ_i sa_i
-2. **안전한(safe) 후보 집합**을
-   - I_safe = { i | sa_i ≤ sa_bar }
-   로 정의한다.
-   - self-attention leakage가 평균보다 큰 뷰는  
-     “편집 신호가 ROI를 넘어 배경에 과도하게 전파되는 뷰”로 보고 1차적으로 제거한다.
-3. 극단적인 경우 I_safe 가 공집합이면, 필터를 적용하지 않고 전체 후보를 사용한다.
-
-이는 sa_leak에 대해 **절대 임계값**을 튜닝하는 대신,  
-각 probing run 내에서 상대적으로 “위험한” 뷰만 제거하는 **adaptive filtering**으로 볼 수 있다.
-
-### 3.2 Phase 2: Cross-Attention 기반 품질 순위
-
-Phase 1을 통과한 안전한 후보들에 대해서는, cross-attention 품질에 기반한 점수로 순위를 매긴다.
-
-각 후보 i 에 대해:
-
-- ROI 마스크 M_i 와 정규화된 attention 맵 A_i 가 주어지고,
-- 상위 attention 영역(예: 상위 25% quantile)과 ROI 사이의 precision–recall F1 점수 F1_i,
-- ROI 밖 배경 픽셀에서 상위 90% attention 크기 L_CA_i (background cross-attention leakage)를 계산한다.
-
-이때 **최종 품질 점수**는
-
-> Q_i = F1_i * (1 − L_CA_i)
-
-로 정의한다.
-
-- F1_i 가 클수록, “강한 attention 영역이 ROI 전체를 잘 덮고 있음”.
-- (1 − L_CA_i) 가 클수록, “강한 attention이 배경에 덜 분포”함.
-
-최종 선택되는 후보는
-
-> i\* = argmax_{i ∈ I_safe} Q_i  
-> d\* = d_{i\*}
-
-와 같이 정의된다.
-
-결과적으로,
-
-- **Phase 1**은 self-attention 관점에서 “편집이 과도하게 퍼지는 뷰”를 제거하는 **안전성 필터**,
-- **Phase 2**는 cross-attention 관점에서 “ROI에 잘 붙고 배경은 최소로 건드리는 뷰”를 선택하는 **품질 순위 단계**로 해석할 수 있다.
+**전방 방향 벡터 $\mathbf{v}_{\text{front}}$.** COLMAP 카메라 중심들의 평균으로 정의한 장면 중심 $\mathbf{c}_{\text{scene}}$과 ROI 중심 $\mathbf{c}$ 사이의 벡터를 이용하여
+$$
+\mathbf{v}_{\text{front}} = \mathrm{normalize}(\mathbf{c}_{\text{scene}} - \mathbf{c})
+$$
+로 정의한다. 즉, ROI가 COLMAP 뷰들의 중심(평균)인 장면 중심을 향하도록 하는 방향을 전방으로 사용하며, COLMAP 카메라의 전방 벡터에는 더 이상 의존하지 않는다.
 
 ---
 
-## 4. 구현 관점 요약
+### 3. Step 2: Two-Phase SAGE Scale Probing
 
-코드 상에서는 다음과 같은 흐름으로 구현된다.
+$N$개의 후보 거리 $d_i = m_i \cdot r_{\text{obj}}$ ($m_i \in \{1.5, 2.0, 2.5, 3.0, 3.5\}$)에서 뷰를 렌더링하고, InstructPix2Pix (IP2P) 파이프라인을 실행하여 diffusion attention 신호를 수집한 뒤, 2-Phase 선택으로 최적 거리를 결정한다.
 
-- **IP2P 실행 및 주의 맵 수집**
-  - 각 거리 후보에 대해 InstructPix2Pix 파이프라인을 실행하며,  
-    모든 timestep/헤드의 cross-attention을 평균하여 특정 해상도(예: 16×16)의 attention 맵 A_i 를 얻는다.
-  - self-attention 프로세서를 후킹하여, ROI 픽셀에서 배경 픽셀로의 attention을 적분함으로써 sa_i 를 계산한다.
+#### 3.1 Phase 1: Self-Attention Containment Gate
 
-- **SAGE 세부 지표 계산 (`_compute_sage_score`)**
-  - ROI/배경 대비를 통해 contrast C_i,
-  - thresholded attention과 ROI overlap으로부터 F1_i,
-  - 배경 상위 90% attention으로부터 L_CA_i 를 계산하고,  
-    이들을 `details` 딕셔너리에 저장한다.
+IP2P denoising 과정에서 UNet self-attention 프로세서를 후킹하여 self-attention leakage $\sigma_i$를 측정한다. 가용한 가장 저해상도의 self-attention 맵(우선순위: $64 \to 256 \to 1024$ tokens)을 선택하여 모든 timestep·layer·head에 걸쳐 온라인 평균한 self-attention 행렬 $\bar{S} \in \mathbb{R}^{L \times L}$를 구성한다.
 
-- **거리 선택 (`scale_probing`)**
-  - 모든 후보의 `details["sa_leakage"]`에 대해 평균 sa_bar 를 계산하고,  
-    `sa_leakage ≤ sa_bar` 인 후보들만 남긴다.
-  - 남아 있는 후보들에 대해 `precision_f1 * (1 - leakage)`  
-    (여기서 `leakage`는 L_CA_i) 를 최종 품질 점수로 사용하고,  
-    이 값이 최대인 후보의 거리를 최종 선택한다.
+ROI 마스크를 동일 해상도로 다운샘플링하여 이진화한 벡터 $\mathbf{m} \in \{0,1\}^L$ (임계값 0.3)과 배경 벡터 $\bar{\mathbf{m}} = \mathbf{1} - \mathbf{m}$을 정의하고:
 
-- **시각화 (`_save_attention_grid`)**
-  - 각 거리×해상도에 대해 attention heatmap과 ROI 마스크를 함께 표시하고,  
-    contrast·F1·SA leakage 등의 지표를 텍스트로 overlay하여,  
-    선택된 뷰에서 attention이 ROI에 집중되고 배경으로의 leak이 줄어드는 양상을 직관적으로 확인할 수 있도록 한다.
+$$
+\sigma_i = \frac{\bar{\mathbf{m}}^\top (\bar{S}\,\mathbf{m})}{\|\bar{\mathbf{m}}\|_1}
+$$
 
----
+이는 배경 픽셀들이 ROI 픽셀에 부여하는 평균 attention weight이다.
 
-## 5. 특성 및 장점
+**Adaptive Filtering.** Per-run 평균 임계값 $\tau_{\text{sa}} = \frac{1}{N}\sum_{i=1}^{N}\sigma_i$를 설정하고, 안전 후보 집합을 $\mathcal{I}_{\text{safe}} = \{i \mid \sigma_i \leq \tau_{\text{sa}}\}$로 정의한다. $\mathcal{I}_{\text{safe}} = \emptyset$이면 전체 후보를 사용한다.
 
-- **장면/객체 크기에 대한 적응성**
-  - ROI가 매우 작은 경우(작은 피규어),  
-    근거리에서 self-attention을 통한 전파가 커져 장면 전체가 바뀌는 뷰는 1차 필터에서 제거되고,  
-    그 중에서 가장 편집이 잘 걸리는 중간 거리가 선택된다.
-  - 얼굴, 가전제품처럼 ROI가 큰 경우에는,  
-    적당한 근거리에서 attention 품질이 높게 나오며,  
-    Phase 1 필터는 과도하게 leak가 큰 뷰만 제거하고 나머지 중간·원거리 후보 중에서  
-    품질 점수로 최적 거리를 찾는다.
+#### 3.2 Phase 2: Cross-Attention Quality Ranking
 
-- **하이퍼파라미터 의존성 감소**
-  - 기존처럼 여러 λ(예: λ_ca, λ_sa)를 수동 튜닝하기보다,  
-    self-attention leakage에 대해서는 **per-run 평균**을 기준으로 필터링하기 때문에,  
-    다양한 장면·프롬프트 조합에 대해 보다 견고하게 동작한다.
+안전 후보에 대해, cross-attention 맵 $A_i$를 ROI 마스크 해상도로 보간·정규화한 뒤 두 가지 품질 지표를 계산한다.
 
-- **해석 가능성**
-  - Phase 1: “이 뷰는 self-attention이 커서 편집 신호가 배경까지 과도하게 번진다”  
-  - Phase 2: “남은 안전한 뷰들 중에서, ROI에 대한 attention 커버리지는 높고 배경에 대한 leak는 낮은 뷰를 선택한다”
-  라는 식으로, 각 단계의 역할이 명확하다.
+**Thresholded Precision-Recall F1.** $A_i$의 상위 25% quantile로 이진화한 고활성 영역 $\hat{A}_i$와 ROI 마스크 $M_i$ 사이의 F1:
+
+$$
+P_i = \frac{\sum \hat{A}_i \odot M_i}{\sum \hat{A}_i + \epsilon}, \quad
+R_i = \frac{\sum \hat{A}_i \odot M_i}{\sum M_i + \epsilon}, \quad
+F_i = \frac{2P_i R_i}{P_i + R_i + \epsilon}
+$$
+
+**Background Cross-Attention Leakage.** 배경 픽셀에서의 attention 90th percentile: $\ell_i = Q_{0.9}(A_i[\bar{M}_i > 0.5])$
+
+**최종 선택:**
+
+$$
+d^* = d_{i^*}, \quad i^* = \underset{i \in \mathcal{I}_{\text{safe}}}{\arg\max}\; F_i \cdot (1 - \ell_i)
+$$
 
 ---
 
-## 6. 한계 및 향후 과제
+### 4. Step 3: Manifold Camera Sampling
 
-- 현재 SA 필터는 단순 평균 sa_bar 를 기준으로 한다.  
-  장면별로 분포 특성(분산, 왜도 등)이 다르므로,  
-  median 또는 특정 퍼센타일 기반 임계값을 사용하는 변형에 대한 ablation이 향후 과제로 남아 있다.
+최적 거리 $d^*$ 구면 위에 $K$개 후보 카메라를 균등 배치한다. 두 가지 모드를 지원한다.
 
-- 제안 방법은 여전히 attention 기반 **proxy metric**에 의존한다.  
-  후속 연구로, diffusion 모델의 **noise prediction 차이(denoising direction map)** 를 활용하여  
-  실제 픽셀 도메인에서의 편집 변화량을 직접적으로 측정하는 metric과 결합하는 방향을 고려할 수 있다.
+**Circular Orbit 모드.** COLMAP 카메라 분포에 PCA를 적용하여 궤도 평면의 주축 $\mathbf{u}_1, \mathbf{u}_2$와 극축(polar axis, 최소 분산 방향)을 추출한다. $K$개의 등간격 각도 $\theta_k = 2\pi k / K$에서:
 
-이 보고서는 코드 구현(`scale_probing`, `_compute_sage_score`, self-attention leakage 계산부 등)을 참고하여 작성되었으며,  
-이를 기반으로 방법론 섹션·수식·시각화(주의 맵 grid + 선택된 뷰 표시)를 갖춘 논문 형식으로 확장할 수 있다.
+$$
+\mathbf{d}_k = \cos\theta_k \cdot \mathbf{u}_1 + \sin\theta_k \cdot \mathbf{u}_2 + \alpha\sin\theta_k \cdot \mathbf{p}_{\text{polar}}
+$$
+
+여기서 $\alpha = 0.06$은 수직 미소 변조(vertical perturbation) 진폭이다. 카메라 위치는 $\mathbf{e}_k = \mathbf{c} + \mathbf{d}_k \cdot d^*$.
+
+**Fibonacci Sphere + Cone 모드.** Golden angle spiral로 단위구에 $K$개 점을 균등 배치한 뒤, 전방 방향 $\mathbf{v}_{\text{front}}$로부터 반각 $\theta_{\text{cone}}$ 이내의 방향만 남긴다. 반구 필터가 활성화된 경우 world-up 방향 기준 하반구 점도 제거한다.
+
+---
+
+### 5. Step 4: Energy-based Scoring
+
+각 후보 카메라에 대해 가시성과 기하 정렬을 결합한 에너지를 계산한다.
+
+**ROI 가시성** $S_{\text{vis}}$: 3D ROI 마스크를 해당 뷰로 투영한 2D 마스크의 점유율.
+
+**기하 후보도** $S_{\text{can}}$: 뷰 방향 $\hat{\mathbf{v}}$와 ROI 주축 간의 정렬:
+
+$$
+S_{\text{can}} = \max\bigl(|\hat{\mathbf{v}} \cdot \mathbf{v}_{\text{front}}|,\; 0.8 \cdot |\hat{\mathbf{v}} \cdot \mathbf{v}_2|\bigr)
+$$
+
+전방 뷰를 선호하되 측면 뷰에도 0.8 가중치를 부여한다. 최종 에너지:
+
+$$
+E_k = w_{\text{vis}} \cdot S_{\text{vis},k} + w_{\text{can}} \cdot S_{\text{can},k}
+$$
+
+기본값: $w_{\text{vis}} = 0.6$, $w_{\text{can}} = 0.4$.
+
+---
+
+### 6. Step 5: Diversity-aware Selection
+
+에너지 상위 풀(pool, 전체의 $\rho$ 비율 이상, 기본 $\rho = 0.20$)에서 **에너지 가중 Farthest-Point Sampling (FPS)**으로 $n_{\text{select}}$개의 다양한 뷰를 선택한다.
+
+1. 에너지가 가장 높은 카메라를 시드(seed)로 선택한다.
+2. 매 반복마다, 이미 선택된 뷰들과의 **최소 각거리** $\delta_{\text{ang}}$, **최소 방위각 차이** $\delta_{\phi}$, **최소 앙각 차이** $\delta_y$를 계산한다.
+
+$$
+\text{diversity}(k) = \delta_{\text{ang}}(k) + w_\phi \cdot \delta_\phi(k) - w_y \cdot \delta_y(k)
+$$
+
+3. 정규화된 에너지 $\tilde{E}_k \in [0, 1]$과 가산 결합하여 최고 점수 카메라를 선택한다:
+
+$$
+k^* = \underset{k \in \text{remaining}}{\arg\max}\; \text{diversity}(k) + \tilde{E}_k
+$$
+
+4. 최종 선택된 카메라들은 방위각(azimuth) 순으로 정렬되어 일관된 뷰 순서를 보장한다.
+
+---
+
+### 7. 보조 지표 및 시각화
+
+Phase 2의 $F_i$, $\ell_i$ 외에 디버깅용으로 다음 지표가 기록된다:
+
+| 지표 | 정의 | 범위 |
+|------|------|------|
+| **Contrast** $C_i$ | $(\mu_{\text{roi}} - \mu_{\text{bg}}) / (\mu_{\text{roi}} + \mu_{\text{bg}} + \epsilon)$ | $[-1, 1]$ |
+| **Focus** | $\sum A_i \odot M_i\; /\; (\sum A_i + \epsilon)$ | $[0, 1]$ |
+| **Occupancy** $o_i$ | $\text{mean}(M_i)$ | $[0, 1]$ |
+| **Size Penalty** | $\mathbb{1}[o_i < 0.02 \;\text{or}\; o_i > 0.70]$ | $\{0, 1\}$ |
+
+진단 grid 이미지는 행(렌더링/해상도별 attention heatmap) $\times$ 열(거리 배수)로 구성되며, 각 셀에 SA leakage, Contrast, F1 값이 오버레이된다.
+
+---
+
+### 8. 특성
+
+- **장면 적응성**: Phase 1의 per-run adaptive threshold가 ROI 크기와 장면 복잡도에 자동 적응. Step 3의 궤도 평면 추정이 COLMAP 카메라 분포에 자동 정렬.
+- **하이퍼파라미터 의존성 감소**: SA 필터링은 상대적 임계값, Phase 2 품질 점수 $F_i(1-\ell_i)$는 가중치 없는 곱 형태. 에너지 및 다양성 결합도 가산 형태로 직관적.
+- **효율성**: SA leakage 계산은 최저 해상도 선택 + 온라인 평균으로 메모리 효율적. IP2P 배치 모드로 다중 뷰 동시 처리 지원.
+- **해석 가능성**: 5단계 파이프라인의 각 단계가 독립적 역할을 수행하며, 시각화 grid로 선택 근거를 직관적으로 확인 가능.
+
+---
+
+### 9. 한계 및 향후 과제
+
+- Phase 1 필터링 임계값은 산술 평균에 기반하며, median/퍼센타일 기반 변형에 대한 ablation이 필요하다.
+- 제안 방법은 attention 기반 proxy metric에 의존하며, denoising direction map 등 픽셀 도메인 metric과의 결합이 향후 과제이다.
+- Energy scoring의 가시성-기하 가중치($w_{\text{vis}}, w_{\text{can}}$)와 다양성 가중치($w_\phi, w_y$)는 현재 수동 설정이며, 장면 유형별 적응적 조정이 가능할 것이다.
 
 
+---
+---
+
+## LaTeX 본문 (ECCV 형식)
+
+아래는 위 보고서의 내용을 ECCV 학회 제출용 LaTeX 본문으로 작성한 것이다.
+
+---
+
+```latex
+\subsection{Attention-Guided Editing View Selection}
+\label{sec:agevs}
+
+A major bottleneck in diffusion-based 3DGS editing is that editing cost grows linearly with the number of views.
+To minimize the number of edited views while preserving 3D consistency, we select a compact set of cameras that (i) yields stable, localized edits on the region of interest (ROI), and (ii) provides diverse geometric coverage.
+We achieve this with \textbf{Attention-Guided Editing View Selection (AGEVS)}, which first determines an optimal camera distance for localized editing, and then constructs a diffusion-stable and diverse view set at that distance.
+
+\noindent\textbf{ROI Geometric Analysis.}
+Given a pre-trained 3DGS scene and a text-specified ROI segmented by LangSAM~\cite{langsam}, we perform opacity-weighted PCA on the ROI Gaussians to extract the centroid~$\mathbf{c}$, principal axes~$(\mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3)$, eigenvalues~$(\lambda_1 \ge \lambda_2 \ge \lambda_3)$, and a characteristic radius~$r_{\mathrm{obj}} = \sqrt{\lambda_1}$.
+A front-facing direction~$\mathbf{v}_{\mathrm{front}}$ is defined using only the global scene center $\mathbf{c}_{\mathrm{scene}}$ and the ROI centroid $\mathbf{c}$:
+\begin{equation}
+  \mathbf{v}_{\mathrm{front}} = \mathrm{normalize}\bigl(\mathbf{c}_{\mathrm{scene}} - \mathbf{c}\bigr),
+\end{equation}
+so that the ROI is considered to face toward the scene center without relying on COLMAP camera forward vectors.
+
+\noindent\textbf{Two-Phase SAGE Scale Probing.}
+We evaluate $N$ candidate distances $d_i = m_i \cdot r_{\mathrm{obj}}$ with multipliers $m_i \in \{1.5, 2.0, 2.5, 3.0, 3.5\}$.
+For each candidate, we render the 3DGS view and run InstructPix2Pix~(IP2P) to collect both cross-attention and self-attention maps from the UNet denoising process.
+View selection is then performed in two phases.
+
+\textit{Phase~1: Self-Attention Containment Gate.}\;
+We hook the UNet's self-attention layers and compute a leakage score~$\sigma_i$ that measures how strongly the editing signal propagates from ROI to background through self-attention pathways.
+Let $\bar{S} \in \mathbb{R}^{L \times L}$ be the self-attention matrix averaged across all timesteps, layers, and heads at the coarsest available spatial resolution (\eg, $8{\times}8{=}64$ tokens).
+Given the downsampled, binarized ROI vector $\mathbf{m} \in \{0,1\}^L$ and background vector $\bar{\mathbf{m}} = \mathbf{1} - \mathbf{m}$:
+%
+\begin{equation}
+  \sigma_i \;=\; \frac{\bar{\mathbf{m}}^{\!\top}(\bar{S}\,\mathbf{m})}
+                      {\lVert\bar{\mathbf{m}}\rVert_1},
+  \label{eq:sa-leakage}
+\end{equation}
+%
+which is the mean attention weight that background tokens assign to ROI tokens.
+We set a per-run adaptive threshold $\tau_{\mathrm{sa}} = \frac{1}{N}\sum_i \sigma_i$ and retain only the safe set $\mathcal{I}_{\mathrm{safe}} = \{i \mid \sigma_i \le \tau_{\mathrm{sa}}\}$; if empty, all candidates are kept.
+This relative filtering automatically absorbs scene-specific scale variations without requiring manual threshold tuning.
+
+\textit{Phase~2: Cross-Attention Quality Ranking.}\;
+For each surviving candidate, we interpolate the timestep- and head-averaged cross-attention map $A_i$ to the ROI mask resolution and compute two quality metrics.
+The \emph{thresholded F1}~score $F_i$ measures overlap between the top-25\% attention activation region $\hat{A}_i = \mathbb{1}[A_i \ge Q_{0.75}(A_i)]$ and the ROI mask~$M_i$:
+%
+\begin{equation}
+  P_i = \frac{\sum \hat{A}_i \odot M_i}{\sum \hat{A}_i + \epsilon},
+  \quad
+  R_i = \frac{\sum \hat{A}_i \odot M_i}{\sum M_i + \epsilon},
+  \quad
+  F_i = \frac{2P_iR_i}{P_i + R_i + \epsilon}.
+  \label{eq:f1}
+\end{equation}
+%
+The \emph{background cross-attention leakage}~$\ell_i = Q_{0.9}\!\bigl(A_i[\bar{M}_i{>}0.5]\bigr)$ captures the 90th-percentile attention intensity on background pixels, penalizing views where strong attention spills beyond the ROI.
+The optimal editing distance is then selected by:
+%
+\begin{equation}
+  d^{*} = d_{i^*}, \qquad
+  i^{*} = \underset{i \,\in\, \mathcal{I}_{\mathrm{safe}}}{\arg\max}\;
+          F_i \cdot (1 - \ell_i).
+  \label{eq:view-selection}
+\end{equation}
+%
+The product $F_i(1{-}\ell_i)$ jointly rewards high ROI attention coverage and penalizes background leakage.
+Since Phase~1 has already filtered views with excessive self-attention spread, cross-attention quality alone provides a reliable ranking among the remaining candidates.
+
+\noindent\textbf{Diverse View Set Construction.}
+At the optimal distance~$d^*$, we generate $K$ candidate cameras uniformly distributed on a circular orbit whose plane is estimated via PCA on the COLMAP camera positions.
+Each candidate is scored by a linear combination of ROI visibility~$S_{\mathrm{vis}}$ (fraction of the ROI projection visible) and geometric alignment~$S_{\mathrm{can}} = \max(|\hat{\mathbf{v}}{\cdot}\mathbf{v}_{\mathrm{front}}|,\; 0.8\,|\hat{\mathbf{v}}{\cdot}\mathbf{v}_2|)$, yielding $E_k = w_{\mathrm{vis}} S_{\mathrm{vis},k} + w_{\mathrm{can}} S_{\mathrm{can},k}$.
+From the top-$\rho$ fraction of candidates by energy, we perform \emph{energy-weighted farthest-point sampling}~(FPS): starting from the highest-energy view, we iteratively select the candidate maximizing the sum of its angular diversity from already-selected views and its normalized energy.
+This produces a compact, geometrically diverse camera set that balances ROI editability and multi-view coverage.
+```

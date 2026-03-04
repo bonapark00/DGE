@@ -1,0 +1,56 @@
+% ============================================================
+% AGEVS (Attention-Guided Editing View Selection) Method Section
+% First method section for Overleaf paper
+% ============================================================
+
+A major bottleneck in diffusion-based 3DGS editing is that editing cost grows linearly with the number of views.
+To minimize the number of edited views while preserving 3D consistency, we select a compact set of cameras that (i) yields stable, localized edits on the region of interest (ROI), and (ii) provides diverse geometric coverage.
+We achieve this with \textbf{Attention-Guided Editing View Selection (AGEVS)}, which first determines an optimal camera distance for localized editing, and then constructs a diffusion-stable and diverse view set at that distance.
+
+\paragraph{Problem formulation.}
+Given a 3D Gaussian Splatting scene and a text-based edit instruction, we aim to select $K$ cameras such that editing at these views produces ROI-focused, diffusion-stable results while covering the scene from diverse angles.
+Let $\mathcal{G}$ denote the set of 3D Gaussians and $\mathcal{M}_{\text{ROI}} \subseteq \mathcal{G}$ the ROI mask (e.g., from LangSAM segmentation).
+From the ROI covariance matrix we obtain the principal eigenvalue $\lambda_{\max}$ and define the characteristic radius $r_{\text{obj}} = \sqrt{\lambda_{\max}}$.
+We define the scene center $\mathbf{c}_{\text{scene}}$ as the mean of COLMAP camera centers, and the front-facing direction $\mathbf{v}_{\text{front}} = \mathrm{normalize}(\mathbf{c}_{\text{scene}} - \mathbf{c})$, so that the ROI faces toward the COLMAP view centers (we do not use COLMAP camera forward vectors).
+We probe candidate distances $d_i = m_i \cdot r_{\text{obj}}$ for multipliers $m_i \in \{1.5, 2.0, 2.5, 3.0, 3.5\}$, rendering a frontal view along $\mathbf{v}_{\text{front}}$ toward the ROI center at each $d_i$.
+For each candidate view we extract: (i) the 2D ROI mask $M_i \in \{0,1\}^{H \times W}$ (projection of the 3D ROI), (ii) the cross-attention map $A_i$ from the InstructPix2Pix UNet (averaged over timesteps and heads for the edit tokens), and (iii) the self-attention leakage $\sigma_i \in [0,1]$, quantifying how much edit signal propagates from ROI to background via self-attention.
+
+\paragraph{Two-phase selection for optimal distance.}
+We use a two-phase procedure to choose the optimal distance $d^*$.
+
+\textbf{Phase 1: Self-Attention Containment Gate.}
+Self-attention leakage $\sigma_i$ reflects the risk of edit signal spreading to the background.
+We apply an adaptive threshold $\tau_{\text{sa}} = \frac{1}{N}\sum_{i=1}^{N} \sigma_i$ and define the safe candidate set:
+\begin{equation}
+\mathcal{I}_{\text{safe}} = \left\{ i \mid \sigma_i \leq \tau_{\text{sa}} \right\}.
+\end{equation}
+If $\mathcal{I}_{\text{safe}} = \emptyset$, we use all candidates.
+This per-run adaptive filtering removes views that are relatively risky for the given scene and prompt, without fixed hyperparameter tuning.
+
+\textbf{Phase 2: Cross-Attention Quality Ranking.}
+Among safe candidates, we rank by cross-attention quality.
+We binarize $A_i$ at its 75th percentile to obtain high-activation regions $\hat{A}_i$, then compute precision $P_i$, recall $R_i$, and F1 $F_i$ with respect to the ROI mask $M_i$:
+\begin{equation}
+P_i = \frac{\sum \hat{A}_i \odot M_i}{\sum \hat{A}_i + \epsilon}, \quad
+R_i = \frac{\sum \hat{A}_i \odot M_i}{\sum M_i + \epsilon}, \quad
+F_i = \frac{2 P_i R_i}{P_i + R_i + \epsilon}.
+\end{equation}
+We also compute background cross-attention leakage $\ell_i$ as the 90th percentile of attention values in the background region:
+\begin{equation}
+\ell_i = Q_{0.9}\bigl( A_i[\bar{M}_i > 0.5] \bigr).
+\end{equation}
+The optimal distance is chosen as:
+\begin{equation}
+d^* = d_{i^*}, \quad i^* = \underset{i \in \mathcal{I}_{\text{safe}}}{\arg\max}\; F_i \cdot (1 - \ell_i).
+\end{equation}
+High $F_i$ indicates that strong cross-attention aligns well with the ROI; high $(1-\ell_i)$ indicates minimal attention leakage to the background.
+
+\paragraph{Diverse view set construction.}
+At distance $d^*$, we sample camera directions on the sphere (or hemisphere) using Fibonacci lattice sampling with the golden angle $\pi(3-\sqrt{5})$, optionally filtered by a cone around the mean COLMAP viewing direction.
+For each direction $\mathbf{d}$, we place the camera at $\mathbf{c}_{\text{ROI}} + d^* \cdot \mathbf{d}$ looking at the ROI center.
+We score each candidate by visibility $S_{\text{vis}}$ (ROI occupancy on screen) and canonicality $S_{\text{can}}$ (alignment with frontal or side canonical directions):
+\begin{equation}
+E = w_{\text{vis}} \cdot S_{\text{vis}} + w_{\text{can}} \cdot S_{\text{can}}.
+\end{equation}
+We retain the top fraction of candidates by energy and apply farthest-point-style diversity selection: we iteratively pick the candidate that maximizes $\min_{\text{selected}} \angle(\text{cand}, \text{sel}) \times E(\text{cand})$, ensuring geometric spread.
+The final $K$ cameras are sorted by azimuth around the ROI center for stable ordering in the editing pipeline.

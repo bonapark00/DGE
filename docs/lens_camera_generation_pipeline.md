@@ -41,7 +41,11 @@
 3. **가중 공분산**: \mathbf{C} = \sum w_i (\mathbf{x}_i - \mathbf{c})(\mathbf{x}_i - \mathbf{c})^\top / \sum w_i.
 4. **고유값/고유벡터**: \mathbf{C}를 대각화해 고유값 \lambda_1 \ge \lambda_2 \ge \lambda_3와 주축 \mathbf{v}_1, \mathbf{v}_2, \mathbf{v}_3 계산.
 5. **객체 크기**: `object_size = 2 * sqrt(median(|λ|))` (중앙값 기반 스케일).
-6. **앞 방향 `v_front`**: COLMAP 카메라들의 평균 전방 벡터를 \mathbf{v}_1에 투영한 뒤, “객체를 바라보는” 방향으로 정규화. (수치 불안정 시 \mathbf{v}_3 사용.)
+6. **앞 방향 `v_front`**: 미리 정의된 장면 중심 `scene_center`와 ROI 중심 `center` 사이의 벡터를 이용하여  
+   $$
+   \mathbf{v}_{\text{front}} = \mathrm{normalize}(\text{scene\_center} - \mathbf{c})
+   $$
+   로 정의한다. 즉, ROI가 전체 장면 중심을 향하도록 하는 방향을 전방으로 사용하며, COLMAP 카메라의 전방 벡터에는 더 이상 의존하지 않는다.
 
 **보정**:
 
