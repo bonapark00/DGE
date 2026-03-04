@@ -18,8 +18,11 @@ Usage:
   # 2) Run agent(s) – each agent picks a config and runs train+metrics
 
   # Run multiple agents in parallel (one process per GPU, single command)
-  python script/sweep_in2n.py --agent --sweep_id <ID> --gpus 0,1,2
-
+  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpus 0,1,2
+  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 0
+  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 1
+  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 2
+  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 3
 
 """
 
