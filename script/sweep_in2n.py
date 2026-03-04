@@ -7,8 +7,6 @@ WandB Sweep for DGE camera-selection hyperparameter search.
 
 Sweep target metric: CLIP directional similarity (maximize)
 Search space:
-  - lambda_d:                    [1.0,  5.0, 10.0]
-  - edit_view_selection_strategy: [lens, random]
   - task:                        [다양한 3d-ovs 편집 task들]  (prompt combos from TASKS)
 
 Usage:
@@ -18,7 +16,7 @@ Usage:
   # 2) Run agent(s) – each agent picks a config and runs train+metrics
 
   # Run multiple agents in parallel (one process per GPU, single command)
-  python script/sweep_in2n.py --agent --sweep_id <ID> --gpus 2,3
+  python script/sweep_in2n.py --agent --sweep_id t52zlghc --gpu 1
 
 
 """
@@ -49,7 +47,7 @@ RENDER_SUBDIR = "colmap_render_full"
 
 GUIDANCE_SCALE = "12.5"
 MASK_THRES = "0.6"
-MAX_VIEW_NUM = "25"
+MAX_VIEW_NUM = "20"
 CAMERA_UPDATE_PER_STEP = "1500"
 MAX_STEPS = "1500"
 
@@ -69,156 +67,156 @@ EXP_ROOT_DIR = "/data/users/jaeyeonpark/DGE-orig-outputs"
 # STYLE_SOURCE_PROMPT = 편집 전(원본), STYLE_TARGET_PROMPT = 편집 후(목표)
 TASKS = [
 
-    # 0) Turn the man into a clown
-    {
-        "name": "man_to_clown",
-        "DATA_NAME": "face",
-        "PROMPT": "Turn the man's face into a clown",
-        "SEG_PROMPT": "face of the man",
-        "TARGET_PROMPT": "face of the clown",
-        "STYLE_SOURCE_PROMPT": "face of the man",
-        "STYLE_TARGET_PROMPT": "face of the clown",
-    },
-    # 2) Change the man's hair color to dark brown
-    {
-        "name": "hair_dark_brown",
-        "DATA_NAME": "face",
-        "PROMPT": "Change his hair color to dark brown",
-        "SEG_PROMPT": "the man's hair",
-        "TARGET_PROMPT": "the man's dark brown hair",
-        "STYLE_SOURCE_PROMPT": "man with natural light brown hair",
-        "STYLE_TARGET_PROMPT": "man with dark brown hair",
-    },
-    # 3) Make the man's mouth smile
+    # # 0) Turn the man into a clown
     # {
-    #     "name": "mouth_smile",
+    #     "name": "man_to_clown",
     #     "DATA_NAME": "face",
-    #     "PROMPT": "Make his mouth smile",
-    #     "SEG_PROMPT": "the man's mouth",
-    #     "TARGET_PROMPT": "the man's mouth in a smiling pose",
-    #     "STYLE_SOURCE_PROMPT": "man with neutral, closed mouth",
-    #     "STYLE_TARGET_PROMPT": "man with open, smiling mouth",
+    #     "PROMPT": "Turn the man's face into a clown",
+    #     "SEG_PROMPT": "face of the man",
+    #     "TARGET_PROMPT": "face of the clown",
+    #     "STYLE_SOURCE_PROMPT": "face of the man",
+    #     "STYLE_TARGET_PROMPT": "face of the clown",
     # },
-    # 4) Make him wear sunglasses
-    {
-        "name": "wear_sunglasses",
-        "DATA_NAME": "face",
-        "PROMPT": "Make him wear sunglasses on his face",
-        "SEG_PROMPT": "face of the man",
-        "TARGET_PROMPT": "face of the man with dark sunglasses",
-        "STYLE_SOURCE_PROMPT": "face of the man",
-        "STYLE_TARGET_PROMPT": "face of the man with dark sunglasses",
-    },
-    # 5) Make his ear like an elf's ear
-    {
-        "name": "ear_elf",
-        "DATA_NAME": "face",
-        "PROMPT": "Make his ear like an elf's ear",
-        "SEG_PROMPT": "ears of the man",
-        "TARGET_PROMPT": "man's pointed, elf-like right ear",
-        "STYLE_SOURCE_PROMPT": "man's rounded, normal human ear",
-        "STYLE_TARGET_PROMPT": "man with pointed, elf-like human ear",
-    },
-    # 6) Change the Patagonia logo to a simple tree graphic
-    {
-        "name": "logo_change_tree",
-        "DATA_NAME": "face",
-        "PROMPT": "Change the Patagonia patch to a simple tree graphic patch",
-        "SEG_PROMPT": "Patagonia logo patch on the fleece pocket",
-        "TARGET_PROMPT": "a patch with a simple tree graphic on the fleece pocket",
-        "STYLE_SOURCE_PROMPT": "man wearing jacket with a patch with the text 'PATAGONIA' and a mountain range",
-        "STYLE_TARGET_PROMPT": "man wearing jacket with a patch with a simple, stylized tree graphic and no text",
-    },
-    # 7) Add a small silver nose stud piercing
-    {
-        "name": "nose_stud_silver",
-        "DATA_NAME": "face",
-        "PROMPT": "Add a small silver stud piercing to his nose",
-        "SEG_PROMPT": "right side of the man's nostril",
-        "TARGET_PROMPT": "a nostril with a small silver stud piercing",
-        "STYLE_SOURCE_PROMPT": "man with plain skin of the man's nose",
-        "STYLE_TARGET_PROMPT": "man with skin with a small, glinting silver stud piercing",
-    },
-    # 8) Change the zipper pull to a bright red color
-    {
-        "name": "zipper_pull_red",
-        "DATA_NAME": "face",
-        "PROMPT": "Change the zipper pull to a bright red color",
-        "SEG_PROMPT": "metallic zipper pull of the main zipper",
-        "TARGET_PROMPT": "bright red colored zipper pull",
-        "STYLE_SOURCE_PROMPT": "man wearing jacket with dull, metallic zipper pull",
-        "STYLE_TARGET_PROMPT": "man wearing jacket with vibrant, bright red zipper pull",
-    },
-    # 9) Change the material of the jacket to a denim jacket
-    {
-        "name": "jacket_denim",
-        "DATA_NAME": "face",
-        "PROMPT": "Change the jacket material to blue denim",
-        "SEG_PROMPT": "entire fleece jacket",
-        "TARGET_PROMPT": "a blue denim jacket",
-        "STYLE_SOURCE_PROMPT": "man wearing jacket with textured grey speckled fleece fabric",
-        "STYLE_TARGET_PROMPT": "man wearing jacket with classic blue denim twill fabric",
-    },
-    # 10) Add a graphic of a compass to the sleeve
+    # # 2) Change the man's hair color to dark brown
     # {
-    #     "name": "sleeve_compass",
+    #     "name": "hair_dark_brown",
     #     "DATA_NAME": "face",
-    #     "PROMPT": "Add a graphic of a compass to the left sleeve of his fleece",
-    #     "SEG_PROMPT": "fleece fabric of the left sleeve",
-    #     "TARGET_PROMPT": "fleece sleeve with a small black compass graphic added",
-    #     "STYLE_SOURCE_PROMPT": "man wearing jacket with plain grey speckled fleece fabric",
-    #     "STYLE_TARGET_PROMPT": "man wearing jacket with plain grey fleece fabric with a detailed compass graphic",
+    #     "PROMPT": "Change his hair color to dark brown",
+    #     "SEG_PROMPT": "the man's hair",
+    #     "TARGET_PROMPT": "the man's dark brown hair",
+    #     "STYLE_SOURCE_PROMPT": "man with natural light brown hair",
+    #     "STYLE_TARGET_PROMPT": "man with dark brown hair",
     # },
-    # 11) Change his hair style to a short, cropped style
-    {
-        "name": "hair_style_short",
-        "DATA_NAME": "face",
-        "PROMPT": "Change his hair style to a short, cropped look",
-        "SEG_PROMPT": "the man's entire hair",
-        "TARGET_PROMPT": "the man with a short, cropped haircut",
-        "STYLE_SOURCE_PROMPT": "man with natural curly, wavy light brown hair",
-        "STYLE_TARGET_PROMPT": "man with short, closely cropped light brown hair",
-    },
-    # 12) Change the color of his eyes to blue
-    {
-        "name": "eyes_blue",
-        "DATA_NAME": "face",
-        "PROMPT": "Change his eye color to blue",
-        "SEG_PROMPT": "irises of the man's visible eyes",
-        "TARGET_PROMPT": "eyes with blue irises",
-        "STYLE_SOURCE_PROMPT": "man with brown eye irises",
-        "STYLE_TARGET_PROMPT": "man with blue eye irises",
-    },
-    # 13) Add text to the chest pocket saying 'STAFF'
-    {
-        "name": "chest_text_staff",
-        "DATA_NAME": "face",
-        "PROMPT": "Add text that says 'STAFF' to the fleece chest pocket patch, below the logo",
-        "SEG_PROMPT": "bottom area of the fleece chest pocket patch",
-        "TARGET_PROMPT": "chest pocket patch with text 'STAFF' in block letters added",
-        "STYLE_SOURCE_PROMPT": "man wearing jacket with plain patch surface",
-        "STYLE_TARGET_PROMPT": "man wearing jacket with patch surface with detailed block text 'STAFF'",
-    },
-    # 14) Add a realistic-looking tattoo of an anchor to his neck
-    {
-        "name": "neck_tattoo_anchor",
-        "DATA_NAME": "face",
-        "PROMPT": "Add a realistic-looking anchor tattoo to his neck",
-        "SEG_PROMPT": "man's neck skin",
-        "TARGET_PROMPT": "a neck with a detailed, small black anchor tattoo",
-        "STYLE_SOURCE_PROMPT": "man with plain skin of the man's neck",
-        "STYLE_TARGET_PROMPT": "man with skin with a detailed, black anchor tattoo that looks realistic",
-    },
-    # 15) Replace the white wall on the right with a large, city-view window
-    {
-        "name": "background_window_city",
-        "DATA_NAME": "face",
-        "PROMPT": "Replace the white wall on the right with a large window looking out at a city",
-        "SEG_PROMPT": "white wall surface on the far right",
-        "TARGET_PROMPT": "a large window with a detailed city skyline view",
-        "STYLE_SOURCE_PROMPT": "man standing in front of a flat, plain white painted surface",
-        "STYLE_TARGET_PROMPT": "man standing in front of a detailed window view with city buildings and sky",
-    },
+    # # 3) Make the man's mouth smile
+    # # {
+    # #     "name": "mouth_smile",
+    # #     "DATA_NAME": "face",
+    # #     "PROMPT": "Make his mouth smile",
+    # #     "SEG_PROMPT": "the man's mouth",
+    # #     "TARGET_PROMPT": "the man's mouth in a smiling pose",
+    # #     "STYLE_SOURCE_PROMPT": "man with neutral, closed mouth",
+    # #     "STYLE_TARGET_PROMPT": "man with open, smiling mouth",
+    # # },
+    # # 4) Make him wear sunglasses
+    # {
+    #     "name": "wear_sunglasses",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Make him wear sunglasses on his face",
+    #     "SEG_PROMPT": "face of the man",
+    #     "TARGET_PROMPT": "face of the man with dark sunglasses",
+    #     "STYLE_SOURCE_PROMPT": "face of the man",
+    #     "STYLE_TARGET_PROMPT": "face of the man with dark sunglasses",
+    # },
+    # # 5) Make his ear like an elf's ear
+    # {
+    #     "name": "ear_elf",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Make his ear like an elf's ear",
+    #     "SEG_PROMPT": "ears of the man",
+    #     "TARGET_PROMPT": "man's pointed, elf-like right ear",
+    #     "STYLE_SOURCE_PROMPT": "man's rounded, normal human ear",
+    #     "STYLE_TARGET_PROMPT": "man with pointed, elf-like human ear",
+    # },
+    # # 6) Change the Patagonia logo to a simple tree graphic
+    # {
+    #     "name": "logo_change_tree",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Change the Patagonia patch to a simple tree graphic patch",
+    #     "SEG_PROMPT": "Patagonia logo patch on the fleece pocket",
+    #     "TARGET_PROMPT": "a patch with a simple tree graphic on the fleece pocket",
+    #     "STYLE_SOURCE_PROMPT": "man wearing jacket with a patch with the text 'PATAGONIA' and a mountain range",
+    #     "STYLE_TARGET_PROMPT": "man wearing jacket with a patch with a simple, stylized tree graphic and no text",
+    # },
+    # # 7) Add a small silver nose stud piercing
+    # {
+    #     "name": "nose_stud_silver",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Add a small silver stud piercing to his nose",
+    #     "SEG_PROMPT": "right side of the man's nostril",
+    #     "TARGET_PROMPT": "a nostril with a small silver stud piercing",
+    #     "STYLE_SOURCE_PROMPT": "man with plain skin of the man's nose",
+    #     "STYLE_TARGET_PROMPT": "man with skin with a small, glinting silver stud piercing",
+    # },
+    # # 8) Change the zipper pull to a bright red color
+    # {
+    #     "name": "zipper_pull_red",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Change the zipper pull to a bright red color",
+    #     "SEG_PROMPT": "metallic zipper pull of the main zipper",
+    #     "TARGET_PROMPT": "bright red colored zipper pull",
+    #     "STYLE_SOURCE_PROMPT": "man wearing jacket with dull, metallic zipper pull",
+    #     "STYLE_TARGET_PROMPT": "man wearing jacket with vibrant, bright red zipper pull",
+    # },
+    # # 9) Change the material of the jacket to a denim jacket
+    # {
+    #     "name": "jacket_denim",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Change the jacket material to blue denim",
+    #     "SEG_PROMPT": "entire fleece jacket",
+    #     "TARGET_PROMPT": "a blue denim jacket",
+    #     "STYLE_SOURCE_PROMPT": "man wearing jacket with textured grey speckled fleece fabric",
+    #     "STYLE_TARGET_PROMPT": "man wearing jacket with classic blue denim twill fabric",
+    # },
+    # # 10) Add a graphic of a compass to the sleeve
+    # # {
+    # #     "name": "sleeve_compass",
+    # #     "DATA_NAME": "face",
+    # #     "PROMPT": "Add a graphic of a compass to the left sleeve of his fleece",
+    # #     "SEG_PROMPT": "fleece fabric of the left sleeve",
+    # #     "TARGET_PROMPT": "fleece sleeve with a small black compass graphic added",
+    # #     "STYLE_SOURCE_PROMPT": "man wearing jacket with plain grey speckled fleece fabric",
+    # #     "STYLE_TARGET_PROMPT": "man wearing jacket with plain grey fleece fabric with a detailed compass graphic",
+    # # },
+    # # 11) Change his hair style to a short, cropped style
+    # {
+    #     "name": "hair_style_short",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Change his hair style to a short, cropped look",
+    #     "SEG_PROMPT": "the man's entire hair",
+    #     "TARGET_PROMPT": "the man with a short, cropped haircut",
+    #     "STYLE_SOURCE_PROMPT": "man with natural curly, wavy light brown hair",
+    #     "STYLE_TARGET_PROMPT": "man with short, closely cropped light brown hair",
+    # },
+    # # 12) Change the color of his eyes to blue
+    # {
+    #     "name": "eyes_blue",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Change his eye color to blue",
+    #     "SEG_PROMPT": "irises of the man's visible eyes",
+    #     "TARGET_PROMPT": "eyes with blue irises",
+    #     "STYLE_SOURCE_PROMPT": "man with brown eye irises",
+    #     "STYLE_TARGET_PROMPT": "man with blue eye irises",
+    # },
+    # # 13) Add text to the chest pocket saying 'STAFF'
+    # {
+    #     "name": "chest_text_staff",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Add text that says 'STAFF' to the fleece chest pocket patch, below the logo",
+    #     "SEG_PROMPT": "bottom area of the fleece chest pocket patch",
+    #     "TARGET_PROMPT": "chest pocket patch with text 'STAFF' in block letters added",
+    #     "STYLE_SOURCE_PROMPT": "man wearing jacket with plain patch surface",
+    #     "STYLE_TARGET_PROMPT": "man wearing jacket with patch surface with detailed block text 'STAFF'",
+    # },
+    # # 14) Add a realistic-looking tattoo of an anchor to his neck
+    # {
+    #     "name": "neck_tattoo_anchor",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Add a realistic-looking anchor tattoo to his neck",
+    #     "SEG_PROMPT": "man's neck skin",
+    #     "TARGET_PROMPT": "a neck with a detailed, small black anchor tattoo",
+    #     "STYLE_SOURCE_PROMPT": "man with plain skin of the man's neck",
+    #     "STYLE_TARGET_PROMPT": "man with skin with a detailed, black anchor tattoo that looks realistic",
+    # },
+    # # 15) Replace the white wall on the right with a large, city-view window
+    # {
+    #     "name": "background_window_city",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Replace the white wall on the right with a large window looking out at a city",
+    #     "SEG_PROMPT": "white wall surface on the far right",
+    #     "TARGET_PROMPT": "a large window with a detailed city skyline view",
+    #     "STYLE_SOURCE_PROMPT": "man standing in front of a flat, plain white painted surface",
+    #     "STYLE_TARGET_PROMPT": "man standing in front of a detailed window view with city buildings and sky",
+    # },
 
     ## bear
     # 1) Change the yellow face markings to red
@@ -428,11 +426,36 @@ def find_save_directory(launch_output: str, name: str) -> Optional[Path]:
 
 
 def find_render_directory(save_dir: Path) -> Optional[Path]:
+    """Find it*-test render dir; search save_dir, parent, and recursively."""
+    # 1) save_dir/it{MAX_STEPS}-test
     render_dir = save_dir / f"it{MAX_STEPS}-test"
-    if render_dir.exists():
+    if render_dir.exists() and list(render_dir.glob("*.png")):
         return render_dir
-    test_dirs = list(save_dir.glob("it*-test"))
-    return test_dirs[0] if test_dirs else None
+    # 2) save_dir/it*-test (any step)
+    test_dirs = sorted(save_dir.glob("it*-test"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for d in test_dirs:
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 3) trial_dir/it*-test (save_dir parent)
+    parent = save_dir.parent
+    test_dirs = sorted(parent.glob("it*-test"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for d in test_dirs:
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 4) recursive under save_dir
+    for d in save_dir.rglob("it*-test"):
+        if d.is_dir() and list(d.glob("*.png")):
+            return d
+    # 5) save_dir itself has .png (flat structure)
+    if list(save_dir.glob("*.png")):
+        return save_dir
+    # 6) search entire trial tree (save_dir.parent and above)
+    for parent in [save_dir.parent, save_dir.parent.parent]:
+        if parent.exists():
+            for d in parent.rglob("it*-test"):
+                if d.is_dir() and list(d.glob("*.png")):
+                    return d
+    return None
 
 
 def parse_metrics(output: str) -> dict:
