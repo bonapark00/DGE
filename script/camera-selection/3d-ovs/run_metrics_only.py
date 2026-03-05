@@ -10,20 +10,17 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = "/data/users/jaeyeonpark/DGE-outputs/camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk/25/Make_the_pooh_look_like_a_robot@20260224-164458/"
+OUTPUT_DIR = "/data/users/jaeyeonpark/DGE-outputs/camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room/20/Change_the_baseball_to_a_solid_golden_ball@20260305-105450"
 
 MAX_STEPS = "1500"
-GPU = "2"
+GPU = "0"
 DATA_TYPE = "3d-ovs"
-DATA_NAME = "covered_desk"
-ORIGIN_RENDER_BASE = "/data/users/jaeyeonpark/DGE-outputs/origin_render"
+DATA_NAME = "room"
 EDIT_VIEW_SELECTION_STRATEGY = "lens"
-ORIGIN_RENDER_DIR = f"{ORIGIN_RENDER_BASE}/{DATA_TYPE}/{DATA_NAME}/{EDIT_VIEW_SELECTION_STRATEGY}"
-USE_ORIGIN_RENDER = False  # True: use origin renders as GT (like 3d-ovs); False: use training renders
-GT_DIR = ORIGIN_RENDER_DIR if USE_ORIGIN_RENDER else f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/train/ours_30000/renders"
+GT_DIR  = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/colmap_render_full"
 STYLE_IMAGE = ""
-STYLE_TARGET_PROMPT = "A man with a leather jacket"
-STYLE_SOURCE_PROMPT = "A man with a fleece jacket"
+STYLE_TARGET_PROMPT = "solid golden ball"
+STYLE_SOURCE_PROMPT = "white baseball"
 INTERVAL = 1
 DEVICE = "cuda"
 

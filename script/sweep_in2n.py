@@ -19,7 +19,8 @@ Usage:
 
   # Run multiple agents in parallel (one process per GPU, single command)
   python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpus 0,1,2
-  python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 0
+  
+  python script/sweep_in2n.py --agent --sweep_id 0r1nt2az --gpu 0
   python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 1
   python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 2
   python script/sweep_in2n.py --agent --sweep_id 6o0wf0zu --gpu 3
@@ -67,7 +68,7 @@ VIEW_CONFIG_PAIRS = [
 ]
 CAMERA_UPDATE_PER_STEP = "1500"
 MASK_UPDATE_AT_STEP = "600"
-MASK_UPDATE_VIEW_NUM = "5"
+MASK_UPDATE_VIEW_NUM = "30"
 PRUNE_FLOATER_AT_STEP = "-1"
 MAX_STEPS = "1500"
 
@@ -85,7 +86,6 @@ LAMBDA_ISM_DEFAULT = 0.0
 MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY = "lens_fps"
 USE_MULTIVIEW_EDIT_DEFAULT = True
 USE_GAUSSIAN_PROVENANCE_DEFAULT = False
-# SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
 
 # Warp refine (3d-ovs sweep와 동일 기본값)
 USE_WARP_REFINE_DEFAULT = False
@@ -115,7 +115,7 @@ LENS_LAMBDA_ENT = "2.0"
 LENS_IP2P_GUIDANCE_SCALE = "7.5"
 LENS_IP2P_IMAGE_GUIDANCE_SCALE = "1.5"
 LENS_HEMISPHERE_ONLY = "true"
-LENS_CONE_HALF_ANGLE_DEG = "60.0" # 60: man
+LENS_CONE_HALF_ANGLE_DEG = "60.0"  # 60: man
 LENS_V_FRONT_METHOD = "scene_center"
 LENS_N_CANDIDATES = "900"
 LENS_DIVERSITY_X_WEIGHT = "30.0"
@@ -124,7 +124,24 @@ LENS_IP2P_BATCH_SIZE = "2"
 CAMERA_BATCH_SIZE = "5"
 
 # face에 맞춘 기본값
-LENS_DISTANCE_MULTIPLIERS = "2.0,2.5,3.0,3.5"
+LENS_DISTANCE_MULTIPLIERS_DEFAULT = "3.0"
+
+# Extended-attention & target batch defaults (to match launch.json)
+SAVE_IMAGE_GRID_DRAW_TEXTS = "false"
+TARGET_USE_EXTENDED_ATTENTION = "true"
+FEATURE_INJECTION_MODE = "similarity"
+PER_STEP_CROSS_ATTN_CONSISTENCY = "true"
+PER_STEP_CROSS_ATTN_T_START = "500"
+PER_STEP_CROSS_ATTN_RESOLUTIONS = "1024"  # passed as [1024]
+TARGET_BATCH_STRATEGY = "adaptive"
+TARGET_BATCH_NEIGHBOR_THRESHOLD = "900"
+TARGET_BATCH_LATE_MODE = "sliding_window"
+TARGET_BATCH_SLIDING_STRIDE = "5"
+TARGET_KEY_SELECTION_MODE = "canonical_progressive"
+
+# Mask view population defaults
+MASK_VIEW_POPULATION = "train_cameras"
+MASK_NUM_VIEWS = "30"
 
 # 출력 루트: 여기 아래에 sweep/3d-ovs/... 가 생성됨 (dge.yaml exp_root_dir 오버라이드)
 EXP_ROOT_DIR = "/data/users/jaeyeonpark/DGE-ours-outputs"
@@ -136,52 +153,54 @@ EXP_ROOT_DIR = "/data/users/jaeyeonpark/DGE-ours-outputs"
 # STYLE_SOURCE_PROMPT = 편집 전(원본), STYLE_TARGET_PROMPT = 편집 후(목표)
 TASKS = [
 
-    # 0) Turn the man into a clown
-    {
-        "name": "man_to_clown",
-        "DATA_NAME": "face",
-        "PROMPT": "Turn the man's face into a clown",
-        "SEG_PROMPT": "face of the man",
-        "TARGET_PROMPT": "face of the clown",
-        "STYLE_SOURCE_PROMPT": "face of the man",
-        "STYLE_TARGET_PROMPT": "face of the clown",
-    },
+    # # 0) Turn the man into a clown
+    # {
+    #     "name": "man_to_clown",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Turn the man's face into a clown",
+    #     "SEG_PROMPT": "a face",
+    #     "TARGET_PROMPT": "a face of the clown",
+    #     "STYLE_SOURCE_PROMPT": "a face of the man",
+    #     "STYLE_TARGET_PROMPT": "a face of the clown",
+    # },
     # 2) Change the man's hair color to dark brown
     {
         "name": "hair_dark_brown",
         "DATA_NAME": "face",
         "PROMPT": "Change his hair color to dark brown",
-        "SEG_PROMPT": "the man's hair",
+        "SEG_PROMPT": "hair",
+        "LENS_SEG_PROMPT": "a face",
         "TARGET_PROMPT": "the man's dark brown hair",
         "STYLE_SOURCE_PROMPT": "man with natural light brown hair",
         "STYLE_TARGET_PROMPT": "man with dark brown hair",
     },
     # 3) Make the man's mouth smile
-    # {
-    #     "name": "mouth_smile",
-    #     "DATA_NAME": "face",
-    #     "PROMPT": "Make his mouth smile",
-    #     "SEG_PROMPT": "the man's mouth",
-    #     "TARGET_PROMPT": "the man's mouth in a smiling pose",
-    #     "STYLE_SOURCE_PROMPT": "man with neutral, closed mouth",
-    #     "STYLE_TARGET_PROMPT": "man with open, smiling mouth",
-    # },
-    # 4) Make him wear sunglasses
     {
-        "name": "wear_sunglasses",
+        "name": "mouth_smile",
         "DATA_NAME": "face",
-        "PROMPT": "Make him wear sunglasses on his face",
-        "SEG_PROMPT": "face of the man",
-        "TARGET_PROMPT": "face of the man with dark sunglasses",
-        "STYLE_SOURCE_PROMPT": "face of the man",
-        "STYLE_TARGET_PROMPT": "face of the man with dark sunglasses",
+        "PROMPT": "Make his mouth smile",
+        "SEG_PROMPT": "the man's mouth",
+        "LENS_SEG_PROMPT": "a face",
+        "TARGET_PROMPT": "the man's mouth in a smiling pose",
+        "STYLE_SOURCE_PROMPT": "man with neutral, closed mouth",
+        "STYLE_TARGET_PROMPT": "man with open, smiling mouth",
     },
+    # 4) Make him wear sunglasses
+    # {
+    #     "name": "wear_sunglasses",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Make him wear sunglasses on his face",
+    #     "SEG_PROMPT": "a face",
+    #     "TARGET_PROMPT": "a face of the man with dark sunglasses",
+    #     "STYLE_SOURCE_PROMPT": "a face of the man",
+    #     "STYLE_TARGET_PROMPT": "a face of the man with dark sunglasses",
+    # },
     # 5) Make his ear like an elf's ear
     {
         "name": "ear_elf",
         "DATA_NAME": "face",
         "PROMPT": "Make his ear like an elf's ear",
-        "SEG_PROMPT": "ears of the man",
+        "SEG_PROMPT": "a face",
         "TARGET_PROMPT": "man's pointed, elf-like right ear",
         "STYLE_SOURCE_PROMPT": "man's rounded, normal human ear",
         "STYLE_TARGET_PROMPT": "man with pointed, elf-like human ear",
@@ -192,6 +211,10 @@ TASKS = [
         "DATA_NAME": "face",
         "PROMPT": "Change the Patagonia patch to a simple tree graphic patch",
         "SEG_PROMPT": "Patagonia logo patch on the fleece pocket",
+        "LENS_SEG_PROMPT": "a fleece jacket",
+        "LENS_CONE_HALF_ANGLE_DEG": "90.0",  # 60: man
+        "LENS_DIVERSITY_X_WEIGHT": "30.0",
+        "LENS_DIVERSITY_Y_VARIANCE_WEIGHT": "5.0",
         "TARGET_PROMPT": "a patch with a simple tree graphic on the fleece pocket",
         "STYLE_SOURCE_PROMPT": "man wearing jacket with a patch with the text 'PATAGONIA' and a mountain range",
         "STYLE_TARGET_PROMPT": "man wearing jacket with a patch with a simple, stylized tree graphic and no text",
@@ -201,7 +224,9 @@ TASKS = [
         "name": "nose_stud_silver",
         "DATA_NAME": "face",
         "PROMPT": "Add a small silver stud piercing to his nose",
-        "SEG_PROMPT": "right side of the man's nostril",
+        "SEG_PROMPT": "nose",
+        "LENS_SEG_PROMPT": "a face",
+        "LENS_DISTANCE_MULTIPLIERS": "2.0",
         "TARGET_PROMPT": "a nostril with a small silver stud piercing",
         "STYLE_SOURCE_PROMPT": "man with plain skin of the man's nose",
         "STYLE_TARGET_PROMPT": "man with skin with a small, glinting silver stud piercing",
@@ -212,6 +237,8 @@ TASKS = [
         "DATA_NAME": "face",
         "PROMPT": "Change the zipper pull to a bright red color",
         "SEG_PROMPT": "metallic zipper pull of the main zipper",
+        "LENS_SEG_PROMPT": "a fleece jacket",
+        "LENS_DISTANCE_MULTIPLIERS": "2.5",
         "TARGET_PROMPT": "bright red colored zipper pull",
         "STYLE_SOURCE_PROMPT": "man wearing jacket with dull, metallic zipper pull",
         "STYLE_TARGET_PROMPT": "man wearing jacket with vibrant, bright red zipper pull",
@@ -222,6 +249,10 @@ TASKS = [
         "DATA_NAME": "face",
         "PROMPT": "Change the jacket material to blue denim",
         "SEG_PROMPT": "entire fleece jacket",
+        "LENS_SEG_PROMPT": "a fleece jacket",
+        "LENS_DISTANCE_MULTIPLIERS": "3.0",
+        "LENS_CONE_HALF_ANGLE_DEG": "90.0",
+        "LENS_DIVERSITY_Y_VARIANCE_WEIGHT": "5.0",
         "TARGET_PROMPT": "a blue denim jacket",
         "STYLE_SOURCE_PROMPT": "man wearing jacket with textured grey speckled fleece fabric",
         "STYLE_TARGET_PROMPT": "man wearing jacket with classic blue denim twill fabric",
@@ -241,7 +272,11 @@ TASKS = [
         "name": "hair_style_short",
         "DATA_NAME": "face",
         "PROMPT": "Change his hair style to a short, cropped look",
-        "SEG_PROMPT": "the man's entire hair",
+        "SEG_PROMPT": "hair",
+        "LENS_SEG_PROMPT": "a face",
+        "LENS_DISTANCE_MULTIPLIERS": "3.5",
+        "LENS_CONE_HALF_ANGLE_DEG": "90.0",
+        "LENS_DIVERSITY_Y_VARIANCE_WEIGHT": "5.0",
         "TARGET_PROMPT": "the man with a short, cropped haircut",
         "STYLE_SOURCE_PROMPT": "man with natural curly, wavy light brown hair",
         "STYLE_TARGET_PROMPT": "man with short, closely cropped light brown hair",
@@ -252,6 +287,8 @@ TASKS = [
         "DATA_NAME": "face",
         "PROMPT": "Change his eye color to blue",
         "SEG_PROMPT": "irises of the man's visible eyes",
+        "LENS_SEG_PROMPT": "a face",
+        "LENS_DISTANCE_MULTIPLIERS": "3.0",
         "TARGET_PROMPT": "eyes with blue irises",
         "STYLE_SOURCE_PROMPT": "man with brown eye irises",
         "STYLE_TARGET_PROMPT": "man with blue eye irises",
@@ -262,30 +299,34 @@ TASKS = [
         "DATA_NAME": "face",
         "PROMPT": "Add text that says 'STAFF' to the fleece chest pocket patch, below the logo",
         "SEG_PROMPT": "bottom area of the fleece chest pocket patch",
+        "LENS_SEG_PROMPT": "a fleece jacket",
+        "LENS_DISTANCE_MULTIPLIERS": "3.0",
+        "LENS_CONE_HALF_ANGLE_DEG": "90.0",
+        "LENS_DIVERSITY_Y_VARIANCE_WEIGHT": "5.0",
         "TARGET_PROMPT": "chest pocket patch with text 'STAFF' in block letters added",
         "STYLE_SOURCE_PROMPT": "man wearing jacket with plain patch surface",
         "STYLE_TARGET_PROMPT": "man wearing jacket with patch surface with detailed block text 'STAFF'",
     },
     # 14) Add a realistic-looking tattoo of an anchor to his neck
-    {
-        "name": "neck_tattoo_anchor",
-        "DATA_NAME": "face",
-        "PROMPT": "Add a realistic-looking anchor tattoo to his neck",
-        "SEG_PROMPT": "man's neck skin",
-        "TARGET_PROMPT": "a neck with a detailed, small black anchor tattoo",
-        "STYLE_SOURCE_PROMPT": "man with plain skin of the man's neck",
-        "STYLE_TARGET_PROMPT": "man with skin with a detailed, black anchor tattoo that looks realistic",
-    },
+    # {
+    #     "name": "neck_tattoo_anchor",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Add a realistic-looking anchor tattoo to his neck",
+    #     "SEG_PROMPT": "man's neck skin",
+    #     "TARGET_PROMPT": "a neck with a detailed, small black anchor tattoo",
+    #     "STYLE_SOURCE_PROMPT": "man with plain skin of the man's neck",
+    #     "STYLE_TARGET_PROMPT": "man with skin with a detailed, black anchor tattoo that looks realistic",
+    # },
     # 15) Replace the white wall on the right with a large, city-view window
-    {
-        "name": "background_window_city",
-        "DATA_NAME": "face",
-        "PROMPT": "Replace the white wall on the right with a large window looking out at a city",
-        "SEG_PROMPT": "white wall surface on the far right",
-        "TARGET_PROMPT": "a large window with a detailed city skyline view",
-        "STYLE_SOURCE_PROMPT": "man standing in front of a flat, plain white painted surface",
-        "STYLE_TARGET_PROMPT": "man standing in front of a detailed window view with city buildings and sky",
-    },
+    # {
+    #     "name": "background_window_city",
+    #     "DATA_NAME": "face",
+    #     "PROMPT": "Replace the white wall on the right with a large window looking out at a city",
+    #     "SEG_PROMPT": "a face",
+    #     "TARGET_PROMPT": "a large window with a detailed city skyline view",
+    #     "STYLE_SOURCE_PROMPT": "man standing in front of a flat, plain white painted surface",
+    #     "STYLE_TARGET_PROMPT": "man standing in front of a detailed window view with city buildings and sky",
+    # },
 
     ## bear
     # # 1) Change the yellow face markings to red
@@ -601,6 +642,14 @@ def train_and_evaluate():
     target_prompt = task["TARGET_PROMPT"]
     style_target_prompt = task.get("STYLE_TARGET_PROMPT", "")
     style_source_prompt = task.get("STYLE_SOURCE_PROMPT", "a Photo")
+    # Per-task overrides for lens prompts / hyperparameters (fallback to global defaults)
+    task_lens_edit_prompt = task.get("LENS_EDIT_PROMPT", prompt)
+    task_lens_seg_prompt = task.get("LENS_SEG_PROMPT", seg_prompt)
+    task_lens_distance_multipliers = task.get("LENS_DISTANCE_MULTIPLIERS", LENS_DISTANCE_MULTIPLIERS_DEFAULT)
+    task_lens_cone_half_angle = task.get("LENS_CONE_HALF_ANGLE_DEG", LENS_CONE_HALF_ANGLE_DEG)
+    task_lens_v_front_method = task.get("LENS_V_FRONT_METHOD", LENS_V_FRONT_METHOD)
+    task_lens_diversity_x_weight = task.get("LENS_DIVERSITY_X_WEIGHT", LENS_DIVERSITY_X_WEIGHT)
+    task_lens_diversity_y_variance_weight = task.get("LENS_DIVERSITY_Y_VARIANCE_WEIGHT", LENS_DIVERSITY_Y_VARIANCE_WEIGHT)
 
     data_name = task.get("DATA_NAME", DATA_NAME)
     data_source = f"{DATA_SOURCE_ROOT}/{DATA_TYPE}/{data_name}/"
@@ -643,6 +692,16 @@ def train_and_evaluate():
         f"system.seg_prompt={seg_prompt}",
         f"data.mmr_seg_prompt={seg_prompt}",
         f"system.target_prompt={target_prompt}",
+        f"system.guidance.target_use_extended_attention={TARGET_USE_EXTENDED_ATTENTION}",
+        f"system.guidance.feature_injection_mode={FEATURE_INJECTION_MODE}",
+        f"system.guidance.per_step_cross_attn_consistency={PER_STEP_CROSS_ATTN_CONSISTENCY}",
+        f"system.guidance.per_step_cross_attn_t_start={PER_STEP_CROSS_ATTN_T_START}",
+        f"system.guidance.per_step_cross_attn_resolutions=[{PER_STEP_CROSS_ATTN_RESOLUTIONS}]",
+        f"system.guidance.target_batch_strategy={TARGET_BATCH_STRATEGY}",
+        f"system.guidance.target_batch_neighbor_threshold={TARGET_BATCH_NEIGHBOR_THRESHOLD}",
+        f"system.guidance.target_batch_late_mode={TARGET_BATCH_LATE_MODE}",
+        f"system.guidance.target_batch_sliding_stride={TARGET_BATCH_SLIDING_STRIDE}",
+        f"system.guidance.target_key_selection_mode={TARGET_KEY_SELECTION_MODE}",
         f"system.mask_thres={MASK_THRES}",
         f"system.mask_max_ratio={MASK_MAX_RATIO}",
         f"system.mask_min_ratio={MASK_MIN_RATIO}",
@@ -657,15 +716,17 @@ def train_and_evaluate():
         f"system.loss.lambda_sds={LAMBDA_SDS}",
         f"system.warp_refine_color_fit_steps={WARP_REFINE_COLOR_FIT_STEPS_DEFAULT}",
         f"system.use_warp_refine={str(USE_WARP_REFINE_DEFAULT).lower()}",
+        f"system.save_image_grid_draw_texts={SAVE_IMAGE_GRID_DRAW_TEXTS}",
         f"data.max_view_num={max_view_num}",
         f"data.max_edit_view_num={max_edit_view_num}",
         f"system.multiview_edit_key_selection_strategy={MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY}",
         f"system.use_multiview_edit={str(USE_MULTIVIEW_EDIT_DEFAULT).lower()}",
         f"system.use_gaussian_provenance={str(USE_GAUSSIAN_PROVENANCE_DEFAULT).lower()}",
-        # f"system.guidance.skip_key_views_in_target_loop={str(SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT).lower()}",
         # f"system.camera_update_per_step={steps}",
         f"system.mask_update_at_step={MASK_UPDATE_AT_STEP}",
         f"system.mask_update_view_num={MASK_UPDATE_VIEW_NUM}",
+        f"system.mask_view_population={MASK_VIEW_POPULATION}",
+        f"system.mask_num_views={MASK_NUM_VIEWS}",
         f"system.prune_floater_at_step={PRUNE_FLOATER_AT_STEP}",
         f"exp_root_dir={EXP_ROOT_DIR}",
         f"name={name}",
@@ -678,8 +739,8 @@ def train_and_evaluate():
     if edit_view_strategy == "lens":
         launch_cmd.extend([
             f"data.lens_ply_path={gs_source}",
-            f"data.lens_seg_prompt={seg_prompt}",
-            f"data.lens_edit_prompt={prompt}",
+            f"data.lens_seg_prompt={task_lens_seg_prompt}",
+            f"data.lens_edit_prompt={task_lens_edit_prompt}",
             f"data.lens_use_ip2p_scoring={LENS_USE_IP2P_SCORING}",
             f"data.lens_entropy_thresh={LENS_ENTROPY_THRESH}",
             f"data.lens_ip2p_steps={LENS_IP2P_STEPS}",
@@ -688,13 +749,13 @@ def train_and_evaluate():
             f"data.lens_ip2p_guidance_scale={LENS_IP2P_GUIDANCE_SCALE}",
             f"data.lens_ip2p_image_guidance_scale={LENS_IP2P_IMAGE_GUIDANCE_SCALE}",
             f"data.lens_hemisphere_only={LENS_HEMISPHERE_ONLY}",
-            f"data.lens_cone_half_angle_deg={LENS_CONE_HALF_ANGLE_DEG}",
-            f"data.lens_v_front_method={LENS_V_FRONT_METHOD}",
+            f"data.lens_cone_half_angle_deg={task_lens_cone_half_angle}",
+            f"data.lens_v_front_method={task_lens_v_front_method}",
             f"data.lens_n_candidates={LENS_N_CANDIDATES}",
-            f"data.lens_diversity_x_weight={LENS_DIVERSITY_X_WEIGHT}",
-            f"data.lens_diversity_y_variance_weight={LENS_DIVERSITY_Y_VARIANCE_WEIGHT}",
+            f"data.lens_diversity_x_weight={task_lens_diversity_x_weight}",
+            f"data.lens_diversity_y_variance_weight={task_lens_diversity_y_variance_weight}",
             f"data.lens_ip2p_batch_size={LENS_IP2P_BATCH_SIZE}",
-            f"data.lens_distance_multipliers={LENS_DISTANCE_MULTIPLIERS}",
+            f"data.lens_distance_multipliers={task_lens_distance_multipliers}",
             f"system.guidance.camera_batch_size={CAMERA_BATCH_SIZE}",
         ])
 

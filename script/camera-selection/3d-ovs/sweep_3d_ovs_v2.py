@@ -79,7 +79,6 @@ FEATURE_INJECTION_MODE = "similarity" # `"similarity"`(내 논문) , `"3d_anchor
 MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY = "lens_fps"
 USE_MULTIVIEW_EDIT_DEFAULT = True
 USE_GAUSSIAN_PROVENANCE_DEFAULT = False
-# SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT = False
 
 LENS_USE_IP2P_SCORING = "true"
 LENS_IP2P_STEPS = "5"
@@ -679,7 +678,6 @@ def train_and_evaluate():
         f"system.multiview_edit_key_selection_strategy={MULTIVIEW_EDIT_KEY_SELECTION_STRATEGY}",
         f"system.use_multiview_edit={str(USE_MULTIVIEW_EDIT_DEFAULT).lower()}",
         f"system.use_gaussian_provenance={str(USE_GAUSSIAN_PROVENANCE_DEFAULT).lower()}",
-        f"system.guidance.skip_key_views_in_target_loop={str(SKIP_KEY_VIEWS_IN_TARGET_LOOP_DEFAULT).lower()}",
         f"data.edit_view_selection_strategy={strategy}",
         f"data.lens_ply_path={gs_source}",
         f"data.lens_seg_prompt={seg_prompt}",

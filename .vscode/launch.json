@@ -113,11 +113,11 @@
                 // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
 
                 // man -> clown
-                "system.prompt_processor.prompt=Turn the man into a clown",
-                "data.lens_edit_prompt=Turn the man into a clown",
+                "system.prompt_processor.prompt=Turn the man's face into a clown",
+                "data.lens_edit_prompt=Turn the man's face into a clown",
                 "system.seg_prompt=a face",
                 "data.mmr_seg_prompt=a face",
-                "data.lens_seg_prompt=a face",
+                "data.lens_seg_prompt=a face", // face of the man은 안됨!!!
                 "system.target_prompt=clown",
 
 
@@ -182,7 +182,8 @@
 
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=0.1,0.3", // bear(bear가 커서 멀리 있어야 함)
-                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face
+                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face: 
+                "data.lens_distance_multipliers=3.0", // man face: 3.5
                 // "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! 
 
                 "system.save_image_grid_draw_texts=false",
@@ -336,6 +337,14 @@
                 // "data.lens_seg_prompt=white baseball",
                 // "system.target_prompt=yellow tennis ball",
             
+                // Change the baseball to a solid golden ball
+                // "system.prompt_processor.prompt=Change the baseball to a solid golden ball",
+                // "data.lens_edit_prompt=Change the baseball to a solid golden ball",
+                // "system.seg_prompt=white baseball",
+                // "data.mmr_seg_prompt=white baseball",
+                // "data.lens_seg_prompt=white baseball",
+                // "system.target_prompt=solid golden ball",
+
                 // room: rabit -> wear sunglasses
                 "system.prompt_processor.prompt=Give the rabbit figure a pair of small sunglasses",
                 "data.lens_edit_prompt=Give the rabbit figure a pair of small sunglasses",
@@ -349,7 +358,7 @@
                 // "data.lens_edit_prompt=Add a blue colored bow tie to the neck of chicken",
                 // "system.seg_prompt=neck of the yellow rubber chicken",
                 // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
-                // "data.lens_seg_prompt=neck of the yellow rubber chicken",
+                // "data.lens_seg_prompt=yellow rubber chicken",
                 // "system.target_prompt=a blue colored bow tie on the neck of chicken",
                 
                 // "system.prompt_processor.prompt=Add a big blue ribbon to the rubber chicken's neck",
@@ -367,7 +376,23 @@
                 // "data.lens_seg_prompt=neck of the yellow rubber chicken",
                 // "system.target_prompt=a big bow tie on the rubber chicken's neck",
 
+                // room: basket with stipe patterns
+                // "system.prompt_processor.prompt=Change the basket material to blue striped patterns",
+                // "data.lens_edit_prompt=Change the basket material to striped patterns",
+                // "system.seg_prompt=woven basket",
+                // "data.mmr_seg_prompt=woven basket",
+                // "data.lens_seg_prompt=woven basket",
+                // "system.target_prompt=striped woven basket",
                 
+                // room: dino_green - dinosaur figure to green
+                // "system.prompt_processor.prompt=Change the dinosaur figure to green",
+                // "data.lens_edit_prompt=Change the dinosaur figure to green",
+                // "system.seg_prompt=brown dinosaur figure",
+                // "data.mmr_seg_prompt=brown dinosaur figure",
+                // "data.lens_seg_prompt=brown dinosaur figure",
+                // "system.target_prompt=green dinosaur figure",
+                
+                // blue_sofa ------------------------------------------------------------
                 // blue_sofa: plush toy -> tiger stripes
                 // "system.prompt_processor.prompt=Change the plush toy's look like a tiger",
                 // "data.lens_edit_prompt=Change the plush toy's look like a tiger",
@@ -376,27 +401,36 @@
                 // "data.lens_seg_prompt=plush toy",
                 // "system.target_prompt=tiger plush toy",
                 
-                // room: basket with stipe patterns
-                // "system.prompt_processor.prompt=Change the basket material to blue striped patterns",
-                // "data.lens_edit_prompt=Change the basket material to striped patterns",
-                // "system.seg_prompt=woven basket",
-                // "data.mmr_seg_prompt=woven basket",
-                // "data.lens_seg_prompt=woven basket",
-                // "system.target_prompt=striped woven basket",
+                // blue_sofa: Change the perfume liquid color to blue
+                // "system.prompt_processor.prompt=Change the perfume liquid color to blue",
+                // "data.lens_edit_prompt=Change the perfume liquid color to blue",
+                // "system.seg_prompt=yellow liquid inside the perfume bottle",
+                // "data.mmr_seg_prompt=yellow liquid inside the perfume bottle",
+                // "data.lens_seg_prompt=the perfume bottle",
+                // "system.target_prompt=ocean blue liquid inside the perfume bottle",
+                
+                // Change the sunglasses to red frames
+                // "system.prompt_processor.prompt=Change the sunglasses to red frames",
+                // "data.lens_edit_prompt=Change the sunglasses to red frames",
+                // "system.seg_prompt=black frames of the sunglasses",
+                // "data.mmr_seg_prompt=black frames of the sunglasses",
+                // "data.lens_seg_prompt=sunglasses",
+                // "system.target_prompt=bright red frames of the sunglasses",
 
-                // room: dino_green - dinosaur figure to green
-                // "system.prompt_processor.prompt=Change the dinosaur figure to green",
-                // "data.lens_edit_prompt=Change the dinosaur figure to green",
-                // "system.seg_prompt=brown dinosaur figure",
-                // "data.mmr_seg_prompt=brown dinosaur figure",
-                // "data.lens_seg_prompt=brown dinosaur figure",
-                // "system.target_prompt=green dinosaur figure",
+                // Change the speaker to a shiny gold texture
+                // "system.prompt_processor.prompt=Change the speaker to a shiny gold texture",
+                // "data.lens_edit_prompt=Change the speaker to a shiny gold texture",
+                // "system.seg_prompt=grey speaker body",
+                // "data.mmr_seg_prompt=grey speaker body",
+                // "data.lens_seg_prompt=grey speaker body",
+                // "system.target_prompt=shiny metallic gold speaker body",
 
-                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=1.0,1.5,2.0,2.5", // room: chicken, basket
+                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
+                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5",
+                "data.lens_distance_multipliers=2.5",
                 // "data.lens_distance_multipliers=0.5, 1.0, 1.5, 2.0", // room: chicken, basket
-                "data.lens_distance_multipliers=1.6", // 하나로 지정해보기!! -> rabbit sunglasses 1.6, dino green 4.0
-                // "data.lens_distance_multipliers=2.0,2.5,3.0,4.0,5.0,6.0",
+                // "data.lens_distance_multipliers=1.6", // 하나로 지정해보기!! -> rabbit sunglasses 1.6, dino green 4.0
 
                 "data.lens_use_ip2p_scoring=true",
                 "data.lens_entropy_thresh=0.97",
@@ -406,6 +440,7 @@
                 "data.lens_ip2p_guidance_scale=7.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
                 "data.lens_cone_half_angle_deg=30", // rabit sunglasses: 30, ducl: 30
+                "data.lens_hemisphere_only=true",    
                 "system.guidance.camera_batch_size=5",
                 
                 "system.guidance.guidance_scale=12.5",
@@ -424,9 +459,9 @@
                 "data.lens_diversity_x_weight=60.0",
                 "data.lens_diversity_y_variance_weight=3.0",
 
-                "system.guidance.target_use_extended_attention=true", //# SA
+                "system.guidance.target_use_extended_attention=false", //# SA
                 "system.guidance.feature_injection_mode=similarity",
-                "system.guidance.per_step_cross_attn_consistency=true", //# CA
+                "system.guidance.per_step_cross_attn_consistency=false", //# CA
                 "system.guidance.per_step_cross_attn_t_start=500",
                 "system.guidance.per_step_cross_attn_resolutions=[1024]",
                 "system.guidance.target_batch_strategy=adaptive",
@@ -461,8 +496,8 @@
                 "system.mask_num_views=30",
                 "system.mask_update_view_num=30",
                 "system.mask_update_at_step=300",
-                "data.max_view_num=20",
-                "data.max_edit_view_num=20",
+                "data.max_view_num=15",
+                "data.max_edit_view_num=15",
 
 
 

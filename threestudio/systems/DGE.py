@@ -2420,6 +2420,7 @@ class DGE(BaseLift3DSystem):
             name="origin",
             step=self.true_global_step,
         )
+        threestudio.info(f"origin_images saved to: {self.get_save_path('origin_images.png')}")
 
         if len(self.cfg.seg_prompt) > 0:
             self.update_mask(self.cfg.seg_prompt)
