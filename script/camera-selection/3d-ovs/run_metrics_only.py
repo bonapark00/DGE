@@ -10,17 +10,20 @@ import subprocess
 from pathlib import Path
 from typing import List
 
-OUTPUT_DIR = "/data/users/jaeyeonpark/DGE-outputs/camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room/20/Change_the_baseball_to_a_solid_golden_ball@20260305-105450"
+OUTPUT_DIR = "/data/users/jaeyeonpark/DGE-outputs/main/iter1/Make_dinosaur_color_into_green@20260306-003234"
 
 MAX_STEPS = "1500"
-GPU = "0"
+GPU = "1"
 DATA_TYPE = "3d-ovs"
 DATA_NAME = "room"
 EDIT_VIEW_SELECTION_STRATEGY = "lens"
 GT_DIR  = f"/data/users/jaeyeonpark/3dgs-trained/{DATA_TYPE}/{DATA_NAME}/colmap_render_full"
 STYLE_IMAGE = ""
-STYLE_TARGET_PROMPT = "solid golden ball"
-STYLE_SOURCE_PROMPT = "white baseball"
+# STYLE_SOURCE_PROMPT = "white baseball"
+# STYLE_TARGET_PROMPT = "solid golden ball"
+
+STYLE_SOURCE_PROMPT = "brown dinosaur figure"
+STYLE_TARGET_PROMPT = "green dinosaur figure"
 INTERVAL = 1
 DEVICE = "cuda"
 
