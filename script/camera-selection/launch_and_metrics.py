@@ -41,6 +41,20 @@ SEG_PROMPT = "A man"
 TARGET_PROMPT = "Fashion sunglasses"
 TARGET_PROMPT = "A man with a leather jacket"
 
+
+PROMPT = "Make the man wear fashion sunglasses"
+PROMPT = "Turn the man's fleece jacket into a leather jacket"
+
+DATA_SOURCE = "/working/style-transfer/VcEdit/gs_data/face/"
+GS_SOURCE = "/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply"
+GUIDANCE_SCALE = "12.5"
+SEG_PROMPT = "A man"
+
+# TARGET_PROMPT = "A man with curly hair in a checkered cloth"
+# TARGET_PROMPT = "A spider man with a mask and curly hair"
+TARGET_PROMPT = "Fashion sunglasses"
+TARGET_PROMPT = "A man with a leather jacket"
+
 MASK_THRES = "0.6"
 LAMBDA_D = "10.0"
 MAX_VIEW_NUM = "25"
