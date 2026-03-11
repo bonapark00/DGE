@@ -197,8 +197,15 @@
 
                 "data.lens_ip2p_guidance_scale=7.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
-                "data.lens_hemisphere_only=true",    
+                // NOTE: lens_hemisphere_only is no longer used (generate_by_lens uses cone_half_angle_deg only)
+                // "data.lens_hemisphere_only=true",
                 "data.lens_cone_half_angle_deg=60", // 60: man
+                // When cone_half_angle_deg>=180, restrict candidate elevation band around XZ plane
+                "data.lens_elevation_band_deg=30",
+                // ROI binarization threshold for LangSAM 3D mask (fallbacks to lens_seg_threshold if unset)
+                "data.lens_roi_threshold=0.4",
+                // Overlay numeric labels on attention grid (only matters if you save grids)
+                "data.lens_attn_grid_show_labels=false",
                 "system.guidance.camera_batch_size=5",
                 "data.lens_v_front_method=scene_center",
                 "data.lens_n_candidates=900",
@@ -440,7 +447,14 @@
                 "data.lens_ip2p_guidance_scale=7.5",
                 "data.lens_ip2p_image_guidance_scale=1.5",
                 "data.lens_cone_half_angle_deg=30", // rabit sunglasses: 30, ducl: 30
-                "data.lens_hemisphere_only=true",    
+                // NOTE: lens_hemisphere_only is no longer used (generate_by_lens uses cone_half_angle_deg only)
+                // "data.lens_hemisphere_only=true",
+                // When cone_half_angle_deg>=180, restrict candidate elevation band around XZ plane
+                "data.lens_elevation_band_deg=30",
+                // ROI binarization threshold for LangSAM 3D mask (fallbacks to lens_seg_threshold if unset)
+                "data.lens_roi_threshold=0.4",
+                // Overlay numeric labels on attention grid (only matters if you save grids)
+                "data.lens_attn_grid_show_labels=false",
                 "system.guidance.camera_batch_size=5",
                 "data.lens_ip2p_batch_size=2",
 

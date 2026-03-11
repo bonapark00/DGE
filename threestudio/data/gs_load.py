@@ -1563,7 +1563,7 @@ def _lens_compute_roi_mask_from_segmentation(gaussians, prompt, pipe_params, bac
     return roi_mask
 
 
-def _lens_simple_camera_to_c2w(simple_cam: "Simple_Camera") -> np.ndarray:
+def _lens_simple_camera_to_c2w(simple_cam) -> np.ndarray:
     R = simple_cam.R
     cam_center = (-R @ np.array(simple_cam.T, dtype=np.float32)).astype(np.float32)
     c2w = np.eye(4, dtype=np.float32)
@@ -2833,7 +2833,16 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
         dist_mults = [float(x) for x in self.cfg.lens_distance_multipliers.split(",")]
 
         def _run_lens():
-            return _lens_run_generate_by_lens_pipeline(
+            # Use the canonical implementation in generate_by_lens.py so behavior stays in sync.
+            # (We intentionally skip any intermediate image/video saving here.)
+            from generate_by_lens import run_generate_by_lens_pipeline
+
+            # Backward-compatible mapping: older configs used lens_seg_threshold for 3D ROI threshold.
+            roi_threshold = getattr(self.cfg, "lens_roi_threshold", None)
+            if roi_threshold is None:
+                roi_threshold = getattr(self.cfg, "lens_seg_threshold", 0.4)
+
+            return run_generate_by_lens_pipeline(
                 gaussians=gaussians,
                 cam_centers=cam_centers,
                 cam_forwards=cam_forwards,
@@ -2848,8 +2857,8 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 distance_multipliers=dist_mults,
                 n_candidates=self.cfg.lens_n_candidates,
                 n_select=max_view_num,
-                hemisphere_only=self.cfg.lens_hemisphere_only,
                 cone_half_angle_deg=self.cfg.lens_cone_half_angle_deg,
+                elevation_band_deg=getattr(self.cfg, "lens_elevation_band_deg", 30.0),
                 w_vis=self.cfg.lens_w_vis,
                 w_can=self.cfg.lens_w_can,
                 top_fraction=self.cfg.lens_top_fraction,
@@ -2858,15 +2867,12 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 lambda_leak=self.cfg.lens_lambda_leak,
                 lambda_ent=self.cfg.lens_lambda_ent,
                 entropy_thresh=self.cfg.lens_entropy_thresh,
-                ip2p_steps=self.cfg.lens_ip2p_steps,
-                ip2p_guidance_scale=self.cfg.lens_ip2p_guidance_scale,
-                ip2p_image_guidance_scale=self.cfg.lens_ip2p_image_guidance_scale,
                 ip2p_batch_size=self.cfg.lens_ip2p_batch_size,
+                roi_threshold=float(roi_threshold),
                 override_opacity=override_opacity,
                 device=device,
-                latency_logger=self.latency_logger,
-                segmentor=self.segmentor,
                 v_front_method=getattr(self.cfg, "lens_v_front_method", "colmap_mean"),
+                attn_grid_show_labels=getattr(self.cfg, "lens_attn_grid_show_labels", False),
             )
         if self.latency_logger is not None:
             with self.latency_logger.timeit("camera_generation"):

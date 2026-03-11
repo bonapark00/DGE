@@ -22,66 +22,59 @@ Outputs:
 """
 
 """
+# ---------------------------------------------------------------------------
+# Example commands (grouped by --colmap_path)
+# ---------------------------------------------------------------------------
+
+# [3d-ovs/covered_desk]  --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
         --seg_prompt "head of the pooh" \
         --edit_prompt "Make the pooh wear sunglasses on his eyes" \
         --use_ip2p_scoring \
-        --distance_multipliers "5.0, 6.0, 7.0, 8.0, 9.0, 10.0" \
+        --distance_multipliers "5.0, 6.0, 7.0, 8.0," \
         --visualize_roi \
         --n_select 20 \
         --guidance_scale 7.5 \
         --save_attn_grid output/attn_grid_pooh_sunglasses.jpg \
         --gpu 0 \
         --v_front_method scene_center \
-        --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
-        
+        --num_inference_steps 5 --ip2p_batch_size 2 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
 
- python generate_by_lens.py \
+python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
-        --seg_prompt "red sweater" \
-        --edit_prompt "Change the red sweater into a leather jacket" \
+        --seg_prompt "pooh" \
+        --edit_prompt "Make the pooh look like a robot" \
         --use_ip2p_scoring \
-        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --distance_multipliers "5, 6, 7, 8" \
         --visualize_roi \
         --n_select 20 \
-        --save_attn_grid output/attn_grid.jpg \
-        --gpu 0
-        # --save_colmap output/lens_colmap \
-        # --video_path output/lens_claude.mp4 \
+        --save_attn_grid output/attn_grid_pooh_robot.jpg \
+        --gpu 1 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --ip2p_batch_size 2 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
 
- python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
-        --seg_prompt "head of the pooh" \
-        --edit_prompt "Make the pooh wear sunglasses on his eyes" \
-        --use_ip2p_scoring \
-        --distance_multipliers "5.0, 6.0, 7.0, 8.0, 9.0, 10.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --guidance_scale 4.0 \
-        --save_attn_grid output/attn_grid_pooh_sunglasses.jpg \
-        --gpu 0 \
-        --v_front_method scene_center
-        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
-
- python generate_by_lens.py \
+python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
         --seg_prompt "sweater of the pooh" \
-        --edit_prompt "Change the sweather of the pooh into a fleece jacket" \
+        --edit_prompt "Change the color of the sweater into blue" \
         --use_ip2p_scoring \
-        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
+        --distance_multipliers "5, 6, 7, 8" \
         --visualize_roi \
         --n_select 20 \
-        --guidance_scale 4.0 \
-        --save_attn_grid output/attn_grid_pooh_sweater_to_leather_jacket.jpg \
-        --gpu 1 \
-        --v_front_method scene_center
- 
- python generate_by_lens.py \
+        --save_attn_grid output/attn_grid_sweater_blue.jpg \
+        --gpu 0 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --ip2p_batch_size 2 --guidance_scale 5.5 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+
+
+python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/covered_desk \
         --seg_prompt "pooh" \
@@ -96,32 +89,21 @@ python generate_by_lens.py \
         --v_front_method scene_center
 
 
- python generate_by_lens.py \
+# [3d-ovs/room]  --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room
+python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
-        --seg_prompt "eyes of the rabbit" \
-        --edit_prompt "Make the rabbit wear sunglasses on his eyes" \
+        --seg_prompt "grey rabbit figure" \
+        --edit_prompt "Give the rabbit figure a pair of small sunglasses" \
         --use_ip2p_scoring \
-        --distance_multipliers "0.2, 0.5, 0.7, 1.0, 2.0" \
+        --distance_multipliers "5, 6, 7, 8" \
         --visualize_roi \
         --n_select 20 \
         --save_attn_grid output/attn_grid_rabbit_sunglasses.jpg \
         --gpu 1 \
         --v_front_method scene_center \
-        --guidance_scale 6.0
-
-python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
-        --seg_prompt "face of the grey rabbit figure" \
-        --edit_prompt "Give the rabbit figure a pair of small sunglasses" \
-        --use_ip2p_scoring \
-        --distance_multipliers "0.7, 1.0, 1.5, 2.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --save_attn_grid output/attn_grid_rabbit_sunglasses.jpg \
-        --gpu 1 \
-        --v_front_method scene_center --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0
+        --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
@@ -134,10 +116,10 @@ python generate_by_lens.py \
         --n_select 20 \
         --save_attn_grid output/attn_grid_rabbit_bow_tie.jpg \
         --gpu 1 \
-        --v_front_method scene_center --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0
+        --v_front_method scene_center \
+        --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0
 
-
- python generate_by_lens.py \
+python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/room \
         --seg_prompt "dinosaur" \
@@ -148,72 +130,10 @@ python generate_by_lens.py \
         --n_select 20 \
         --save_attn_grid output/attn_grid_dino_green.jpg \
         --gpu 1 \
-        --v_front_method scene_center --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0
-
-
-     python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
-        --seg_prompt "man" \
-        --edit_prompt "Turn the man into a spiderman with a mask" \
-        --use_ip2p_scoring \
-        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --save_attn_grid output/attn_grid_man_to_spiderman.jpg \
-        --gpu 3 \
         --n_candidates 900 \
         --v_front_method scene_center \
+        --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0 \
         --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
-  
-        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
-
-python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
-        --seg_prompt "a face" \
-        --edit_prompt "Turn the man into a clown" \
-        --use_ip2p_scoring \
-        --distance_multipliers "3.0, 3.5, 4.0, 4.5, 5.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --save_attn_grid output/attn_grid_man_to_clown.jpg \
-        --gpu 2 \
-        --n_candidates 900 \
-        --v_front_method scene_center \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 \
-        --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
-  
-python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
-        --seg_prompt "speaker" \
-        --edit_prompt "Change the speaker to a shiny gold texture" \
-        --use_ip2p_scoring \
-        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --guidance_scale 5.5 \
-        --save_attn_grid output/attn_grid_speaker_to_gold.jpg \
-        --gpu 0 \
-        --v_front_method scene_center \
-        --num_inference_steps 5 --guidance_scale 5.5 --ip2p_batch_size 2
-  
-python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
-        --seg_prompt "plush toy" \
-        --edit_prompt "Change the plush toy's color to pink" \
-        --use_ip2p_scoring \
-        --distance_multipliers "3.0, 4.0, 5.0, 6.0, 7.0" \
-        --visualize_roi \
-        --n_select 20 \
-        --guidance_scale 5.5 \
-        --save_attn_grid output/attn_grid_plush_toy_pink.jpg \
-        --gpu 1 \
-        --v_front_method scene_center \
-        --num_inference_steps 5 --guidance_scale 5.5 --ip2p_batch_size 2
-  
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
@@ -228,43 +148,113 @@ python generate_by_lens.py \
         --gpu 0 \
         --v_front_method scene_center --guidance_scale 7.5 \
         --n_candidates 900 \
-        --v_front_method scene_center \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
 
+
+# [in2n-GSEditor/face]  --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face
 python generate_by_lens.py \
-        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply \
-        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/bear \
-        --seg_prompt "the bear's face" \
-        --edit_prompt "Change the yellow face markings to red" \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
+        --seg_prompt "man" \
+        --edit_prompt "Turn the man into a spiderman with a mask" \
         --use_ip2p_scoring \
-        --distance_multipliers "0.1,0.3,0.5,1.0" \
+        --distance_multipliers "2.0, 2.5, 3.0, 4.0, 5.0, 6.0" \
         --visualize_roi \
         --n_select 20 \
-        --save_attn_grid output/attn_grid_bear_markings_red.jpg \
-        --gpu 1 \
-        --v_front_method scene_center --guidance_scale 7.5 \
+        --save_attn_grid output/attn_grid_man_to_spiderman.jpg \
+        --gpu 3 \
         --n_candidates 900 \
-        --cone_half_angle_deg 180 \
         --v_front_method scene_center \
-         --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
 
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face \
+        --seg_prompt "a face" \
+        --edit_prompt "Turn the man into a clown" \
+        --use_ip2p_scoring \
+        --distance_multipliers "1.0, 2.0, 3.0, 4.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --save_attn_grid output/attn_grid_man_to_clown.jpg \
+        --gpu 2 \
+        --n_candidates 900 \
+        --v_front_method scene_center \
+        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 \
+        --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
+
+
+# [3d-ovs/blue_sofa]  --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
+        --seg_prompt "speaker" \
+        --edit_prompt "Change the speaker to a shiny gold texture" \
+        --use_ip2p_scoring \
+        --distance_multipliers "3, 4, 5, 6" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 5.5 \
+        --save_attn_grid output/attn_grid_speaker_to_gold.jpg \
+        --gpu 0 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --ip2p_batch_size 2 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
+        --seg_prompt "brown plush toy" \
+        --edit_prompt "Change the plush toy's color to pink" \
+        --use_ip2p_scoring \
+        --distance_multipliers "5.0, 6.0, 7.0, 8.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 5.5 \
+        --save_attn_grid output/attn_grid_plush_toy_pink.jpg \
+        --gpu 1 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --ip2p_batch_size 2 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+
+python generate_by_lens.py \
+        --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
+        --colmap_path /data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa \
+        --seg_prompt "black frames of the sunglasses" \
+        --edit_prompt "Change the sunglasses to red frames" \
+        --use_ip2p_scoring \
+        --distance_multipliers "5.0, 6.0, 7.0, 8.0" \
+        --visualize_roi \
+        --n_select 20 \
+        --guidance_scale 5.5 \
+        --save_attn_grid output/attn_grid_sunglasses_red_frames.jpg \
+        --gpu 1 \
+        --v_front_method scene_center \
+        --num_inference_steps 5 --ip2p_batch_size 2 \
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+
+
+
+
+
+# [in2n-GSEditor/bear]  --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/bear
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply \
         --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/bear \
-        --seg_prompt "the entire bear statue" \
+        --seg_prompt "bear statue" \
         --edit_prompt "Change the material of the bear statue to bronze" \
         --use_ip2p_scoring \
-        --distance_multipliers "0.1,0.3,0.5,1.0" \
+        --distance_multipliers "1.0, 1.5, 2.0, 2.5" \
         --visualize_roi \
         --n_select 20 \
         --save_attn_grid output/attn_grid_bear_statue_bronze.jpg \
-        --gpu 1 \
-        --v_front_method scene_center --guidance_scale 7.5 \
+        --gpu 2 \
+        --v_front_method scene_center --num_inference_steps 5 --guidance_scale 7.5 \
         --n_candidates 900 \
         --cone_half_angle_deg 180 \
-        --v_front_method scene_center \
-        --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 
-
+        --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 --roi_threshold 0.995 \
+        --elevation_band_deg 20
 
 """
 
@@ -330,6 +320,15 @@ from gaussiansplatting.utils.graphics_utils import (
     getWorld2View2,
 )
 from threestudio.utils.latency import LatencyLogger
+
+
+def _log_saved_path(path: str, tag: str = "save") -> None:
+    """Log saved file paths in a consistent, greppable format."""
+    try:
+        abs_path = os.path.abspath(path)
+    except Exception:
+        abs_path = str(path)
+    print(f"[{tag}] {abs_path}")
 
 
 @contextmanager
@@ -587,6 +586,18 @@ def roi_intrinsic_analysis(
         object_size=object_size,
         v_front=v_front,
     )
+
+
+def _v_front_from_colmap_view(roi_center: np.ndarray, cam_centers: np.ndarray) -> np.ndarray:
+    """When cone is full sphere (180°), v_front from PCA is meaningless. Return unit direction
+    from roi_center to one randomly chosen COLMAP camera."""
+    i = int(np.random.randint(0, len(cam_centers)))
+    d = (cam_centers[i] - roi_center).astype(np.float64)
+    n = np.linalg.norm(d)
+    if n < 1e-8:
+        d = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+        n = 1.0
+    return (d / n).astype(np.float32)
 
 
 # ===================================================================
@@ -1219,6 +1230,9 @@ def _run_ip2p_unified(
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
+    w_edit: float = 10.0,
+    lambda_sa: float = 10.0,
+    sage_alpha: float = 0.7,
     num_steps: int = 20,
     seed: Optional[int] = None,
     guidance_scale: float = 7.5,
@@ -1277,6 +1291,9 @@ def _run_ip2p_unified(
         if A_16 is not None:
             sage_score, sage_details = _compute_sage_score(
                 A_16, roi_mask_2d,
+                w_edit=w_edit,
+                lambda_sa=lambda_sa,
+                sage_alpha=sage_alpha,
                 lambda_leak=lambda_leak,
                 lambda_ent=lambda_ent,
                 entropy_thresh=entropy_thresh,
@@ -1318,6 +1335,9 @@ def _run_ip2p_unified_batch(
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
+    w_edit: float = 10.0,
+    lambda_sa: float = 10.0,
+    sage_alpha: float = 0.7,
     num_steps: int = 20,
     seed: Optional[int] = None,
     guidance_scale: float = 7.5,
@@ -1426,6 +1446,9 @@ def _run_ip2p_unified_batch(
             if A_16 is not None:
                 sage_score, sage_details = _compute_sage_score(
                     A_16, mask_2d,
+                    w_edit=w_edit,
+                    lambda_sa=lambda_sa,
+                    sage_alpha=sage_alpha,
                     lambda_leak=lambda_leak,
                     lambda_ent=lambda_ent,
                     entropy_thresh=entropy_thresh,
@@ -1455,6 +1478,9 @@ def _run_ip2p_unified_batch(
 def _compute_sage_score(
     A_spatial: torch.Tensor,
     roi_mask_2d: torch.Tensor,
+    w_edit: float = 10.0,
+    lambda_sa: float = 10.0,
+    sage_alpha: float = 0.7,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
@@ -1462,21 +1488,18 @@ def _compute_sage_score(
     occupancy_hi: float = 0.70,
     size_penalty_val: float = 1.0,
     sa_leakage: float = 0.0,
-    lambda_sa: float = 5.0,
 ) -> Tuple[float, Dict]:
     """
-    SAGE v2 scoring with Contrast + Thresholded Precision-Recall + SA Leakage.
+    Unified SAGE score (report §3.3.2).
 
-    Cross-attention shows *where the text directs edits*, but actual edit signal
-    propagates through self-attention. SA leakage measures how much BG pixels
-    attend to ROI pixels, predicting unwanted background changes.
-
-    Computes:
-      S_total = contrast * precision_f1 - λ₁·leakage_top90 - λ_sa·sa_leakage - Penalty_size
+    S = w_edit * F1 * (1 - ca_leak_top90) - lambda_sa * (sa_leakage / occupancy^alpha)
 
     Args:
         A_spatial: (H_a, W_a) raw cross-attention map (will be resized to mask).
         roi_mask_2d: (1, H, W) binary ROI mask.
+        w_edit: CA localization quality weight.
+        lambda_sa: SA leakage penalty weight.
+        sage_alpha: occupancy normalization exponent alpha in (0, 1].
         lambda_leak: weight for CA leakage penalty.
         lambda_ent: (unused, kept for API compatibility).
         entropy_thresh: (unused, kept for API compatibility).
@@ -1484,7 +1507,6 @@ def _compute_sage_score(
         occupancy_hi: maximum acceptable occupancy ratio.
         size_penalty_val: penalty value for out-of-range occupancy.
         sa_leakage: self-attention propagation leakage score (0-1).
-        lambda_sa: weight for SA leakage penalty (default 2.0).
 
     Returns:
         (total_score, details_dict) where details_dict contains individual metrics.
@@ -1527,7 +1549,7 @@ def _compute_sage_score(
     # Instead of mean background attention, capture the strongest leak.
     bg_attention = A[bg > 0.5]
     if bg_attention.numel() > 0:
-        leakage_top90 = float(bg_attention.quantile(0.9))
+        leakage_top90 = float(bg_attention.quantile(0.99))
     else:
         leakage_top90 = 0.0
 
@@ -1541,12 +1563,14 @@ def _compute_sage_score(
     focus = float((A * M).sum() / (A.sum() + 1e-8))
 
     # --- Final Score ---
-    total_score = (
-        contrast * precision_f1
-        - (lambda_leak * leakage_top90)
-        - (lambda_sa * sa_leakage)
-        - size_penalty
-    )
+    ca_leak = float(np.clip(leakage_top90, 0.0, 1.0))
+    f1 = float(np.clip(precision_f1, 0.0, 1.0))
+    occ = max(float(occupancy), 0.0)
+    alpha = float(sage_alpha)
+    if not (0.0 < alpha <= 1.0):
+        alpha = 0.7
+    sigma_tilde = float(sa_leakage) / (pow(occ, alpha) + 1e-8)
+    total_score = (float(w_edit) * f1 * (1.0 - ca_leak)) - (float(lambda_sa) * sigma_tilde) - float(size_penalty)
 
     details = dict(
         focus=focus,
@@ -1554,6 +1578,7 @@ def _compute_sage_score(
         precision_f1=precision_f1,
         leakage=leakage_top90,
         sa_leakage=sa_leakage,
+        sa_leakage_tilde=sigma_tilde,
         entropy=0.0,  # kept for API compatibility
         occupancy=occupancy,
         size_penalty=size_penalty,
@@ -1788,7 +1813,7 @@ def _save_attention_grid(
 
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     canvas.save(save_path)
-    print(f"[Step2] Attention grid saved to {save_path}")
+    _log_saved_path(save_path, tag="save.attn_grid")
 
 
 def _save_sa_grid(
@@ -1843,7 +1868,7 @@ def _save_sa_grid(
 
     os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     canvas.save(save_path)
-    print(f"[Step2] SA grid saved to {save_path}")
+    _log_saved_path(save_path, tag="save.sa_grid")
 
 
 @torch.no_grad()
@@ -1862,6 +1887,9 @@ def scale_probing(
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
+    w_edit: float = 10.0,
+    lambda_sa: float = 10.0,
+    sage_alpha: float = 0.7,
     override_opacity: Optional[torch.Tensor] = None,
     save_attn_grid: Optional[str] = None,
     save_sa_grid: Optional[str] = None,
@@ -1940,6 +1968,7 @@ def scale_probing(
                 batch_size=ip2p_batch_size,
                 lambda_leak=lambda_leak, lambda_ent=lambda_ent,
                 entropy_thresh=entropy_thresh,
+                w_edit=w_edit, lambda_sa=lambda_sa, sage_alpha=sage_alpha,
                 num_steps=ip2p_num_inference_steps, seed=per_view_seed,
                 guidance_scale=ip2p_guidance_scale,
                 image_guidance_scale=ip2p_image_guidance_scale,
@@ -1967,6 +1996,7 @@ def scale_probing(
                         rgb, mask_2d, ip2p_pipe, edit_prompt,
                         lambda_leak=lambda_leak, lambda_ent=lambda_ent,
                         entropy_thresh=entropy_thresh,
+                        w_edit=w_edit, lambda_sa=lambda_sa, sage_alpha=sage_alpha,
                         num_steps=ip2p_num_inference_steps, seed=per_view_seed,
                         guidance_scale=ip2p_guidance_scale,
                         image_guidance_scale=ip2p_image_guidance_scale,
@@ -1987,58 +2017,31 @@ def scale_probing(
                 )
             results.append((mult, d, score, details))
 
-    # --- Phase 3: Two-phase SAGE selection ---
-    # Phase 3a: SA Containment Filter
-    #   Compute mean(sa_leak) across all candidates; keep only those with sa_leak <= mean.
-    #   This eliminates views where self-attention spreads the edit signal to the background.
-    # Phase 3b: Attention Quality Ranking
-    #   Among filtered candidates, pick the one with highest F1 * (1 - ca_leak).
-    #   F1 measures how well the high-attention region covers the ROI.
-    #   (1 - ca_leak) penalises strong background cross-attention activation.
-
-    sa_vals = [
-        details.get("sa_leakage", 0.0) for _, _, _, details in results
-    ]
-    sa_threshold = sum(sa_vals) / len(sa_vals) if sa_vals else 0.0
-
     for mult, d, score, details in results:
         contrast_str = f"  contrast={details['contrast']:.3f}" if 'contrast' in details else ""
         pf1_str = f"  pF1={details['precision_f1']:.3f}" if 'precision_f1' in details else ""
         sa_str = f"  sa_leak={details['sa_leakage']:.3f}" if 'sa_leakage' in details else ""
+        st_str = f"  sa_tilde={details['sa_leakage_tilde']:.3f}" if 'sa_leakage_tilde' in details else ""
         ca_str = f"  ca_leak={details['leakage']:.3f}" if 'leakage' in details else ""
-        new_score = details.get("precision_f1", 0.0) * (1.0 - details.get("leakage", 0.0))
-        passed = details.get("sa_leakage", 0.0) <= sa_threshold
         print(
             f"[Step2]  d={d:.4f} ({mult}x) | "
             f"focus={details['focus']:.3f}"
-            f"{contrast_str}{pf1_str}{sa_str}{ca_str}"
+            f"{contrast_str}{pf1_str}{sa_str}{st_str}{ca_str}"
             f"  occ={details['occupancy']:.3f} | "
-            f"F1*(1-ca)={new_score:.4f}"
-            f"{'  [pass]' if passed else '  [filtered]'}"
+            f"S={details.get('total_score', score):.4f}"
         )
 
-    filtered = [
-        (mult, d, details)
-        for mult, d, _, details in results
-        if details.get("sa_leakage", 0.0) <= sa_threshold
-    ]
-    if not filtered:
-        filtered = [(mult, d, details) for mult, d, _, details in results]
-
-    def _sage_quality(details: Dict) -> float:
-        return details.get("precision_f1", 0.0) * (1.0 - details.get("leakage", 0.0))
-
-    best_mult, best_d, best_details = max(filtered, key=lambda x: _sage_quality(x[2]))
-    best_score = _sage_quality(best_details)
-
-    print(
-        f"[Step2] SA filter: mean(sa)={sa_threshold:.3f}, "
-        f"{len(filtered)}/{len(results)} views passed"
+    # --- Phase 3: Unified SAGE selection (report §3.3.2) ---
+    # Pick i* = argmax S_i where S_i is the unified continuous score.
+    scored_for_pick = [(mult, d, details) for mult, d, _, details in results]
+    best_mult, best_d, best_details = max(
+        scored_for_pick, key=lambda x: float(x[2].get("total_score", -1e18))
     )
+    best_score = float(best_details.get("total_score", -1e18))
     print(
         f"[Step2] Best distance d*={best_d:.4f} "
         f"(mult={best_d / r_obj:.2f}x, "
-        f"F1*(1-ca)={best_score:.4f})"
+        f"S={best_score:.4f})"
     )
 
     if save_attn_grid and attn_grid_data:
@@ -2117,10 +2120,11 @@ def fibonacci_camera_candidates(
     fovy: float = 1.0,
     h: int = 512,
     w: int = 512,
-    hemisphere_only: bool = False,
+    use_colmap_orbit: bool = False,
     colmap_cam_centers: np.ndarray = None,
     cone_half_angle_deg: float = 90.0,
     cone_axis_direction: Optional[np.ndarray] = None,
+    elevation_band_deg: float = 30.0,
     device: str = "cuda",
 ) -> List[Simple_Camera]:
     """
@@ -2134,11 +2138,11 @@ def fibonacci_camera_candidates(
     if world_up is None:
         world_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
-    # Special case: when hemisphere_only is False, place cameras on a circular orbit
+    # Special case: when enabled, place cameras on a circular orbit
     # that follows the COLMAP camera path. Infer the orbit plane from COLMAP
     # (PCA: smallest-variance axis = orbit normal), then sample uniformly on that
     # circle with a small elevation wobble so views are not all at the same height.
-    if not hemisphere_only:
+    if bool(use_colmap_orbit):
         world_up = _normalize(np.asarray(world_up, dtype=np.float32))
         n = max(1, n_candidates)
 
@@ -2177,16 +2181,13 @@ def fibonacci_camera_candidates(
             cam = _make_camera(eye, center, world_up, fovy, h, w, uid=i, device=device)
             cameras.append(cam)
 
-        print(f"[Step3] Generated {len(cameras)} circular-orbit candidates (d={distance:.4f}, plane from COLMAP)")
+        print(
+            f"[Step3] Generated {len(cameras)} circular-orbit candidates "
+            f"(d={distance:.4f}, plane from COLMAP)"
+        )
         return cameras
 
     directions = fibonacci_sphere_samples(n_candidates)
-
-    if hemisphere_only:
-        # Keep only directions with positive y (above ground)
-        up_axis = _normalize(world_up)
-        dots = directions @ up_axis
-        directions = directions[dots > -0.1]  # allow slight below-horizon
 
     # Constrain to cone: use v_front (cone_axis_direction) when provided so
     # left/right bias follows chosen front; else fall back to COLMAP mean direction.
@@ -2207,6 +2208,17 @@ def fibonacci_camera_candidates(
         directions = directions[dots > cos_threshold]
         print(f"[Step3] Cone filter: {len(directions)} candidates within "
               f"{cone_half_angle_deg}° of COLMAP mean direction")
+
+    # Full-sphere mode (cone >= 180°): filter to elevation band around the
+    # equator (XZ plane) so cameras orbit horizontally instead of covering
+    # the entire sphere including top/bottom views.
+    # Also exclude y > 0 (cameras below the object / on the floor).
+    if cone_half_angle_deg >= 179.9:
+        max_abs_y = math.sin(math.radians(elevation_band_deg))
+        n_before = len(directions)
+        directions = np.array([d for d in directions if d[1] <= 0 and abs(d[1]) <= max_abs_y])
+        print(f"[Step3] Full-sphere elevation band: {n_before} -> {len(directions)} candidates "
+              f"(y <= 0, |y| <= {max_abs_y:.3f}, ±{elevation_band_deg}° of XZ plane)")
 
     cameras = []
     for i, d in enumerate(directions):
@@ -2395,8 +2407,8 @@ def compute_roi_mask_from_segmentation(
     fovy: float,
     h: int,
     w: int,
-    n_views: int = 8,
-    threshold: float = 0.3,
+    n_views: int = 63,
+    threshold: float = 0.4,
     override_opacity: Optional[torch.Tensor] = None,
     device: str = "cuda",
     latency_logger: Optional[LatencyLogger] = None,
@@ -2516,8 +2528,9 @@ def run_generate_by_lens_pipeline(
     distance_multipliers: Optional[List[float]] = None,
     n_candidates: int = 150,
     n_select: int = 20,
-    hemisphere_only: bool = False,
+    use_colmap_orbit: bool = False,
     cone_half_angle_deg: float = 90.0,
+    elevation_band_deg: float = 30.0,
     w_vis: float = 0.6,
     w_can: float = 0.4,
     top_fraction: float = 0.20,
@@ -2526,6 +2539,10 @@ def run_generate_by_lens_pipeline(
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
+    w_edit: float = 10.0,
+    lambda_sa: float = 10.0,
+    sage_alpha: float = 0.7,
+    roi_threshold: float = 0.4,
     override_opacity: Optional[torch.Tensor] = None,
     device: str = "cuda",
     v_front_method: str = "colmap_mean",
@@ -2555,6 +2572,7 @@ def run_generate_by_lens_pipeline(
         roi_mask = compute_roi_mask_from_segmentation(
             gaussians, seg_prompt, pipe_params, background,
             cam_centers, cam_forwards, fovy, h, w,
+            threshold=roi_threshold,
             override_opacity=override_opacity, device=device,
         )
 
@@ -2573,31 +2591,30 @@ def run_generate_by_lens_pipeline(
     if roi_info["object_size"] > colmap_median_dist:
         roi_info["object_size"] = colmap_median_dist
 
-    # When hemisphere_only=False, v_front = one of the COLMAP view directions directly
-    # (no PCA/mean; just pick the view closest to mean direction as representative).
-    if (not hemisphere_only) and cam_centers is not None and len(cam_centers) > 0:
-        center = roi_info["center"]
-        vecs = cam_centers - center[None, :]
-        norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-        valid = norms.squeeze(-1) > 1e-6
-        if np.any(valid):
-            dirs = np.zeros_like(vecs, dtype=np.float32)
-            dirs[valid] = vecs[valid] / norms[valid]
-            mean_dir = _normalize(dirs[valid].mean(axis=0))
-            dots = dirs @ mean_dir
-            best_idx = int(np.argmax(dots))
-            roi_info["v_front"] = dirs[best_idx]
-            print(
-                f"[Step1] hemisphere_only=False: v_front = COLMAP view index {best_idx}"
-            )
+    # When cone is full sphere (180°), PCA v_front is meaningless; use one COLMAP view as v_front
+    if cone_half_angle_deg >= 179.9:
+        roi_info["v_front"] = _v_front_from_colmap_view(roi_info["center"], cam_centers)
 
     # Step 2: Scale Probing
     dist_mults = distance_multipliers or [1.5, 2.0, 2.5, 3.0, 3.5]
     optimal_distance = scale_probing(
-        gaussians, roi_info, pipe_params, background, fovy, h, w, roi_mask,
-        ip2p_pipe=ip2p_pipe, edit_prompt=edit_prompt,
+        gaussians,
+        roi_info,
+        pipe_params,
+        background,
+        fovy,
+        h,
+        w,
+        roi_mask,
+        ip2p_pipe=ip2p_pipe,
+        edit_prompt=edit_prompt,
         distance_multipliers=dist_mults,
-        lambda_leak=lambda_leak, lambda_ent=lambda_ent, entropy_thresh=entropy_thresh,
+        lambda_leak=lambda_leak,
+        lambda_ent=lambda_ent,
+        entropy_thresh=entropy_thresh,
+        w_edit=w_edit,
+        lambda_sa=lambda_sa,
+        sage_alpha=sage_alpha,
         override_opacity=override_opacity,
         save_attn_grid=None,
         save_sa_grid=None,
@@ -2612,24 +2629,29 @@ def run_generate_by_lens_pipeline(
         distance=optimal_distance,
         n_candidates=n_candidates,
         fovy=fovy, h=h, w=w,
-        hemisphere_only=hemisphere_only,
+        use_colmap_orbit=use_colmap_orbit,
         colmap_cam_centers=cam_centers,
         cone_half_angle_deg=cone_half_angle_deg,
         cone_axis_direction=roi_info["v_front"],
+        elevation_band_deg=elevation_band_deg,
         device=device,
     )
 
     # Step 4: Energy-based Scoring (with actual rendering)
+    # Full-sphere (360°): disable canonical alignment so all directions score equally
+    eff_w_can = 0.0 if cone_half_angle_deg >= 179.9 else w_can
     scored = score_candidates(
         candidates, gaussians, roi_mask, roi_info, pipe_params, background,
-        w_vis=w_vis, w_can=w_can,
+        w_vis=w_vis, w_can=eff_w_can,
         override_opacity=override_opacity, device=device,
     )
 
     # Step 5: Diversity-aware Selection
+    # Full-sphere (360°): use entire pool so diversity can reach all azimuths
+    eff_top_fraction = 1.0 if cone_half_angle_deg >= 179.9 else top_fraction
     selected_indices = diversity_selection(
         candidates, scored, roi_info["center"],
-        n_select=n_select, top_fraction=top_fraction,
+        n_select=n_select, top_fraction=eff_top_fraction,
         diversity_x_weight=diversity_x_weight,
         diversity_y_variance_weight=diversity_y_variance_weight,
         device=device,
@@ -2718,14 +2740,23 @@ def main():
         help="Number of final views to select (Step 5)",
     )
     parser.add_argument(
-        "--hemisphere_only", action="store_true",
-        help="Restrict candidates to upper hemisphere",
+        "--use_colmap_orbit",
+        action="store_true",
+        help="(Legacy) Sample cameras on a circular orbit estimated from the COLMAP camera "
+             "trajectory plane instead of using the Fibonacci sphere.",
     )
     parser.add_argument(
         "--cone_half_angle_deg",
         type=float,
         default=90.0,
         help="Half-angle (in degrees) of the COLMAP view cone used to filter Fibonacci candidates (Step 3)",
+    )
+    parser.add_argument(
+        "--elevation_band_deg",
+        type=float,
+        default=30.0,
+        help="When cone_half_angle_deg>=180 (full-sphere), restrict candidates to an elevation "
+             "band of ±N degrees around the XZ equator. Keeps cameras roughly horizontal. (default: 30)",
     )
     parser.add_argument(
         "--v_front_method",
@@ -2759,6 +2790,18 @@ def main():
                         help="Entropy ratio penalty weight λ₂ in SAGE score (default: 2.0)")
     parser.add_argument("--entropy_thresh", type=float, default=0.97,
                         help="Hard entropy ratio threshold τ (0-1) — views above this are marked unsafe (default: 0.97)")
+    parser.add_argument(
+        "--ca_leak_percentile",
+        type=float,
+        default=0.99,
+        help="Background attention percentile used for CA leakage (default: 0.99, i.e. top-1%).",
+    )
+    parser.add_argument("--w_edit", type=float, default=10.0,
+                        help="Unified SAGE: CA localization quality weight w_edit (default: 10.0)")
+    parser.add_argument("--lambda_sa", type=float, default=10.0,
+                        help="Unified SAGE: SA leakage penalty weight lambda_sa (default: 10.0)")
+    parser.add_argument("--sage_alpha", type=float, default=0.7,
+                        help="Unified SAGE: occupancy normalization exponent alpha in (0,1] (default: 0.7)")
 
     # Rendering
     parser.add_argument("--render_width", type=int, default=512)
@@ -2853,6 +2896,12 @@ def main():
         type=str,
         default=None,
         help="After pruning (opacity and/or below COLMAP z), save the pruned Gaussian model to this path (e.g. output/pruned.ply).",
+    )
+    parser.add_argument(
+        "--roi_threshold",
+        type=float,
+        default=0.4,
+        help="Threshold on averaged LangSAM mask scores to mark Gaussians as ROI (default: 0.4).",
     )
 
     args = get_combined_args(parser)
@@ -2987,7 +3036,7 @@ def main():
         save_path = args.save_pruned_ply
         os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
         gaussians.save_ply(save_path)
-        print(f"[Prune] Saved pruned Gaussians to {save_path}")
+        _log_saved_path(save_path, tag="save.pruned_ply")
 
     # ---------------------------------------------------------------
     # ROI mask (optional segmentation)
@@ -3007,6 +3056,7 @@ def main():
                         fovy,
                         h,
                         w,
+                        threshold=getattr(args, "roi_threshold", 0.4),
                         override_opacity=render_opacity_override,
                         device=device,
                         latency_logger=latency_logger,
@@ -3022,6 +3072,7 @@ def main():
                 fovy,
                 h,
                 w,
+                threshold=getattr(args, "roi_threshold", 0.4),
                 override_opacity=render_opacity_override,
                 device=device,
             )
@@ -3057,6 +3108,11 @@ def main():
               f"{colmap_median_dist:.4f} (COLMAP reference)")
         roi_info["object_size"] = colmap_median_dist
 
+    # When cone is full sphere (180°), PCA v_front is meaningless; use one COLMAP view as v_front
+    if getattr(args, "cone_half_angle_deg", 90) >= 179.9:
+        roi_info["v_front"] = _v_front_from_colmap_view(roi_info["center"], cam_centers)
+        print("[Step1] cone_half_angle_deg>=180: v_front set to one COLMAP view direction")
+
     # ---------------------------------------------------------------
     # Step 2: Scale Probing
     # ---------------------------------------------------------------
@@ -3091,6 +3147,9 @@ def main():
                     lambda_leak=args.lambda_leak,
                     lambda_ent=args.lambda_ent,
                     entropy_thresh=args.entropy_thresh,
+                    w_edit=getattr(args, "w_edit", 10.0),
+                    lambda_sa=getattr(args, "lambda_sa", 10.0),
+                    sage_alpha=getattr(args, "sage_alpha", 0.7),
                     override_opacity=render_opacity_override,
                     save_attn_grid=args.save_attn_grid,
                     save_sa_grid=getattr(args, "save_sa_grid", None),
@@ -3118,6 +3177,9 @@ def main():
             lambda_leak=args.lambda_leak,
             lambda_ent=args.lambda_ent,
             entropy_thresh=args.entropy_thresh,
+            w_edit=getattr(args, "w_edit", 10.0),
+            lambda_sa=getattr(args, "lambda_sa", 10.0),
+            sage_alpha=getattr(args, "sage_alpha", 0.7),
             override_opacity=render_opacity_override,
             save_attn_grid=args.save_attn_grid,
             save_sa_grid=getattr(args, "save_sa_grid", None),
@@ -3149,10 +3211,11 @@ def main():
                     fovy=fovy,
                     h=h,
                     w=w,
-                    hemisphere_only=args.hemisphere_only,
+                    use_colmap_orbit=getattr(args, "use_colmap_orbit", False),
                     colmap_cam_centers=cam_centers,
                     cone_half_angle_deg=args.cone_half_angle_deg,
                     cone_axis_direction=roi_info["v_front"],
+                    elevation_band_deg=getattr(args, "elevation_band_deg", 30.0),
                     device=device,
                 )
     else:
@@ -3163,10 +3226,11 @@ def main():
             fovy=fovy,
             h=h,
             w=w,
-            hemisphere_only=args.hemisphere_only,
+            use_colmap_orbit=getattr(args, "use_colmap_orbit", False),
             colmap_cam_centers=cam_centers,
             cone_half_angle_deg=args.cone_half_angle_deg,
             cone_axis_direction=roi_info["v_front"],
+            elevation_band_deg=getattr(args, "elevation_band_deg", 30.0),
             device=device,
         )
 
@@ -3174,6 +3238,10 @@ def main():
     # Step 4: Energy-based Candidate Scoring
     # ---------------------------------------------------------------
     print("\n========== Step 4: Energy-based Scoring ==========")
+    # Full-sphere (360°): disable canonical alignment so all directions score equally
+    eff_w_can = 0.0 if args.cone_half_angle_deg >= 179.9 else args.w_can
+    if eff_w_can != args.w_can:
+        print(f"[Step4] Full-sphere mode: w_can overridden {args.w_can} → {eff_w_can}")
     if latency_logger:
         with latency_timeit(latency_logger, "step4", device):
             with latency_timeit(latency_logger, "step4.score_candidates", device):
@@ -3185,7 +3253,7 @@ def main():
                     pipe_params,
                     background,
                     w_vis=args.w_vis,
-                    w_can=args.w_can,
+                    w_can=eff_w_can,
                     override_opacity=render_opacity_override,
                     device=device,
                     latency_logger=latency_logger,
@@ -3199,7 +3267,7 @@ def main():
             pipe_params,
             background,
             w_vis=args.w_vis,
-            w_can=args.w_can,
+            w_can=eff_w_can,
             override_opacity=render_opacity_override,
             device=device,
         )
@@ -3208,6 +3276,10 @@ def main():
     # Step 5: Diversity-aware Selection
     # ---------------------------------------------------------------
     print("\n========== Step 5: Diversity-aware Selection ==========")
+    # Full-sphere (360°): use entire candidate pool so diversity can reach all azimuths
+    eff_top_fraction = 1.0 if args.cone_half_angle_deg >= 179.9 else args.top_fraction
+    if eff_top_fraction != args.top_fraction:
+        print(f"[Step5] Full-sphere mode: top_fraction overridden {args.top_fraction} → {eff_top_fraction}")
     if latency_logger:
         with latency_timeit(latency_logger, "step5", device):
             with latency_timeit(latency_logger, "step5.diversity_selection", device):
@@ -3216,7 +3288,7 @@ def main():
                     scored,
                     roi_info["center"],
                     n_select=int(args.n_select),
-                    top_fraction=args.top_fraction,
+                    top_fraction=eff_top_fraction,
                     diversity_x_weight=getattr(args, "diversity_x_weight", 0.0),
                     diversity_y_variance_weight=getattr(args, "diversity_y_variance_weight", 0.0),
                     latency_logger=latency_logger,
@@ -3228,7 +3300,7 @@ def main():
             scored,
             roi_info["center"],
             n_select=int(args.n_select),
-            top_fraction=args.top_fraction,
+            top_fraction=eff_top_fraction,
             diversity_x_weight=getattr(args, "diversity_x_weight", 0.0),
             diversity_y_variance_weight=getattr(args, "diversity_y_variance_weight", 0.0),
             device=device,
@@ -3286,6 +3358,7 @@ def main():
 
             out_path = os.path.join(args.out_dir, f"{i:05d}.png")
             torchvision.utils.save_image(rgb, out_path)
+            # _log_saved_path(out_path, tag="save.frame")
             frame_np = (
                 (rgb.clamp(0.0, 1.0) * 255.0).byte().permute(1, 2, 0).cpu().numpy()
             )
@@ -3312,7 +3385,7 @@ def main():
             else:
                 concat_img = np.concatenate(frames, axis=1)
                 imageio.imwrite(concat_path, concat_img)
-            print(f"Concatenated views image saved to {concat_path}")
+            _log_saved_path(concat_path, tag="save.generated_views")
         except Exception as e:  # pragma: no cover - best-effort visualisation
             print(f"[WARN] Failed to save concatenated views image: {e}")
     
@@ -3321,31 +3394,32 @@ def main():
         if latency_logger:
             with latency_timeit(latency_logger, "save_video", device):
                 os.makedirs(os.path.dirname(args.video_path) or ".", exist_ok=True)
-                print(f"Writing video to {args.video_path} ({len(frames)} frames, fps={args.fps})")
                 imageio.mimsave(args.video_path, frames, fps=int(args.fps))
+                _log_saved_path(args.video_path, tag="save.video")
         else:
             os.makedirs(os.path.dirname(args.video_path) or ".", exist_ok=True)
-            print(f"Writing video to {args.video_path} ({len(frames)} frames, fps={args.fps})")
             imageio.mimsave(args.video_path, frames, fps=int(args.fps))
+            _log_saved_path(args.video_path, tag="save.video")
 
-    # Save COLMAP
-    if args.save_colmap:
+    # Save COLMAP (only when explicitly provided)
+    save_colmap_dir = getattr(args, "save_colmap", None)
+    if save_colmap_dir is not None and str(save_colmap_dir).strip() != "":
         if latency_logger:
             with latency_timeit(latency_logger, "save_colmap", device):
                 save_cameras_to_colmap(
-                    final_cameras, args.save_colmap, colmap_cameras, fmt=args.colmap_format
+                    final_cameras, save_colmap_dir, colmap_cameras, fmt=args.colmap_format
                 )
-                print(f"COLMAP cameras saved to {args.save_colmap}/sparse/0/")
+                _log_saved_path(os.path.join(save_colmap_dir, "sparse", "0"), tag="save.colmap")
         else:
             save_cameras_to_colmap(
-                final_cameras, args.save_colmap, colmap_cameras, fmt=args.colmap_format
+                final_cameras, save_colmap_dir, colmap_cameras, fmt=args.colmap_format
             )
-            print(f"COLMAP cameras saved to {args.save_colmap}/sparse/0/")
+            _log_saved_path(os.path.join(save_colmap_dir, "sparse", "0"), tag="save.colmap")
 
     # Latency summary
     if latency_logger is not None:
         latency_logger.write_summary()
-        print(f"[latency] Summary written to {latency_logger.base_dir}/summary.txt")
+        _log_saved_path(os.path.join(latency_logger.base_dir, "summary.txt"), tag="save.latency_summary")
 
     print("\n[Done] Generate-by-Lens complete.")
     print(f"  Frames : {args.out_dir}/")
