@@ -1,0 +1,29 @@
+% =============================================================================
+% Polished Multi-View Attention Alignment Section
+% Based on edit_latents_multiview_current.md and code verification
+% =============================================================================
+
+\subsection{Multi-View Attention Alignment for Consistent Editing}
+\label{sec:multi_attn_align}
+
+When applying a 2D diffusion editor to multi-view renders of 3DGS scenes, independently denoising each view often yields severe multi-view failures: (1) style and structure inconsistency across views---e.g., for ``wear the rabbit the sunglasses,'' one view may produce pink round sunglasses while another yields black square frames; and (2) geometric drift---the edited object appears at different 3D locations (e.g., sunglasses on the lower face in one view versus the center in another). We address both issues by aligning self-attention and cross-attention across views.
+
+We propose a geometry-aware multi-view consistent editing pipeline that performs both self and cross-attention synchronization. To avoid prohibitive computation from exchanging attention across all views, we run reference views through the U-Net first at selected timesteps, collect their self- and cross-attention outputs, and propagate these to target views.
+
+\paragraph{Self-Attention Alignment.}
+Self-attention governs how visual features propagate across the image. We augment it with cross-view feature injection using similarity-based correspondence~\cite{geyer_tokenflow_, chen2024dge}. For each target view, we select the nearest reference view in camera space and compute token-level cosine similarity between normalized hidden states:
+\begin{equation}
+\mathrm{sim}(p,q) = \frac{\langle \tilde{\mathbf{h}}_{i}(p), \tilde{\mathbf{h}}_{\mathrm{ref}}(q)\rangle}{\|\tilde{\mathbf{h}}_{i}(p)\|\;\|\tilde{\mathbf{h}}_{\mathrm{ref}}(q)\|},
+\quad
+q^\star(p) = \arg\max_q \mathrm{sim}(p,q),
+\label{eq:self_sim_nn}
+\end{equation}
+where $p,q$ index spatial tokens. We inject the matched reference feature and apply the residual update $\mathbf{H} \leftarrow \mathbf{H} + \mathbf{o}_{\mathrm{self}}$. Reference views themselves run extended cross-frame self-attention to obtain shared features before injection. This encourages spatial token interactions to remain aligned across views.
+
+\paragraph{Cross-Attention Alignment.}
+Cross-attention determines \emph{where} the editing instruction is applied. At selected timesteps we run a small set of reference views to obtain cross-attention probabilities for edit-relevant tokens. We lift these 2D attentions into a shared 3D attention field on Gaussians via inverse splatting~\cite{chen_gaussianeditor_2024}, then re-render the field into every view using Gaussian splatting. During the U-Net forward for each target view, we replace the standard cross-attention output with the synchronized map. Because all views query the same 3D field, the token-to-spatial decision becomes consistent across viewpoints, suppressing geometric drift.
+
+\paragraph{Adaptive Reference Selection.}
+Early in denoising (high noise), we prefer a canonical view that best represents the scene (e.g., closest to the mean viewing direction). Later, we progressively prefer views that have been selected less frequently as references, balancing coverage across viewpoints. Our approach aligns both self- and cross-attention, unlike prior work~\cite{geyer_tokenflow_, chen2024dge, wang2025vcedit} that focuses on one or the other. With a minimal set of reference views, we achieve equivalent editing quality at reduced cost.
+
+% Detailed CA formulas: see appendix file multiview_attention_appendix.tex

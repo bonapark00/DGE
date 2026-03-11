@@ -1,0 +1,24 @@
+% =============================================================================
+% Appendix: Multi-View Attention Alignment — Detailed Formulas
+% Use: \input{multiview_attention_appendix} in your appendix.tex
+% =============================================================================
+
+\section{Multi-View Attention Alignment Details}
+\label{app:multi_attn}
+
+\paragraph{Cross-Attention 3D Lift.}
+Let $A_v^{(t)} \in \mathbb{R}^{HW \times L}$ denote the cross-attention probability of view $v$ at timestep $t$ (flattened spatial tokens; $L$ is the number of text tokens). For Gaussian $g$ and token $l$:
+\begin{equation}
+M_{3D}^{(t)}(g,l)
+= \frac{\sum_{v \in \mathcal{V}_{\mathrm{ref}}} w_v(g)\; A_v^{(t)}\!\left(\pi_v(g), l\right)}
+{\sum_{v \in \mathcal{V}_{\mathrm{ref}}} w_v(g) + \epsilon},
+\end{equation}
+where $\pi_v(g)$ is the 2D projection of $g$ in view $v$, and $w_v(g)$ is a visibility/splatting weight.
+
+\paragraph{Re-render and Replacement.}
+\begin{equation}
+\hat{A}_i^{(t)}(p,l) = \mathrm{GSRender}\!\left(M_{3D}^{(t)}(\cdot,l), \mathrm{cam}_i, p\right),
+\quad
+\mathbf{O}_{\mathrm{cross}}^{(t)} = \hat{A}_i^{(t)} \; \mathbf{V}_{\mathrm{valid}},
+\end{equation}
+where $\mathbf{V}_{\mathrm{valid}}$ denotes value vectors of the valid (edit-relevant) token subset.

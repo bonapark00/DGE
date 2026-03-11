@@ -1,0 +1,67 @@
+% =============================================================================
+% Related Works (Sec. 2)
+% =============================================================================
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{3D Editing with Text Prompts}
+
+Text-driven 3D scene editing is typically built on top of powerful 2D diffusion editors~\cite{rombach2022high,brooks2023instructpix2pix,hertz2022prompt2prompt,zhang2023controlnet}.
+InstructPix2Pix~\cite{brooks2023instructpix2pix} learns instruction-guided edits from paired data, while Prompt-to-Prompt~\cite{hertz2022prompt2prompt} and ControlNet~\cite{zhang2023controlnet} expose cross-attention and spatial conditioning as controllable primitives.
+3D methods lift these capabilities to neural radiance fields or 3D Gaussian splats either by optimizing the 3D representation with score-distillation-sampling (SDS) losses~\cite{poole2022dreamfusion,wang2024gaussianeditor} or by repeatedly applying a 2D editor to rendered views and re-fitting the 3D model~\cite{haque2023instructnerf2nerf,chen2024dge}.
+Although such pipelines can produce compelling text-guided 3D edits, they typically treat views independently and rely on the 3D representation to reconcile inconsistencies, leaving multi-view consistency and the choice of editing views largely under-explored.
+
+\subsection{View Selection for 3D Editing}
+
+The choice of editing views affects both quality and cost.
+ViCA-NeRF~\cite{huang2024vicanerf} heuristically selects key views and propagates edits via depth-based warping.
+GaussianEditor~\cite{wang2024gaussianeditor} localizes edits to an ROI on 3D Gaussians but assumes a fixed camera set.
+No prior method selects cameras based on diffusion attention behavior.
+Our AGEVS (Sec.~\ref{sec:agevs}) probes candidate distances to measure cross-attention alignment and self-attention leakage, then constructs a diverse, geometry-aware view set at the optimal distance---turning camera selection into an attention-driven process.
+
+\subsection{Multi-View Consistency}
+
+Applying 2D diffusion editors to 3D scenes faces a fundamental challenge: independently edited views produce inconsistent supervision, causing artifacts when fused into a 3D representation.
+
+\paragraph{Iterative approaches.}
+Instruct-NeRF2NeRF~\cite{haque2023instructnerf2nerf} alternates between per-view IP2P editing and NeRF re-optimization, relying on the 3D representation as an implicit averaging filter.
+GaussianEditor~\cite{wang2024gaussianeditor} adapts this to 3DGS with Gaussian semantic tracing for localized SDS-based editing.
+These methods treat the 2D editor as a black box without modifying its internal attention.
+
+\paragraph{Self-attention alignment.}
+DGE~\cite{chen2024dge} extends self-attention to spatio-temporal attention across key views and injects cached features into target views via cosine-similarity correspondence.
+GaussCtrl~\cite{wu2024gaussctrl} blends per-view self-attention with cross-view latent attention under depth conditioning.
+Both align self-attention (attn1) but leave cross-attention unregulated, so the spatial ``where-to-edit'' decision can still drift across views.
+
+\paragraph{Cross-attention alignment.}
+VcEdit~\cite{wang2024vcedit} inverse-renders cross-attention maps onto 3D Gaussians and re-renders geometry-consistent maps for each view.
+InterGSEdit~\cite{wen2025intergsedit} lifts reference cross-attention to 3D and adaptively fuses it with per-view 2D attention.
+These methods fix spatial drift but do not modify self-attention, leaving appearance consistency per-view.
+
+\paragraph{Our positioning.}
+As shown in Table~\ref{tab:sa_ca_comparison}, prior work aligns either self-attention or cross-attention, but not both.
+We jointly synchronize both: self-attention alignment suppresses appearance drift, while cross-attention alignment suppresses spatial drift, both computed from a shared set of reference-view forward passes.
+
+\begin{table}[t]
+\centering
+\caption{Comparison of attention alignment and view selection strategies in diffusion-based 3D editing. SA = self-attention; CA = cross-attention; VS = attention-guided view selection.}
+\label{tab:sa_ca_comparison}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lccccl}
+\toprule
+Method & SA & CA & VS & Multi-View Consistency Strategy \\
+\midrule
+IN2N~\cite{haque2023instructnerf2nerf} & \xmark & \xmark & \xmark & Iterative dataset update \\
+GaussianEditor~\cite{wang2024gaussianeditor} & \xmark & \xmark & \xmark & Gaussian Semantic Tracing + HGS \\
+DGE~\cite{chen2024dge} & \cmark & \xmark & \xmark & Extended ST self-attn + feature injection \\
+GaussCtrl~\cite{wu2024gaussctrl} & \cmark & \xmark & \xmark & Cross-view latent attn in attn1 \\
+VcEdit~\cite{wang2024vcedit} & \xmark & \cmark & \xmark & 3D inverse splatting of CA maps \\
+EditSplat~\cite{lee2025editsplat} & \cmark & \xmark & \xmark & Multi-view fusion in self-attn \\
+InterGSEdit~\cite{wen2025intergsedit} & \xmark & \cmark & \xmark & 3D-consistent CA prior + fusion \\
+\midrule
+\textbf{Ours} & \cmark & \cmark & \cmark & Joint SA + 3D CA align + AGEVS \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
