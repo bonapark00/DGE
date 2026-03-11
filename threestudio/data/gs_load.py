@@ -239,6 +239,7 @@ class GSLoadDataModuleConfig:
     lens_n_candidates: int = 150  # Number of Fibonacci sphere candidates
     lens_hemisphere_only: bool = False  # Restrict to upper hemisphere
     lens_cone_half_angle_deg: float = 60.0  # Cone constraint around COLMAP mean direction
+    lens_elevation_band_deg: float = 30.0  # Used when cone_half_angle_deg >= 180 (restrict elevation band)
     lens_distance_multipliers: str = "2.0,2.5,3.0,4.0,5.0,6.0"  # Distance probing multipliers (× r_obj)
     lens_w_vis: float = 0.6  # Visibility score weight
     lens_w_can: float = 0.4  # Canonical alignment weight
@@ -247,6 +248,7 @@ class GSLoadDataModuleConfig:
     lens_diversity_y_variance_weight: float = 0.0  # Penalize elevation spread to lower variance in y (Step 5)
     lens_n_seg_views: int = 8  # Number of views for multi-view ROI segmentation
     lens_seg_threshold: float = 0.3  # Back-projection threshold for ROI mask
+    lens_roi_threshold: Optional[float] = None  # ROI binarization threshold for 3D mask; falls back to lens_seg_threshold
     lens_min_opacity: float = 0.0  # Prune Gaussians below this opacity
     lens_ply_path: str = ""  # Path to .ply for lens (default: load from gaussian_model when set)
     lens_edit_prompt: str = ""  # IP2P edit prompt for SAGE scoring (required if use_ip2p)

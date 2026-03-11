@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from datetime import datetime
 
 from omegaconf import OmegaConf
@@ -124,5 +124,22 @@ def dump_config(path: str, config) -> None:
 
 
 def parse_structured(fields: Any, cfg: Optional[Union[dict, DictConfig]] = None) -> Any:
-    scfg = OmegaConf.structured(fields(**cfg))
+    if cfg is None:
+        cfg = {}
+    if isinstance(cfg, DictConfig):
+        cfg = config_to_primitive(cfg, resolve=True)
+    if not isinstance(cfg, dict):
+        raise TypeError(f"parse_structured expects dict-like cfg, got {type(cfg)}")
+
+    filtered_cfg = cfg
+    if is_dataclass(fields):
+        allowed = set(fields.__dataclass_fields__.keys())
+        dropped = [k for k in cfg.keys() if k not in allowed]
+        if dropped:
+            threestudio.warn(
+                f"Ignoring {len(dropped)} unknown config keys for {fields.__name__}: {dropped}"
+            )
+        filtered_cfg = {k: v for k, v in cfg.items() if k in allowed}
+
+    scfg = OmegaConf.structured(fields(**filtered_cfg))
     return scfg
