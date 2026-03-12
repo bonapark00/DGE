@@ -190,7 +190,7 @@
                 "system.prune_floater_at_step=-1",
                 "checkpoint.save_top_k=0",
 
-
+    
 
                 // face dataset
                 "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
@@ -207,11 +207,15 @@
                 // man -> clown
                 // "system.prompt_processor.prompt=Turn the man's face into a clown",
                 // "data.lens_edit_prompt=Turn the man's face into a clown",
-                // "system.seg_prompt=face of the man with mustache",
-                // "data.mmr_seg_prompt=face of the man with mustache",
+                // "system.seg_prompt=man",
+                // "data.mmr_seg_prompt=man",
                 // "data.lens_seg_prompt=face",
-                // "system.target_prompt=face of the clown",
-
+                // "system.target_prompt=clown",
+                // // "data.lens_distance_multipliers=2.0, 3.0,4.0,5.0",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "1",
+                // "data.lens_prune_z_bottom_percent=3.0",
+            
                 // zipper pull red
                 // "system.prompt_processor.prompt=Change the zipper pull to a bright red color",
                 // "data.lens_edit_prompt=Change the zipper pull to a bright red color",
@@ -224,28 +228,28 @@
                 // "data.lens_prune_z_bottom_percent=3.0",
             
                 // // man to grandma
-                "system.prompt_processor.prompt=Turn the man into a grandma",
-                "data.lens_edit_prompt=Turn the man into a grandma",
-                "system.seg_prompt=man",
-                "data.mmr_seg_prompt=man",
-                "data.lens_seg_prompt=face",
-                "system.target_prompt=grandma",
-                "data.lens_distance_multipliers=2.0, 3.0,4.0,5.0",
-                "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
-                "--gpu", "5",
-                "data.lens_prune_z_bottom_percent=3.0",
-                "data.lens_cone_half_angle_deg=60", // 60: man
-
-                // // eyes blue
-                // "system.prompt_processor.prompt=Make the man's eyes blue",
-                // "data.lens_edit_prompt=Make the man's eyes blue",
-                // "system.seg_prompt=brown eyes of man's face",
-                // "data.mmr_seg_prompt=brown eyes of man's face",
+                // "system.prompt_processor.prompt=Turn the man into a grandma",
+                // "data.lens_edit_prompt=Turn the man into a grandma",
+                // "system.seg_prompt=man",
+                // "data.mmr_seg_prompt=man",
                 // "data.lens_seg_prompt=face",
-                // "system.target_prompt=blue eyes of man's face",
-                // "--gpu", "6",
+                // "system.target_prompt=grandma",
+                // "data.lens_distance_multipliers=2.0, 3.0,4.0,5.0",
                 // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "5",
                 // "data.lens_prune_z_bottom_percent=3.0",
+                // "data.lens_cone_half_angle_deg=60", // 60: man
+
+                // eyes blue
+                "system.prompt_processor.prompt=Make the man's eyes blue",
+                "data.lens_edit_prompt=Make the man's eyes blue",
+                "system.seg_prompt=brown eyes of man's face",
+                "data.mmr_seg_prompt=brown eyes of man's face",
+                "data.lens_seg_prompt=face",
+                "system.target_prompt=blue eyes of man's face",
+                "--gpu", "0",
+                "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                "data.lens_prune_z_bottom_percent=3.0",
 
                 // // leather jacket
                 // "system.prompt_processor.prompt=Change the fleece jacket into a leather jacket",
@@ -254,9 +258,11 @@
                 // "data.mmr_seg_prompt=fleece jacket",
                 // "data.lens_seg_prompt=fleece jacket",
                 // "system.target_prompt=leather jacket",
-                // "--gpu", "7",
+                // "--gpu", "0",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "data.lens_prune_z_bottom_percent=3.0",
 
-                // // blue denim 
+                // // // blue denim 
                 // "system.prompt_processor.prompt=Change the jacket material to blue denim",
                 // "data.lens_edit_prompt=Change the jacket material to blue denim",
                 // "system.seg_prompt=entire fleece jacket",
@@ -266,7 +272,7 @@
                 // "data.lens_cone_half_angle_deg=60", // 60: man
                 // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
                 // "data.lens_prune_z_bottom_percent=3.0",
-                // "--gpu", "6",
+                // "--gpu", "1",
 
 
 
@@ -278,13 +284,7 @@
                 // "data.lens_seg_prompt=ears of the man",
                 // "system.target_prompt=man's pointed, elf-like right ear",
 
-                // Change the jacket material to blue denim
-                // "system.prompt_processor.prompt=Change the jacket material to blue denim",
-                // "data.lens_edit_prompt=Change the jacket material to blue denim",
-                // "system.seg_prompt=entire fleece jacket",
-                // "data.mmr_seg_prompt=entire fleece jacket",
-                // "data.lens_seg_prompt=entire fleece jacket",
-                // "system.target_prompt=a blue denim jacket",
+     
 
                 // # bear -> bronze statue
                 // statue_bronze Change the material of the bear statue to bronze",
