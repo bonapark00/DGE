@@ -43,6 +43,100 @@ import CLIP
 
 clip_model = CLIP.load_model()
 
+def _compute_keep_mask_xyz_percent(
+    xyz: torch.Tensor,
+    prune_z_bottom_percent: float,
+    prune_y_top_percent: float,
+    prune_x_both_percent: float,
+) -> torch.Tensor:
+    """
+    Returns a boolean keep_mask (True=keep) using the same percent logic as generate_by_lens.py.
+    Percent values are in [0, 100], where 3.0 means 3%.
+    """
+    n_pts = int(xyz.shape[0])
+    device = xyz.device
+    keep_mask = torch.ones(n_pts, dtype=torch.bool, device=device)
+    if n_pts == 0:
+        return keep_mask
+
+    if prune_z_bottom_percent > 0:
+        z = xyz[:, 2]
+        k_z = max(0, int(round(n_pts * (prune_z_bottom_percent / 100.0))))
+        if k_z > 0:
+            _, idx_smallest_z = torch.topk(z, k_z, largest=False)
+            keep_mask[idx_smallest_z] = False
+
+    if prune_y_top_percent > 0:
+        y = xyz[:, 1]
+        k_y = max(0, int(round(n_pts * (prune_y_top_percent / 100.0))))
+        if k_y > 0:
+            _, idx_largest_y = torch.topk(y, k_y, largest=True)
+            keep_mask[idx_largest_y] = False
+
+    if prune_x_both_percent > 0:
+        x = xyz[:, 0]
+        k_x = max(0, int(round(n_pts * (prune_x_both_percent / 100.0))))
+        if k_x > 0:
+            _, idx_smallest_x = torch.topk(x, k_x, largest=False)
+            _, idx_largest_x = torch.topk(x, k_x, largest=True)
+            keep_mask[idx_smallest_x] = False
+            keep_mask[idx_largest_x] = False
+
+    return keep_mask
+
+
+def _hard_prune_gaussians_by_mask(gaussians: GaussianModel, keep_mask: torch.Tensor) -> int:
+    """
+    Hard prune that changes Parameter sizes.
+    Safe only if called BEFORE optimizer is created (i.e., before gaussians.training_setup()).
+    Returns number removed.
+    """
+    if keep_mask.dtype != torch.bool:
+        keep_mask = keep_mask.bool()
+    keep_mask = keep_mask.to(gaussians.get_xyz.device)
+    n_before = int(keep_mask.shape[0])
+    n_remove = n_before - int(keep_mask.sum().item())
+    if n_remove <= 0:
+        return 0
+    gaussians._xyz = torch.nn.Parameter(
+        gaussians._xyz[keep_mask].detach().clone().requires_grad_(True)
+    )
+    gaussians._features_dc = torch.nn.Parameter(
+        gaussians._features_dc[keep_mask].detach().clone().requires_grad_(True)
+    )
+    gaussians._features_rest = torch.nn.Parameter(
+        gaussians._features_rest[keep_mask].detach().clone().requires_grad_(True)
+    )
+    gaussians._opacity = torch.nn.Parameter(
+        gaussians._opacity[keep_mask].detach().clone().requires_grad_(True)
+    )
+    gaussians._scaling = torch.nn.Parameter(
+        gaussians._scaling[keep_mask].detach().clone().requires_grad_(True)
+    )
+    gaussians._rotation = torch.nn.Parameter(
+        gaussians._rotation[keep_mask].detach().clone().requires_grad_(True)
+    )
+    # Keep internal book-keeping tensors in sync (required by densify code).
+    if hasattr(gaussians, "mask") and isinstance(getattr(gaussians, "mask"), torch.Tensor):
+        if gaussians.mask.shape[0] == n_before:
+            gaussians.mask = gaussians.mask[keep_mask].detach().clone()
+    if hasattr(gaussians, "_generation") and isinstance(getattr(gaussians, "_generation"), torch.Tensor):
+        if gaussians._generation.shape[0] == n_before:
+            gaussians._generation = gaussians._generation[keep_mask].detach().clone()
+    # Optional buffers (may exist depending on GaussianModel variant)
+    if hasattr(gaussians, "max_radii2D") and gaussians.max_radii2D is not None:
+        if gaussians.max_radii2D.shape[0] == n_before:
+            gaussians.max_radii2D = gaussians.max_radii2D[keep_mask].detach().clone()
+    if hasattr(gaussians, "xyz_gradient_accum") and gaussians.xyz_gradient_accum is not None:
+        if gaussians.xyz_gradient_accum.shape[0] == n_before:
+            gaussians.xyz_gradient_accum = (
+                gaussians.xyz_gradient_accum[keep_mask].detach().clone()
+            )
+    if hasattr(gaussians, "denom") and gaussians.denom is not None:
+        if gaussians.denom.shape[0] == n_before:
+            gaussians.denom = gaussians.denom[keep_mask].detach().clone()
+    return n_remove
+
 
 @threestudio.register("dge-system")
 class DGE(BaseLift3DSystem):
@@ -1173,6 +1267,34 @@ class DGE(BaseLift3DSystem):
         opt = OptimizationParams(self.parser, self.trainer.max_steps, self.cfg.gs_lr_scaler, self.cfg.gs_final_lr_scaler, self.cfg.color_lr_scaler,
                                  self.cfg.opacity_lr_scaler, self.cfg.scaling_lr_scaler, self.cfg.rotation_lr_scaler, )
         self.gaussian.load_ply(self.cfg.gs_source)
+
+        # ---------------------------------------------------------------
+        # Optional HARD Gaussian pruning (same percent logic as generate_by_lens.py)
+        # Read from datamodule config overrides:
+        # - data.lens_prune_z_bottom_percent
+        # - data.lens_prune_y_top_percent
+        # - data.lens_prune_x_both_percent
+        # This is placed here (before training_setup/optimizer creation) so it is safe.
+        # ---------------------------------------------------------------
+        dm_cfg = getattr(getattr(self.trainer, "datamodule", None), "cfg", None)
+        # User preference: prune ONLY the bottom z-percentile (no y/x pruning).
+        pz = float(getattr(dm_cfg, "lens_prune_z_bottom_percent", 0.0) or 0.0)
+        py = 0.0
+        px = 0.0
+        if pz > 0:
+            try:
+                xyz = self.gaussian.get_xyz.detach()
+                keep_mask = _compute_keep_mask_xyz_percent(xyz, pz, py, px)
+                n_removed = _hard_prune_gaussians_by_mask(self.gaussian, keep_mask)
+                if n_removed > 0:
+                    threestudio.info(
+                        f"[DGE prune] Hard-pruned {n_removed} Gaussians "
+                        f"(z_bottom={pz}%). "
+                        f"Remaining: {self.gaussian.get_xyz.shape[0]}"
+                    )
+            except Exception as e:
+                threestudio.warn(f"[DGE prune] Failed to hard-prune Gaussians: {e}")
+
         self.gaussian.max_radii2D = torch.zeros(
             (self.gaussian.get_xyz.shape[0]), device="cuda"
         )

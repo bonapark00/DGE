@@ -2991,55 +2991,55 @@ def main():
     # ---------------------------------------------------------------
     # Prune by z (bottom P%), y (top P%), x (top & bottom P% each) in-place, then optionally save
     # ---------------------------------------------------------------
-    prune_z_pct = getattr(args, "prune_z_bottom_percent", 0.0)
-    prune_y_pct = getattr(args, "prune_y_top_percent", 0.0)
-    prune_x_pct = getattr(args, "prune_x_both_percent", 0.0)
-    if prune_z_pct > 0 or prune_y_pct > 0 or prune_x_pct > 0:
-        xyz = gaussians.get_xyz.detach()
-        n_pts = xyz.shape[0]
-        device = xyz.device
-        keep_mask = torch.ones(n_pts, dtype=torch.bool, device=device)
-        if prune_z_pct > 0:
-            z = xyz[:, 2]
-            k_z = max(0, int(round(n_pts * (prune_z_pct / 100.0))))
-            if k_z > 0:
-                _, idx_smallest_z = torch.topk(z, k_z, largest=False)
-                keep_mask[idx_smallest_z] = False
-        if prune_y_pct > 0:
-            y = xyz[:, 1]
-            k_y = max(0, int(round(n_pts * (prune_y_pct / 100.0))))
-            if k_y > 0:
-                _, idx_largest_y = torch.topk(y, k_y, largest=True)
-                keep_mask[idx_largest_y] = False
-        if prune_x_pct > 0:
-            x = xyz[:, 0]
-            k_x = max(0, int(round(n_pts * (prune_x_pct / 100.0))))
-            if k_x > 0:
-                _, idx_smallest_x = torch.topk(x, k_x, largest=False)
-                _, idx_largest_x = torch.topk(x, k_x, largest=True)
-                keep_mask[idx_smallest_x] = False
-                keep_mask[idx_largest_x] = False
-        n_remove = (~keep_mask).sum().item()
-        if n_remove > 0:
-            n_removed = _prune_gaussians_by_mask(gaussians, keep_mask)
-            msg = []
-            if prune_z_pct > 0:
-                msg.append(f"z bottom {prune_z_pct}%")
-            if prune_y_pct > 0:
-                msg.append(f"y top {prune_y_pct}%")
-            if prune_x_pct > 0:
-                msg.append(f"x top & bottom {prune_x_pct}% each")
-            print(
-                f"[Prune] Removed {n_removed} Gaussians ({', '.join(msg)}). "
-                f"Remaining: {gaussians.get_xyz.shape[0]}"
-            )
-        else:
-            print("[Prune] No points to remove (no change).")
-    if getattr(args, "save_pruned_ply", None):
-        save_path = args.save_pruned_ply
-        os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
-        gaussians.save_ply(save_path)
-        _log_saved_path(save_path, tag="save.pruned_ply")
+    # prune_z_pct = getattr(args, "prune_z_bottom_percent", 0.0)
+    # prune_y_pct = getattr(args, "prune_y_top_percent", 0.0)
+    # prune_x_pct = getattr(args, "prune_x_both_percent", 0.0)
+    # if prune_z_pct > 0 or prune_y_pct > 0 or prune_x_pct > 0:
+    #     xyz = gaussians.get_xyz.detach()
+    #     n_pts = xyz.shape[0]
+    #     device = xyz.device
+    #     keep_mask = torch.ones(n_pts, dtype=torch.bool, device=device)
+    #     if prune_z_pct > 0:
+    #         z = xyz[:, 2]
+    #         k_z = max(0, int(round(n_pts * (prune_z_pct / 100.0))))
+    #         if k_z > 0:
+    #             _, idx_smallest_z = torch.topk(z, k_z, largest=False)
+    #             keep_mask[idx_smallest_z] = False
+    #     if prune_y_pct > 0:
+    #         y = xyz[:, 1]
+    #         k_y = max(0, int(round(n_pts * (prune_y_pct / 100.0))))
+    #         if k_y > 0:
+    #             _, idx_largest_y = torch.topk(y, k_y, largest=True)
+    #             keep_mask[idx_largest_y] = False
+    #     if prune_x_pct > 0:
+    #         x = xyz[:, 0]
+    #         k_x = max(0, int(round(n_pts * (prune_x_pct / 100.0))))
+    #         if k_x > 0:
+    #             _, idx_smallest_x = torch.topk(x, k_x, largest=False)
+    #             _, idx_largest_x = torch.topk(x, k_x, largest=True)
+    #             keep_mask[idx_smallest_x] = False
+    #             keep_mask[idx_largest_x] = False
+    #     n_remove = (~keep_mask).sum().item()
+    #     if n_remove > 0:
+    #         n_removed = _prune_gaussians_by_mask(gaussians, keep_mask)
+    #         msg = []
+    #         if prune_z_pct > 0:
+    #             msg.append(f"z bottom {prune_z_pct}%")
+    #         if prune_y_pct > 0:
+    #             msg.append(f"y top {prune_y_pct}%")
+    #         if prune_x_pct > 0:
+    #             msg.append(f"x top & bottom {prune_x_pct}% each")
+    #         print(
+    #             f"[Prune] Removed {n_removed} Gaussians ({', '.join(msg)}). "
+    #             f"Remaining: {gaussians.get_xyz.shape[0]}"
+    #         )
+    #     else:
+    #         print("[Prune] No points to remove (no change).")
+    # if getattr(args, "save_pruned_ply", None):
+    #     save_path = args.save_pruned_ply
+    #     os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
+    #     gaussians.save_ply(save_path)
+    #     _log_saved_path(save_path, tag="save.pruned_ply")
 
     # ---------------------------------------------------------------
     # ROI mask (optional segmentation)
