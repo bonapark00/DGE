@@ -2422,8 +2422,6 @@ class DGE(BaseLift3DSystem):
         )
         threestudio.info(f"origin_images saved to: {self.get_save_path('origin_images.png')}")
 
-        if len(self.cfg.seg_prompt) > 0:
-            self.update_mask(self.cfg.seg_prompt)
 
         if len(self.cfg.prompt_processor) > 0:
             self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
@@ -2469,8 +2467,14 @@ class DGE(BaseLift3DSystem):
             self.cfg.seg_prompt # self.cfg.object_prompt
         )
 
+        # if len(self.cfg.seg_prompt) > 0:
+        #     self.update_mask(self.cfg.seg_prompt)
+
     def training_step(self, batch, batch_idx):
         _ts_start = time.perf_counter()
+
+
+
         if self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.use_warp_refine:
             # Warp-and-Refine branch: vanilla IP2P propagation (no DGE attention)
             with self._latency_logger.timeit("training_step_all.edit_all_view_warp_refine"):
@@ -2505,11 +2509,19 @@ class DGE(BaseLift3DSystem):
         elif self.true_global_step % self.cfg.camera_update_per_step == 0 and self.cfg.guidance_type == 'dge-guidance' and not self.cfg.loss.use_sds:
             with self._latency_logger.timeit("training_step_all.edit_all_view"):
                 self.edit_all_view(original_render_name='origin_render', cache_name="edited_views", update_camera=self.true_global_step >= self.cfg.camera_update_per_step, global_step=self.true_global_step)
+
         
+        if self.true_global_step == 0 and len(self.cfg.seg_prompt) > 0:
+            print(f"Update mask with seg prompt: {self.cfg.seg_prompt}")
+            self.update_mask(self.cfg.seg_prompt)
+
+
         if self.true_global_step == self.cfg.mask_update_at_step and len(self.cfg.target_prompt) > 0:
-            print(f"Update mask with prompt: {self.cfg.target_prompt}")
+            print(f"Update mask with target prompt: {self.cfg.target_prompt}")
             self.update_mask(self.cfg.target_prompt)
         
+
+
         # Prune distant floater Gaussians
         if self.cfg.prune_floater_at_step >= 0 and self.true_global_step == self.cfg.prune_floater_at_step:
             with self._latency_logger.timeit(f"training_step_all.prune_floater"):

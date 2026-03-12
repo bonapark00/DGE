@@ -41,7 +41,7 @@ python generate_by_lens.py \
         --gpu 0 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
@@ -56,7 +56,7 @@ python generate_by_lens.py \
         --gpu 1 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply \
@@ -71,7 +71,7 @@ python generate_by_lens.py \
         --gpu 0 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 --guidance_scale 5.5 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 
 python generate_by_lens.py \
@@ -103,7 +103,7 @@ python generate_by_lens.py \
         --gpu 1 \
         --v_front_method scene_center \
         --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
@@ -133,7 +133,7 @@ python generate_by_lens.py \
         --n_candidates 900 \
         --v_front_method scene_center \
         --save_sa_grid output/sa_grid.jpg --num_inference_steps 5 --guidance_scale 5.0 \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply \
@@ -148,7 +148,7 @@ python generate_by_lens.py \
         --gpu 0 \
         --v_front_method scene_center --guidance_scale 7.5 \
         --n_candidates 900 \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 
 # [in2n-GSEditor/face]  --colmap_path /data/users/jaeyeonpark/dataset/in2n-GSEditor/face
@@ -165,7 +165,7 @@ python generate_by_lens.py \
         --gpu 3 \
         --n_candidates 900 \
         --v_front_method scene_center \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply \
@@ -180,7 +180,7 @@ python generate_by_lens.py \
         --gpu 2 \
         --n_candidates 900 \
         --v_front_method scene_center \
-        --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 \
+        --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0 \
         --num_inference_steps 5 --guidance_scale 7.5 --ip2p_batch_size 2
 
 
@@ -199,7 +199,7 @@ python generate_by_lens.py \
         --gpu 0 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 
 python generate_by_lens.py \
@@ -216,7 +216,7 @@ python generate_by_lens.py \
         --gpu 1 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 python generate_by_lens.py \
         --ply_path /data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply \
@@ -232,7 +232,7 @@ python generate_by_lens.py \
         --gpu 1 \
         --v_front_method scene_center \
         --num_inference_steps 5 --ip2p_batch_size 2 \
-        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0
+        --n_candidates 900 --cone_half_angle_deg 60 --diversity_y_weight 1.0 --diversity_x_weight 30.0
 
 
 
@@ -253,7 +253,7 @@ python generate_by_lens.py \
         --v_front_method scene_center --num_inference_steps 5 --guidance_scale 7.5 \
         --n_candidates 900 \
         --cone_half_angle_deg 180 \
-        --diversity_y_variance_weight 1.0 --diversity_x_weight 30.0 --roi_threshold 0.995 \
+        --diversity_y_weight 1.0 --diversity_x_weight 30.0 --roi_threshold 0.995 \
         --elevation_band_deg 20
 
 """
@@ -2318,14 +2318,14 @@ def diversity_selection(
     n_select: int = 20,
     top_fraction: float = 0.20,
     diversity_x_weight: float = 0.0,
-    diversity_y_variance_weight: float = 0.0,
+    diversity_y_weight: float = 0.0,
     latency_logger: Optional[LatencyLogger] = None,
     device: str = "cuda",
 ) -> List[int]:
     """
     Select *n_select* cameras from the top-scoring pool using
     Energy-weighted FPS. diversity_x_weight adds azimuth separation bonus;
-    diversity_y_variance_weight > 0 penalizes elevation spread (lower variance in y).
+    diversity_y_weight > 0 rewards elevation diversity (larger spread in y).
     """
     with latency_timeit(latency_logger, "step5.diversity_selection.prepare_pool", device):
         n_pool = max(int(len(scored) * top_fraction), n_select)
@@ -2375,7 +2375,8 @@ def diversity_selection(
                     min_dphi = min(min_dphi, dphi)
                     dy = abs(float(view_dirs[ci][1]) - float(view_dirs[si][1]))
                     min_dy = min(min_dy, dy)
-                diversity_score = min_ang + diversity_x_weight * min_dphi - diversity_y_variance_weight * min_dy
+                # Larger azimuth and elevation differences increase diversity when weights are positive.
+                diversity_score = min_ang + diversity_x_weight * min_dphi + diversity_y_weight * min_dy
                 # Additive combination: diversity and energy are independent terms so
                 # diversity_x_weight is not suppressed by low-energy cameras on the far side.
                 combined = diversity_score + pool_energies_norm[ci]
@@ -2535,7 +2536,7 @@ def run_generate_by_lens_pipeline(
     w_can: float = 0.4,
     top_fraction: float = 0.20,
     diversity_x_weight: float = 0.0,
-    diversity_y_variance_weight: float = 0.0,
+    diversity_y_weight: float = 0.0,
     lambda_leak: float = 1.5,
     lambda_ent: float = 2.0,
     entropy_thresh: float = 0.97,
@@ -2546,6 +2547,7 @@ def run_generate_by_lens_pipeline(
     override_opacity: Optional[torch.Tensor] = None,
     device: str = "cuda",
     v_front_method: str = "colmap_mean",
+    ip2p_num_inference_steps: int = 20,
     ip2p_batch_size: int = 1,
     attn_grid_show_labels: bool = False,
 ) -> List[Simple_Camera]:
@@ -2619,6 +2621,7 @@ def run_generate_by_lens_pipeline(
         save_attn_grid=None,
         save_sa_grid=None,
         device=device,
+        ip2p_num_inference_steps=ip2p_num_inference_steps,
         ip2p_batch_size=ip2p_batch_size,
         attn_grid_show_labels=attn_grid_show_labels,
     )
@@ -2653,7 +2656,7 @@ def run_generate_by_lens_pipeline(
         candidates, scored, roi_info["center"],
         n_select=n_select, top_fraction=eff_top_fraction,
         diversity_x_weight=diversity_x_weight,
-        diversity_y_variance_weight=diversity_y_variance_weight,
+        diversity_y_weight=diversity_y_weight,
         device=device,
     )
 
@@ -2780,8 +2783,8 @@ def main():
     parser.add_argument("--top_fraction", type=float, default=0.20, help="Top fraction of candidates for FPS")
     parser.add_argument("--diversity_x_weight", type=float, default=0.0,
                         help="Extra weight for azimuth (x-axis) diversity in Step 5 (default: 0)")
-    parser.add_argument("--diversity_y_variance_weight", type=float, default=0.0,
-                        help="Penalize elevation spread to lower variance in y in Step 5 (default: 0)")
+    parser.add_argument("--diversity_y_weight", type=float, default=0.0,
+                        help="Extra weight for elevation (y-axis) diversity in Step 5 (default: 0)")
 
     # SAGE-Probing hyperparameters
     parser.add_argument("--lambda_leak", type=float, default=1.5,

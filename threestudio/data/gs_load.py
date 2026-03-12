@@ -245,7 +245,7 @@ class GSLoadDataModuleConfig:
     lens_w_can: float = 0.4  # Canonical alignment weight
     lens_top_fraction: float = 0.20  # Top fraction for FPS diversity selection
     lens_diversity_x_weight: float = 0.0  # Extra weight for azimuth (x-axis) diversity in Step 5
-    lens_diversity_y_variance_weight: float = 0.0  # Penalize elevation spread to lower variance in y (Step 5)
+    lens_diversity_y_weight: float = 0.0  # Extra weight for elevation (y-axis) diversity in Step 5
     lens_n_seg_views: int = 8  # Number of views for multi-view ROI segmentation
     lens_seg_threshold: float = 0.3  # Back-projection threshold for ROI mask
     lens_roi_threshold: Optional[float] = None  # ROI binarization threshold for 3D mask; falls back to lens_seg_threshold
@@ -1378,11 +1378,11 @@ def _lens_score_candidates(cameras, gaussians, roi_mask, roi_info, pipe_params, 
 
 
 def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, diversity_x_weight: float = 0.0,
-                              diversity_y_variance_weight: float = 0.0):
+                              diversity_y_weight: float = 0.0):
     """
     Energy-weighted FPS: first select highest-energy camera, then iteratively
     select the one farthest from already selected (angular distance) and with high energy.
-    diversity_y_variance_weight > 0 penalizes elevation spread so selected views have lower variance in y.
+    diversity_y_weight > 0 rewards elevation diversity so selected views have larger spread in y.
     Returns list of indices in selection order (no azimuth sort).
     """
     n_pool = max(int(len(scored) * top_fraction), n_select)
@@ -1432,11 +1432,11 @@ def _lens_diversity_selection(cameras, scored, center, n_select, top_fraction, d
                     dphi = 2 * math.pi - dphi
                 min_dphi = min(min_dphi, dphi)
 
-                # Elevation (y) difference to lower variance in y when weight > 0
+                # Elevation (y) difference: larger spread rewarded when diversity_y_weight > 0
                 dy = abs(float(v_ci[1]) - float(v_si[1]))
                 min_dy = min(min_dy, dy)
 
-            diversity_score = min_ang + diversity_x_weight * min_dphi - diversity_y_variance_weight * min_dy
+            diversity_score = min_ang + diversity_x_weight * min_dphi + diversity_y_weight * min_dy
             # Additive combination: diversity and energy are independent terms so
             # diversity_x_weight is not suppressed by low-energy cameras on the far side.
             combined = diversity_score + pool_energies_norm[ci]
@@ -1503,7 +1503,7 @@ def select_key_views_by_lens_fps(
         cameras, scored, center,
         n_select=n_key, top_fraction=top_fraction,
         diversity_x_weight=0.0,
-        diversity_y_variance_weight=0.0,
+        diversity_y_weight=0.0,
     )
     return selected
 
@@ -2865,10 +2865,11 @@ class GSLoadIterableDataset(IterableDataset, Updateable):
                 w_can=self.cfg.lens_w_can,
                 top_fraction=self.cfg.lens_top_fraction,
                 diversity_x_weight=getattr(self.cfg, "lens_diversity_x_weight", 0.0),
-                diversity_y_variance_weight=getattr(self.cfg, "lens_diversity_y_variance_weight", 0.0),
+                diversity_y_weight=getattr(self.cfg, "lens_diversity_y_weight", 0.0),
                 lambda_leak=self.cfg.lens_lambda_leak,
                 lambda_ent=self.cfg.lens_lambda_ent,
                 entropy_thresh=self.cfg.lens_entropy_thresh,
+                ip2p_num_inference_steps=self.cfg.lens_ip2p_steps,
                 ip2p_batch_size=self.cfg.lens_ip2p_batch_size,
                 roi_threshold=float(roi_threshold),
                 override_opacity=override_opacity,

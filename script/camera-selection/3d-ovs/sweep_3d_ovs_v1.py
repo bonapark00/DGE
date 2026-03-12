@@ -800,7 +800,7 @@ def train_and_evaluate():
         f"data.lens_v_front_method={LENS_V_FRONT_METHOD}",
         f"data.lens_n_candidates={LENS_N_CANDIDATES}",
         f"data.lens_diversity_x_weight={LENS_DIVERSITY_X_WEIGHT}",
-        f"data.lens_diversity_y_variance_weight={LENS_DIVERSITY_Y_VARIANCE_WEIGHT}",
+        f"data.lens_diversity_y_weight={LENS_DIVERSITY_Y_VARIANCE_WEIGHT}",
         f"data.lens_ip2p_batch_size={LENS_IP2P_BATCH_SIZE}",
         f"system.guidance.camera_batch_size={CAMERA_BATCH_SIZE}",
         f"system.guidance.edit_view_selection_strategy={strategy}",

@@ -100,6 +100,98 @@
                 "data.edit_view_selection_strategy=lens",
                 "system.guidance.edit_view_selection_strategy=lens",
 
+
+                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
+                "data.lens_distance_multipliers=0.1,0.3", // bear(bear가 커서 멀리 있어야 함)
+                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face: 
+                "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! 
+
+                "system.save_image_grid_draw_texts=false",
+                "system.guidance.guidance_scale=12.5",
+
+                "data.lens_use_ip2p_scoring=true",
+                "data.lens_entropy_thresh=0.97",
+                "data.lens_ip2p_steps=5",
+                "data.lens_lambda_leak=1.5",
+                "data.lens_lambda_ent=2.0",
+
+                "data.lens_ip2p_guidance_scale=7.5",
+                "data.lens_ip2p_image_guidance_scale=1.5",
+                // NOTE: lens_hemisphere_only is no longer used (generate_by_lens uses cone_half_angle_deg only)
+                // "data.lens_hemisphere_only=true",
+                "data.lens_cone_half_angle_deg=55", // 60: man
+                // When cone_half_angle_deg>=180, restrict candidate elevation band around XZ plane
+                "data.lens_elevation_band_deg=30",
+                // ROI binarization threshold for LangSAM 3D mask (fallbacks to lens_seg_threshold if unset)
+                "data.lens_roi_threshold=0.4",
+                // Overlay numeric labels on attention grid (only matters if you save grids)
+                "data.lens_attn_grid_show_labels=false",
+                "system.guidance.camera_batch_size=5",
+                "data.lens_v_front_method=scene_center",
+                "data.lens_n_candidates=900",
+                "data.lens_diversity_x_weight=2.0", // 클수록! 좌우(azimuth 방향)로 더 퍼지게 만들려고 넣은 항.
+                "data.lens_diversity_y_weight=15.0", //값을 키우면(예: 0.5, 1.0): 서로 다른 고도의 뷰를 더 선호해 y축 다양성이 늘어납니다.
+                "data.lens_ip2p_batch_size=2", // IP2P 배치 크기 (>1이면 SAGE probing에서 여러 뷰를 한 번에 처리)
+                // "data.lens_prune_z_bottom_percent=0.4",
+                // "data.lens_prune_y_top_percent=0.4",
+                // "data.lens_prune_x_both_percent=1",
+                // "data.lens_n_candidates=150",
+                "data.lens_top_fraction=0.40",
+                // "data.lens_w_vis=0.6",
+                "data.lens_w_can=0.3",
+
+                // DGE extended-attention + feature-injection controls
+                "system.guidance.target_use_extended_attention=true",        //# SA: target loop: true=warmup->extended (default), false=always normal
+                "system.guidance.feature_injection_mode=similarity",       //# SA: similarity | 3d_anchor | none (none = no cross-view feature injection)
+                
+                "system.guidance.per_step_cross_attn_consistency=true",    //# CA:  per-step: 매 timestep 마다 pivotal의 cross-attn을 3D경유→모든뷰에 일관 적용 (Phase1 cross-attn 파이프라인 비활성화)
+                "system.guidance.per_step_cross_attn_t_start=500",         // t_step >= 이 값일 때만 per-step consistency 적용 (높을수록 초기에만)
+                "system.guidance.per_step_cross_attn_resolutions=[1024]",  // list of H*W; e.g. [32*32] or [32*32,64*64]
+                // "system.guidance.injection_lambda=0.5",
+                // "system.guidance.injection_3d_anchor_style=gather",f
+                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
+                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
+
+                "system.guidance.target_batch_strategy=adaptive", // fixed | adaptive
+                "system.guidance.target_batch_neighbor_threshold=900", // “값을 키워야” 더 일찍 sliding_window(late_mode)로 넘어갑니다.
+                "system.guidance.target_batch_late_mode=sliding_window", // sliding_window( timestep이 지날수록 시작 인덱스가 조금씩 밀리는 연속 배치) | random
+                "system.guidance.target_batch_sliding_stride=5", // 
+                "system.guidance.target_key_selection_mode=canonical_progressive", // random | canonical_progressive (early=frontal key, late=least-used key) | fixed (always first in batch)
+
+                "system.mask_thres=0.9",
+                "system.mask_max_ratio=0.6",
+                "system.mask_min_ratio=0.01",
+                "system.mask_outlier_iqr=1.5",
+                "system.loss.lambda_d=0.0",
+                "system.loss.lambda_dds=0.0",
+                "system.dds_t_range=[0.02,0.5]",
+                "system.dds_cfg_scale=7.5",
+                "system.loss.lambda_ism=0.0",
+                "system.loss.use_sds=false",
+                "system.guidance.use_sds_dge=false",
+                "system.loss.lambda_sds=0.0",
+                
+                "system.use_multiview_edit=true",
+                "system.use_warp_refine=false",
+                "system.use_gaussian_provenance=false",
+                
+
+                "system.mask_view_population=colmap_views",
+                "system.mask_num_views=60",
+                "system.mask_update_view_num=60",
+                "system.mask_update_at_step=600",
+                "data.max_view_num=20",
+                "data.max_edit_view_num=20",
+
+                "system.densify_until_iter=1500",
+
+                "system.camera_update_per_step=1500",
+                "system.prune_floater_at_step=-1",
+                "checkpoint.save_top_k=0",
+
+
+
                 // face dataset
                 "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
                 "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
@@ -113,12 +205,47 @@
                 // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
 
                 // man -> clown
-                "system.prompt_processor.prompt=Turn the man's face into a clown",
-                "data.lens_edit_prompt=Turn the man's face into a clown",
-                "system.seg_prompt=a face",
-                "data.mmr_seg_prompt=a face",
-                "data.lens_seg_prompt=a face", // face of the man은 안됨!!!
-                "system.target_prompt=clown",
+                // "system.prompt_processor.prompt=Turn the man's face into a clown",
+                // "data.lens_edit_prompt=Turn the man's face into a clown",
+                // "system.seg_prompt=face of the man with mustache",
+                // "data.mmr_seg_prompt=face of the man with mustache",
+                // "data.lens_seg_prompt=face",
+                // "system.target_prompt=face of the clown",
+
+                // zipper pull red
+                "system.prompt_processor.prompt=Change the zipper pull to a bright red color",
+                "data.lens_edit_prompt=Change the zipper pull to a bright red color",
+                "system.seg_prompt=metallic zipper pull of the main zipper",
+                "data.mmr_seg_prompt=metallic zipper pull of the main zipper",
+                "data.lens_seg_prompt=metallic zipper pull of the main zipper",
+                "system.target_prompt=bright red colored zipper pull",
+            
+                // man to grandma
+                "system.prompt_processor.prompt=Turn the man into a grandma",
+                "data.lens_edit_prompt=Turn the man into a grandma",
+                "system.seg_prompt=man",
+                "data.mmr_seg_prompt=man",
+                "data.lens_seg_prompt=man",
+                "system.target_prompt=grandma",
+                "data.lens_distance_multipliers=2.0, 3.0,4.0,5.0",
+                "--gpu", "1",
+
+                // eyes blue
+                // "system.prompt_processor.prompt=Make the man's eyes blue",
+                // "data.lens_edit_prompt=Make the man's eyes blue",
+                // "system.seg_prompt=eyes of the man",
+                // "data.mmr_seg_prompt=eyes of the man",
+                // "data.lens_seg_prompt=eyes of the man",
+                // "system.target_prompt=blue eyes of the man",
+
+                // // leather jacket
+                // "system.prompt_processor.prompt=Change the fleece jacket into a leather jacket",
+                // "data.lens_edit_prompt=Change the fleece jacket into a leather jacket",
+                // "system.seg_prompt=fleece jacket",
+                // "data.mmr_seg_prompt=fleece jacket",
+                // "data.lens_seg_prompt=fleece jacket",
+                // "system.target_prompt=leather jacket",
+
 
 
                 // man -> elf
@@ -180,97 +307,6 @@
                 // "data.lens_seg_prompt=the bear's face",
                 // "system.target_prompt=red markings on the bear's face",
 
-                "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
-                "data.lens_distance_multipliers=0.1,0.3", // bear(bear가 커서 멀리 있어야 함)
-                "data.lens_distance_multipliers=2.0,2.5,3.0,3.5", // man face: 
-                "data.lens_distance_multipliers=3.0", // man face: 3.5
-                // "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! 
-
-                "system.save_image_grid_draw_texts=false",
-                "system.guidance.guidance_scale=12.5",
-
-                "data.lens_use_ip2p_scoring=true",
-                "data.lens_entropy_thresh=0.97",
-                "data.lens_ip2p_steps=5",
-                "data.lens_lambda_leak=1.5",
-                "data.lens_lambda_ent=2.0",
-
-                "data.lens_ip2p_guidance_scale=7.5",
-                "data.lens_ip2p_image_guidance_scale=1.5",
-                // NOTE: lens_hemisphere_only is no longer used (generate_by_lens uses cone_half_angle_deg only)
-                // "data.lens_hemisphere_only=true",
-                "data.lens_cone_half_angle_deg=60", // 60: man
-                // When cone_half_angle_deg>=180, restrict candidate elevation band around XZ plane
-                "data.lens_elevation_band_deg=30",
-                // ROI binarization threshold for LangSAM 3D mask (fallbacks to lens_seg_threshold if unset)
-                "data.lens_roi_threshold=0.4",
-                // Overlay numeric labels on attention grid (only matters if you save grids)
-                "data.lens_attn_grid_show_labels=false",
-                "system.guidance.camera_batch_size=5",
-                "data.lens_v_front_method=scene_center",
-                "data.lens_n_candidates=900",
-                "data.lens_diversity_x_weight=30.0", // 클수록! 좌우(azimuth 방향)로 더 퍼지게 만들려고 넣은 항.
-                "data.lens_diversity_y_variance_weight=3.0", //값을 키우면(예: 0.5, 1.0): 고도가 비슷한 뷰를 더 선호해 y축 방향 variance가 줄어듭니다.
-                "data.lens_ip2p_batch_size=2", // IP2P 배치 크기 (>1이면 SAGE probing에서 여러 뷰를 한 번에 처리)
-                // "data.lens_prune_z_bottom_percent=0.4",
-                // "data.lens_prune_y_top_percent=0.4",
-                // "data.lens_prune_x_both_percent=1",
-                // "data.lens_n_candidates=150",
-                // "data.lens_top_fraction=0.20",
-                // "data.lens_w_vis=0.6",
-                // "data.lens_w_can=0.4",
-
-                // DGE extended-attention + feature-injection controls
-                "system.guidance.target_use_extended_attention=true",        //# SA: target loop: true=warmup->extended (default), false=always normal
-                "system.guidance.feature_injection_mode=similarity",       //# SA: similarity | 3d_anchor | none (none = no cross-view feature injection)
-                
-                "system.guidance.per_step_cross_attn_consistency=true",    //# CA:  per-step: 매 timestep 마다 pivotal의 cross-attn을 3D경유→모든뷰에 일관 적용 (Phase1 cross-attn 파이프라인 비활성화)
-                "system.guidance.per_step_cross_attn_t_start=500",         // t_step >= 이 값일 때만 per-step consistency 적용 (높을수록 초기에만)
-                "system.guidance.per_step_cross_attn_resolutions=[1024]",  // list of H*W; e.g. [32*32] or [32*32,64*64]
-                // "system.guidance.injection_lambda=0.5",
-                // "system.guidance.injection_3d_anchor_style=gather",f
-                "system.multiview_edit_key_selection_strategy=lens_fps", // lens_fps, uniform, uniform_random, manual
-                // "system.multiview_edit_key_selection_strategy=uniform_random", // 각 구간 안에서 랜덤하게
-
-                "system.guidance.target_batch_strategy=adaptive", // fixed | adaptive
-                "system.guidance.target_batch_neighbor_threshold=900", // “값을 키워야” 더 일찍 sliding_window(late_mode)로 넘어갑니다.
-                "system.guidance.target_batch_late_mode=sliding_window", // sliding_window( timestep이 지날수록 시작 인덱스가 조금씩 밀리는 연속 배치) | random
-                "system.guidance.target_batch_sliding_stride=5", // 
-                "system.guidance.target_key_selection_mode=canonical_progressive", // random | canonical_progressive (early=frontal key, late=least-used key) | fixed (always first in batch)
-
-                "system.mask_thres=0.6",
-                "system.mask_max_ratio=0.6",
-                "system.mask_min_ratio=0.01",
-                "system.mask_outlier_iqr=1.5",
-                "system.loss.lambda_d=0.0",
-                "system.loss.lambda_dds=0.0",
-                "system.dds_t_range=[0.02,0.5]",
-                "system.dds_cfg_scale=7.5",
-                "system.loss.lambda_ism=0.0",
-                "system.loss.use_sds=false",
-                "system.guidance.use_sds_dge=false",
-                "system.loss.lambda_sds=0.0",
-                
-                "system.use_multiview_edit=true",
-                "system.use_warp_refine=false",
-                "system.use_gaussian_provenance=false",
-                
-
-                "system.mask_view_population=train_cameras",
-                "system.mask_num_views=30",
-                "system.mask_update_view_num=30",
-                "system.mask_update_at_step=300",
-                "data.max_view_num=25",
-                "data.max_edit_view_num=20",
-
-
-
-                "system.densify_until_iter=1500",
-
-                "system.camera_update_per_step=1500",
-                "system.prune_floater_at_step=-1",
-                "checkpoint.save_top_k=0",
-
             ],
             "cwd": "${workspaceFolder}",
             "python": "${command:python.interpreterPath}"
@@ -285,7 +321,7 @@
             "args": [
                 "--config", "configs/dge_camera-selection.yaml",
                 "--train",
-                "--gpu", "0",
+                "--gpu", "1",
                 "trainer.max_steps=1500",
 
                 "data.edit_view_selection_strategy=lens",
@@ -308,7 +344,6 @@
                 // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
                 // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
                 // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/blue_sofa",
-                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/random/3d-ovs/blue_sofa",
 
                 // pooh -> robot
                 // "system.prompt_processor.prompt=Make the pooh look like a robot",
@@ -327,7 +362,7 @@
                 // "system.target_prompt=sunglasses of the pooh",
 
                 // Change the pooh's sweater color to blue
-                // "system.prompt_processor.prompt=Change the sweater color to blue",
+                // "system.prompt_processor.prompt=Change the pooh's sweater color to blue",
                 // "data.lens_edit_prompt=Change the pooh's sweater color to blue",
                 // "system.seg_prompt=red sweater of the pooh",
                 // "data.mmr_seg_prompt=red sweater of the pooh",
@@ -392,12 +427,12 @@
                 // "system.target_prompt=striped woven basket",
                 
                 // room: dino_green - dinosaur figure to green
-                "system.prompt_processor.prompt=Change the dinosaur figure to green",
-                "data.lens_edit_prompt=Change the dinosaur figure to green",
-                "system.seg_prompt=brown dinosaur figure",
-                "data.mmr_seg_prompt=brown dinosaur figure",
-                "data.lens_seg_prompt=brown dinosaur figure",
-                "system.target_prompt=green dinosaur figure",
+                // "system.prompt_processor.prompt=Change the dinosaur figure to green",
+                // "data.lens_edit_prompt=Change the dinosaur figure to green",
+                // "system.seg_prompt=brown dinosaur figure",
+                // "data.mmr_seg_prompt=brown dinosaur figure",
+                // "data.lens_seg_prompt=brown dinosaur figure",
+                // "system.target_prompt=green dinosaur figure",
                 
                 // blue_sofa ------------------------------------------------------------
                 // blue_sofa: plush toy -> tiger stripes
@@ -409,12 +444,12 @@
                 // "system.target_prompt=tiger plush toy",
                 
                 // blue_sofa: Change the perfume liquid color to blue
-                // "system.prompt_processor.prompt=Change the perfume liquid color to blue",
-                // "data.lens_edit_prompt=Change the perfume liquid color to blue",
-                // "system.seg_prompt=yellow liquid inside the perfume bottle",
-                // "data.mmr_seg_prompt=yellow liquid inside the perfume bottle",
-                // "data.lens_seg_prompt=the perfume bottle",
-                // "system.target_prompt=ocean blue liquid inside the perfume bottle",
+                "system.prompt_processor.prompt=Change the color of the cap of the perfume bottle into white",
+                "data.lens_edit_prompt=Change the color of the cap of the perfume bottle into white",
+                "system.seg_prompt=black cap of the perfume bottle",
+                "data.mmr_seg_prompt=black cap of the perfume bottle",
+                "data.lens_seg_prompt=black cap of the perfume bottle",
+                "system.target_prompt=white cap of the perfume bottle",
                 
                 // Change the sunglasses to red frames
                 // "system.prompt_processor.prompt=Change the sunglasses to red frames",
@@ -438,7 +473,7 @@
                 "data.lens_distance_multipliers=4.0,4.5,5.0,5.5",
                 "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
                 // "data.lens_distance_multipliers=0.5, 1.0, 1.5, 2.0", // room: chicken, basket
-                // "data.lens_distance_multipliers=1.6", // 하나로 지정해보기!! -> rabbit sunglasses 1.6, dino green 4.0
+                // "data.lens_distance_multipliers=4.0", // 하나로 지정해보기!! -> rabbit sunglasses 1.6, dino green 4.0
 
                 "data.lens_use_ip2p_scoring=true",
                 "data.lens_entropy_thresh=0.97",
@@ -473,12 +508,12 @@
                 "data.lens_v_front_method=scene_center",
                 "data.lens_n_candidates=900",
                 "data.lens_diversity_x_weight=30.0",
-                "data.lens_diversity_y_variance_weight=1.0",
+                "data.lens_diversity_y_weight=1.0",
 
                 "system.guidance.target_use_extended_attention=true", //# SA
                 "system.guidance.feature_injection_mode=similarity",
                 "system.guidance.per_step_cross_attn_consistency=true", //# CA
-                "system.guidance.per_step_cross_attn_t_start=800",
+                "system.guidance.per_step_cross_attn_t_start=500",
                 "system.guidance.per_step_cross_attn_resolutions=[1024]",
                 "system.guidance.target_batch_strategy=adaptive",
                 "system.guidance.target_batch_neighbor_threshold=900",
@@ -512,6 +547,10 @@
                 "system.mask_num_views=30",
                 "system.mask_update_view_num=30",
                 "system.mask_update_at_step=300",
+
+                "data.max_view_num=20",
+                "data.max_edit_view_num=20",
+
                 "data.max_view_num=5",
                 "data.max_edit_view_num=5",
 
