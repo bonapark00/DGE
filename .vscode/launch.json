@@ -1,0 +1,143 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "DGE: camera-selection",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_main.yaml",
+                "--train", 
+                "--gpu", "2",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=head",
+                "system.mask_thres=0.6",
+                "data.max_view_num=25",
+                "system.camera_update_per_step=1500",
+                "system.target_prompt=A clown",
+                "system.loss.lambda_d=10.0",
+                "data.max_edit_view_num=20",
+                "data.edit_view_selection_strategy=depth",
+                "system.guidance.edit_view_selection_strategy=depth",
+                "system.mask_update_at_step=400",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d10.0/depth"
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: reduce-time",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_main.yaml",
+                "--train", 
+                "--gpu", "2",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=a man",
+                "system.mask_thres=0.6",
+                "data.max_view_num=25",
+                "system.camera_update_per_step=1500",
+                "system.target_prompt=A clown",
+                "system.loss.lambda_d=10.0",
+                "data.max_edit_view_num=20",
+                "data.edit_view_selection_strategy=manual-20",
+                "system.guidance.edit_view_selection_strategy=manual-20",
+                "system.mask_update_at_step=400",
+                "name=reduce-time/w-MaskUpdate/iter1/lambda_d10.0/manual-20"
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: main",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_main.yaml",
+                "--train", 
+                "--gpu", "4",
+                "trainer.max_steps=1500",
+                "system.guidance.guidance_scale=12.5",
+
+                // "system.prompt_processor.prompt=Change his eye color to blue",
+                // "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                // "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                // "system.seg_prompt=a man",
+
+                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                "system.prompt_processor.prompt=Make the pooh look like a robot",
+                "system.prompt_processor.prompt=Make dinosaur color into green",
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                // "system.seg_prompt=dinosaur figure",
+
+                "system.mask_thres=0.6",
+                "data.max_view_num=20",
+                "system.camera_update_per_step=500",
+                "name=main/iter1"
+            ],
+            // "env": {
+            //     "CUDA_VISIBLE_DEVICES": "2"
+            // },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        },
+        {
+            "name": "DGE: Man2Clown Training",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/launch.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": [
+                "--config", "configs/dge_clip-loss.yaml",
+                "--train", "--gpu", "0",
+                "trainer.max_steps=1500",
+                "system.prompt_processor.prompt=Turn the man into a clown",
+                "data.source=/working/style-transfer/VcEdit/gs_data/face/",
+                "system.guidance.guidance_scale=12.5",
+                "system.gs_source=/working/style-transfer/VcEdit/gs_data/trained_gs_models/face/point_cloud.ply",
+                "system.seg_prompt=man",
+                "system.target_prompt=clown",
+                "system.mask_thres=0.6",
+                // "system.loss.lambda_d=100.0",
+                "data.max_view_num=25",
+                "data.max_edit_view_num=20",
+                "system.camera_update_per_step=1500",
+                "system.mask_update_at_step=-1",
+                "name=clip-loss/wo-MaskUpdate/iter1/lambda_d100.0"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "2"
+            },
+            "cwd": "${workspaceFolder}",
+            "python": "${command:python.interpreterPath}"
+        }
+    ]
+}
