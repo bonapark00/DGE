@@ -190,32 +190,31 @@
                 "system.prune_floater_at_step=-1",
                 "checkpoint.save_top_k=0",
 
-    
+
 
                 // face dataset
-                "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face/",
+                // "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/face",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/face/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/face/",
 
                 // bear dataset
-                // "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/bear",
-                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
-                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
-                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
+                "data.source=/data/users/jaeyeonpark/dataset/in2n-GSEditor/bear",
+                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
+                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/in2n-GSEditor/bear/point_cloud/iteration_30000/point_cloud.ply",
+                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/in2n-GSEditor/bear/",
 
                 // man -> clown
-                // "system.prompt_processor.prompt=Turn the man's face into a clown",
-                // "data.lens_edit_prompt=Turn the man's face into a clown",
+                // "system.prompt_processor.prompt=Turn the man into a clown",
+                // "data.lens_edit_prompt=Turn the man into a clown",
                 // "system.seg_prompt=man",
                 // "data.mmr_seg_prompt=man",
                 // "data.lens_seg_prompt=face",
                 // "system.target_prompt=clown",
-                // // "data.lens_distance_multipliers=2.0, 3.0,4.0,5.0",
                 // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
-                // "--gpu", "1",
+                // "--gpu", "4",
                 // "data.lens_prune_z_bottom_percent=3.0",
-            
+                
                 // zipper pull red
                 // "system.prompt_processor.prompt=Change the zipper pull to a bright red color",
                 // "data.lens_edit_prompt=Change the zipper pull to a bright red color",
@@ -240,16 +239,16 @@
                 // "data.lens_prune_z_bottom_percent=3.0",
                 // "data.lens_cone_half_angle_deg=60", // 60: man
 
-                // eyes blue
-                "system.prompt_processor.prompt=Make the man's eyes blue",
-                "data.lens_edit_prompt=Make the man's eyes blue",
-                "system.seg_prompt=brown eyes of man's face",
-                "data.mmr_seg_prompt=brown eyes of man's face",
-                "data.lens_seg_prompt=face",
-                "system.target_prompt=blue eyes of man's face",
-                "--gpu", "0",
-                "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
-                "data.lens_prune_z_bottom_percent=3.0",
+                // // eyes blue
+                // "system.prompt_processor.prompt=Make the man's eyes blue",
+                // "data.lens_edit_prompt=Make the man's eyes blue",
+                // "system.seg_prompt=brown eyes of man's face",
+                // "data.mmr_seg_prompt=brown eyes of man's face",
+                // "data.lens_seg_prompt=face",
+                // "system.target_prompt=blue eyes of man's face",
+                // "--gpu", "6",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "data.lens_prune_z_bottom_percent=3.0",
 
                 // // leather jacket
                 // "system.prompt_processor.prompt=Change the fleece jacket into a leather jacket",
@@ -258,11 +257,9 @@
                 // "data.mmr_seg_prompt=fleece jacket",
                 // "data.lens_seg_prompt=fleece jacket",
                 // "system.target_prompt=leather jacket",
-                // "--gpu", "0",
-                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
-                // "data.lens_prune_z_bottom_percent=3.0",
+                // "--gpu", "7",
 
-                // // // blue denim 
+                // // blue denim 
                 // "system.prompt_processor.prompt=Change the jacket material to blue denim",
                 // "data.lens_edit_prompt=Change the jacket material to blue denim",
                 // "system.seg_prompt=entire fleece jacket",
@@ -272,29 +269,8 @@
                 // "data.lens_cone_half_angle_deg=60", // 60: man
                 // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
                 // "data.lens_prune_z_bottom_percent=3.0",
-                // "--gpu", "1",
+                // "--gpu", "6",
 
-
-
-                // man -> elf
-                // "system.prompt_processor.prompt=Make his ear like an elf's ear",
-                // "data.lens_edit_prompt=Make his ear like an elf's ear",
-                // "system.seg_prompt=ears of the man",
-                // "data.mmr_seg_prompt=ears of the man",
-                // "data.lens_seg_prompt=ears of the man",
-                // "system.target_prompt=man's pointed, elf-like right ear",
-
-     
-
-                // # bear -> bronze statue
-                // statue_bronze Change the material of the bear statue to bronze",
-                // "system.prompt_processor.prompt=Change the material of the bear statue to bronze",
-                // "data.lens_edit_prompt=Change the material of the bear statue to bronze",
-                // "system.seg_prompt=entire bear statue",
-                // "data.mmr_seg_prompt=entire bear statue",
-                // "data.lens_seg_prompt=entire bear statue",
-                // "system.target_prompt=bronze bear statue",
-                
                 // make man smile
                 // "system.prompt_processor.prompt=Make the man open his mouth and smile",
                 // "data.lens_edit_prompt=Make the man open his mouth and smile",
@@ -321,6 +297,38 @@
                 // "system.target_prompt=spiderman with a mask",
 
 
+                // man -> elf
+                // "system.prompt_processor.prompt=Make his ear like an elf's ear",
+                // "data.lens_edit_prompt=Make his ear like an elf's ear",
+                // "system.seg_prompt=ears of the man",
+                // "data.mmr_seg_prompt=ears of the man",
+                // "data.lens_seg_prompt=ears of the man",
+                // "system.target_prompt=man's pointed, elf-like right ear",
+
+                // Change the jacket material to blue denim
+                // "system.prompt_processor.prompt=Change the jacket material to blue denim",
+                // "data.lens_edit_prompt=Change the jacket material to blue denim",
+                // "system.seg_prompt=entire fleece jacket",
+                // "data.mmr_seg_prompt=entire fleece jacket",
+                // "data.lens_seg_prompt=entire fleece jacket",
+                // "system.target_prompt=a blue denim jacket",
+
+                // # bear -> bronze statue
+                // statue_bronze Change the material of the bear statue to bronze",
+                "system.prompt_processor.prompt=Change the material of the bear statue to bronze",
+                "data.lens_edit_prompt=Change the material of the bear statue to bronze",
+                "system.seg_prompt=entire bear statue",
+                "data.mmr_seg_prompt=entire bear statue",
+                "data.lens_seg_prompt=entire bear statue",
+                "system.target_prompt=bronze bear statue",
+                "--gpu", "6",
+                "data.lens_cone_half_angle_deg=180", // 60: man
+                "data.lens_roi_threshold=0.995",
+                "data.lens_distance_multipliers=1.0, 1.5, 2.0, 2.5",
+                // "system.guidance.guidance_scale=15.5",
+
+
+
 
                 // bear -> markings red 
                 // "system.prompt_processor.prompt=Change the yellow face markings to red",
@@ -329,6 +337,29 @@
                 // "data.mmr_seg_prompt=the bear's face",
                 // "data.lens_seg_prompt=the bear's face",
                 // "system.target_prompt=red markings on the bear's face",
+
+                // bear into ice statue
+                // "system.prompt_processor.prompt=Change the material of the bear statue to clear ice",
+                // "data.lens_edit_prompt=Change the material of the bear statue to clear ice",
+                // "system.seg_prompt=entire bear statue",
+                // "data.mmr_seg_prompt=entire bear statue",
+                // "data.lens_seg_prompt=entire bear statue",
+                // "system.target_prompt=clear ice bear statue",
+                // "--gpu", "6",
+                // "data.lens_cone_half_angle_deg=180", // 60: man
+                // "data.lens_roi_threshold=0.995",
+                // "data.lens_distance_multipliers=1.0, 1.5, 2.0, 2.5",
+                // // "system.guidance.guidance_scale=15.5",
+
+                // // bear statue into polar bear
+                // "system.prompt_processor.prompt=Change the bear statue into a polar bear with white fur",
+                // "data.lens_edit_prompt=Change the bear statue into a polar bear with white fur",
+                // "system.seg_prompt=entire bear statue",
+                // "data.mmr_seg_prompt=entire bear statue",
+                // "data.lens_seg_prompt=entire bear statue",
+                // "system.target_prompt=polar bear with white fur",
+                // "--gpu", "6",
+                // "data.lens_cone_half_angle_deg=180", // 60: man
 
             ],
             "cwd": "${workspaceFolder}",
@@ -350,146 +381,7 @@
                 "data.edit_view_selection_strategy=lens",
                 "system.guidance.edit_view_selection_strategy=lens",
 
-                // covered_desk dataset
-                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
-                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
-                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
-
-                // room dataset
-                "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
-                "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
-                "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room",
-                
-                // blue_sofa dataset
-                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa",
-                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
-                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
-                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/blue_sofa",
-
-                // pooh -> robot
-                // "system.prompt_processor.prompt=Make the pooh look like a robot",
-                // "data.lens_edit_prompt=Make the pooh look like a robot",
-                // "system.seg_prompt=pooh",
-                // "data.mmr_seg_prompt=pooh",
-                // "data.lens_seg_prompt=pooh",
-                // "system.target_prompt=robot",
-
-                // pooh -> sunglasses
-                // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his eyes",
-                // "data.lens_edit_prompt=Make the pooh wear sunglasses on his eyes",
-                // "system.seg_prompt=head of the pooh",
-                // "data.mmr_seg_prompt=head of the pooh",
-                // "data.lens_seg_prompt=head of the pooh",
-                // "system.target_prompt=sunglasses of the pooh",
-
-                // Change the pooh's sweater color to blue
-                // "system.prompt_processor.prompt=Change the pooh's sweater color to blue",
-                // "data.lens_edit_prompt=Change the pooh's sweater color to blue",
-                // "system.seg_prompt=red sweater of the pooh",
-                // "data.mmr_seg_prompt=red sweater of the pooh",
-                // "data.lens_seg_prompt=red sweater of the pooh",
-                // "system.target_prompt=blue sweater of the pooh",
-
-                // baseball -> tennis ball
-                // "system.prompt_processor.prompt=Replace the baseball with a yellow tennis ball",
-                // "data.lens_edit_prompt=Replace the baseball with a tennis ball",
-                // "system.prompt_processor.prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
-                // "data.lens_edit_prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
-                // "system.seg_prompt=white baseball",
-                // "data.mmr_seg_prompt=white baseball",
-                // "data.lens_seg_prompt=white baseball",
-                // "system.target_prompt=yellow tennis ball",
-            
-                // Change the baseball to a solid golden ball
-                // "system.prompt_processor.prompt=Change the baseball to a solid golden ball",
-                // "data.lens_edit_prompt=Change the baseball to a solid golden ball",
-                // "system.seg_prompt=white baseball",
-                // "data.mmr_seg_prompt=white baseball",
-                // "data.lens_seg_prompt=white baseball",
-                // "system.target_prompt=solid golden ball",
-
-                // room: rabit -> wear sunglasses
-                // "system.prompt_processor.prompt=Give the rabbit figure a pair of small sunglasses",
-                // "data.lens_edit_prompt=Give the rabbit figure a pair of small sunglasses",
-                // "system.seg_prompt=face of the rabbit",
-                // "data.mmr_seg_prompt=face of the rabbit",
-                // "data.lens_seg_prompt=face of the rabbit",
-                // "system.target_prompt=small sunglasses",
-                
-                // rubber chicken -> tiny blue bow tie
-                // "system.prompt_processor.prompt=Add a blue colored bow tie to the chicken",
-                // "data.lens_edit_prompt=Add a blue colored bow tie to the neck of chicken",
-                // "system.seg_prompt=neck of the yellow rubber chicken",
-                // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
-                // "data.lens_seg_prompt=yellow rubber chicken",
-                // "system.target_prompt=a blue colored bow tie on the neck of chicken",
-                
-                // "system.prompt_processor.prompt=Add a big blue ribbon to the rubber chicken's neck",
-                // "data.lens_edit_prompt=Add a big ribbon of blue color to the rubber chicken's neck",
-                // "system.seg_prompt=neck of the yellow rubber chicken",
-                // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
-                // "data.lens_seg_prompt=neck of the yellow rubber chicken",
-                // "system.target_prompt=a big ribbon of blue color",
-                
-                // bow tie bigger
-                // "system.prompt_processor.prompt=Make the bow tie on the rubber chicken's neck bigger",
-                // "data.lens_edit_prompt=Make the bow tie on the rubber chicken's neck bigger",
-                // "system.seg_prompt=neck of the yellow rubber chicken",
-                // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
-                // "data.lens_seg_prompt=neck of the yellow rubber chicken",
-                // "system.target_prompt=a big bow tie on the rubber chicken's neck",
-
-                // room: basket with stipe patterns
-                // "system.prompt_processor.prompt=Change the basket material to blue striped patterns",
-                // "data.lens_edit_prompt=Change the basket material to striped patterns",
-                // "system.seg_prompt=woven basket",
-                // "data.mmr_seg_prompt=woven basket",
-                // "data.lens_seg_prompt=woven basket",
-                // "system.target_prompt=striped woven basket",
-                
-                // room: dino_green - dinosaur figure to green
-                // "system.prompt_processor.prompt=Change the dinosaur figure to green",
-                // "data.lens_edit_prompt=Change the dinosaur figure to green",
-                // "system.seg_prompt=brown dinosaur figure",
-                // "data.mmr_seg_prompt=brown dinosaur figure",
-                // "data.lens_seg_prompt=brown dinosaur figure",
-                // "system.target_prompt=green dinosaur figure",
-                
-                // blue_sofa ------------------------------------------------------------
-                // blue_sofa: plush toy -> tiger stripes
-                // "system.prompt_processor.prompt=Change the plush toy's look like a tiger",
-                // "data.lens_edit_prompt=Change the plush toy's look like a tiger",
-                // "system.seg_prompt=plush toy",
-                // "data.mmr_seg_prompt=plush toy",
-                // "data.lens_seg_prompt=plush toy",
-                // "system.target_prompt=tiger plush toy",
-                
-                // blue_sofa: Change the perfume liquid color to blue
-                "system.prompt_processor.prompt=Change the color of the cap of the perfume bottle into white",
-                "data.lens_edit_prompt=Change the color of the cap of the perfume bottle into white",
-                "system.seg_prompt=black cap of the perfume bottle",
-                "data.mmr_seg_prompt=black cap of the perfume bottle",
-                "data.lens_seg_prompt=black cap of the perfume bottle",
-                "system.target_prompt=white cap of the perfume bottle",
-                
-                // Change the sunglasses to red frames
-                // "system.prompt_processor.prompt=Change the sunglasses to red frames",
-                // "data.lens_edit_prompt=Change the sunglasses to red frames",
-                // "system.seg_prompt=black frames of the sunglasses",
-                // "data.mmr_seg_prompt=black frames of the sunglasses",
-                // "data.lens_seg_prompt=sunglasses",
-                // "system.target_prompt=bright red frames of the sunglasses",
-
-                // Change the speaker to a shiny gold texture
-                // "system.prompt_processor.prompt=Change the speaker to a shiny gold texture",
-                // "data.lens_edit_prompt=Change the speaker to a shiny gold texture",
-                // "system.seg_prompt=grey speaker body",
-                // "data.mmr_seg_prompt=grey speaker body",
-                // "data.lens_seg_prompt=grey speaker body",
-                // "system.target_prompt=shiny metallic gold speaker body",
-
+         
                 "data.lens_distance_multipliers=1.0,1.5,2.0,2.5", // room: chicken, basket
                 "data.lens_distance_multipliers=3.0,4.0,5.0,6.0",
                 "data.lens_distance_multipliers=2.0,2.5,3.0,3.5",
@@ -566,7 +458,7 @@
                 "system.use_gaussian_provenance=false",
                 
 
-                "system.mask_view_population=train_cameras",
+                "system.mask_view_population=colmap_views",
                 "system.mask_num_views=30",
                 "system.mask_update_view_num=30",
                 "system.mask_update_at_step=300",
@@ -574,16 +466,262 @@
                 "data.max_view_num=20",
                 "data.max_edit_view_num=20",
 
-                "data.max_view_num=5",
-                "data.max_edit_view_num=5",
-
-
 
                 "system.densify_until_iter=1500",
 
                 "system.camera_update_per_step=1500",
                 "system.prune_floater_at_step=-1",
                 "checkpoint.save_top_k=0",
+
+
+                // covered_desk dataset
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/covered_desk",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/covered_desk/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/covered_desk",
+
+         
+                // pooh -> robot /
+                // "system.prompt_processor.prompt=Make the pooh look like a robot",
+                // "data.lens_edit_prompt=Make the pooh look like a robot",
+                // "system.seg_prompt=pooh",
+                // "data.mmr_seg_prompt=pooh",
+                // "data.lens_seg_prompt=pooh",
+                // "system.target_prompt=robot",
+                // "system.mask_view_population=colmap_views",
+                // "system.mask_num_views=20",
+                // "system.mask_update_view_num=20",
+                // "data.lens_distance_multipliers=4.0", 
+                // "data.max_view_num=20",
+                // "data.max_edit_view_num=20",
+                // "data.lens_diversity_y_weight=0.0",
+                // "--gpu", "6",
+                // "data.lens_cone_half_angle_deg=40",
+   
+                // pooh -> sunglasses
+                // "system.prompt_processor.prompt=Make the pooh wear sunglasses on his eyes",
+                // "data.lens_edit_prompt=Make the pooh wear sunglasses on his eyes",
+                // "system.seg_prompt=head of the pooh",
+                // "data.mmr_seg_prompt=head of the pooh",
+                // "data.lens_seg_prompt=head of the pooh",
+                // "system.target_prompt=sunglasses of the pooh",
+
+                // Change the pooh's sweater color to blue
+                "system.prompt_processor.prompt=Change the pooh's sweater color to blue",
+                "data.lens_edit_prompt=Change the pooh's sweater color to blue",
+                "system.seg_prompt=red sweater of the pooh",
+                "data.mmr_seg_prompt=red sweater of the pooh",
+                "data.lens_seg_prompt=red sweater of the pooh",
+                "system.target_prompt=blue sweater of the pooh",
+                "system.mask_view_population=colmap_views",
+                "system.mask_num_views=20",
+                "system.mask_update_view_num=20",
+                "data.max_view_num=20",
+                "data.max_edit_view_num=20",
+                "data.lens_diversity_y_weight=0.0",
+                "--gpu", "7",
+                "data.lens_cone_half_angle_deg=40",
+
+                // room dataset-----
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/room",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/room/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/room",
+
+                // baseball -> tennis ball
+                // "system.prompt_processor.prompt=Replace the baseball with a yellow tennis ball",
+                // "data.lens_edit_prompt=Replace the baseball with a tennis ball",
+                // "system.prompt_processor.prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
+                // "data.lens_edit_prompt=Replace the white baseball with a yellow tennis ball with fuzzy green felt texture, keeping the same position and lighting so only the ball changes",
+                // "system.seg_prompt=white baseball",
+                // "data.mmr_seg_prompt=white baseball",
+                // "data.lens_seg_prompt=white baseball",
+                // "system.target_prompt=yellow tennis ball",
+            
+                // Change the baseball to a solid golden ball
+                // "system.prompt_processor.prompt=Change the baseball to a solid golden ball",
+                // "data.lens_edit_prompt=Change the baseball to a solid golden ball",
+                // "system.seg_prompt=white baseball",
+                // "data.mmr_seg_prompt=white baseball",
+                // "data.lens_seg_prompt=white baseball",
+                // "system.target_prompt=solid golden ball",
+
+                // room: rabit -> wear sunglasses
+                // "system.prompt_processor.prompt=Give the rabbit figure a pair of small sunglasses",
+                // "data.lens_edit_prompt=Give the rabbit figure a pair of small sunglasses",
+                // "system.seg_prompt=grey rabbit figure",
+                // "data.mmr_seg_prompt=grey rabbit figure",
+                // "data.lens_seg_prompt=grey rabbit figure",
+                // "system.target_prompt=small sunglasses",
+                // "system.mask_view_population=colmap_views",
+                // "data.lens_distance_multipliers=10.0",
+                // "data.lens_cone_half_angle_deg=30",
+                // "system.mask_num_views=20",
+                // "system.mask_update_view_num=20",
+                // "--gpu", "4",
+                // "data.max_view_num=5",
+                // "data.max_edit_view_num=5",
+                // "system.guidance.guidance_scale=9.0",
+
+
+               
+                
+                // rubber chicken -> tiny blue bow tie
+                // "system.prompt_processor.prompt=Add a big bow tie on the neck",
+                // "data.lens_edit_prompt=Add a bow tie to the neck of chicken",
+                // "system.seg_prompt=neck of the yellow rubber chicken",
+                // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
+                // "data.lens_seg_prompt=neck of the yellow rubber chicken",
+                // "system.target_prompt=neck of the yellow rubber chicken with a big bow tie",
+                // "data.lens_cone_half_angle_deg=40",
+                // "data.lens_distance_multipliers=8.0",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "5",
+                // "data.max_view_num=5",
+                // "data.max_edit_view_num=5",
+                // "system.mask_update_at_step=600",
+                // "system.guidance.guidance_scale=7.0",
+                // "system.mask_view_population=colmap_views",
+                // "system.mask_num_views=10",
+                // "system.mask_update_view_num=10",
+   
+                // chicket dot pattern
+                // "system.prompt_processor.prompt=Add a blue scarf to the neck of chicken",
+                // "data.lens_edit_prompt=Add a blue scarf to the neck of the chicken",
+                // "system.seg_prompt=neck of the yellow rubber chicken",
+                // "data.mmr_seg_prompt=neck of the yellow rubber chicken",
+                // "data.lens_seg_prompt=neck of the yellow rubber chicken",
+                // "system.target_prompt=blue scarf on the neck of chicken",
+                // "--gpu", "6",
+                // "data.max_view_num=5",
+                // "data.max_edit_view_num=5",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "system.mask_update_at_step=600",
+                // "system.guidance.guidance_scale=7.5",
+                // "system.mask_view_population=colmap_views",
+                // "system.mask_num_views=10",
+                // "system.mask_update_view_num=10",
+   
+                // room: basket with stipe patterns
+                // "system.prompt_processor.prompt=Change the basket material to blue striped patterns",
+                // "data.lens_edit_prompt=Change the basket material to striped patterns",
+                // "system.seg_prompt=woven basket",
+                // "data.mmr_seg_prompt=woven basket",
+                // "data.lens_seg_prompt=woven basket",
+                // "system.target_prompt=striped woven basket",
+                
+                // room: dino_green - dinosaur figure to green
+                // "system.prompt_processor.prompt=Change the dinosaur figure to green",
+                // "data.lens_edit_prompt=Change the dinosaur figure to green",
+                // "system.seg_prompt=brown dinosaur figure",
+                // "data.mmr_seg_prompt=brown dinosaur figure",
+                // "data.lens_seg_prompt=brown dinosaur figure",
+                // "system.target_prompt=green dinosaur figure",
+                // "--gpu", "5",
+                // "data.max_view_num=5",
+                // "data.max_edit_view_num=5",
+                // "data.lens_distance_multipliers=5.0",
+
+                // blue_sofa ------------------------------------------------------------
+                // "data.source=/data/users/jaeyeonpark/dataset/3d-ovs/blue_sofa",
+                // "system.gs_source=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
+                // "data.lens_ply_path=/data/users/jaeyeonpark/3dgs-trained/3d-ovs/blue_sofa/point_cloud/iteration_30000/point_cloud.ply",
+                // "name=camera-selection/w-MaskUpdate/iter1/lambda_d0.0/lens-multiview/3d-ovs/blue_sofa",
+
+                // // blue_sofa: plush toy -> tiger stripes
+                // "system.prompt_processor.prompt=Change the plush toy's look like a tiger",
+                // "data.lens_edit_prompt=Change the plush toy's look like a tiger",
+                // "system.seg_prompt=plush toy",
+                // "data.mmr_seg_prompt=plush toy",
+                // "data.lens_seg_prompt=plush toy",
+                // "system.target_prompt=tiger plush toy",
+                
+                // plush pink
+                // plush toy to pink
+                // "system.prompt_processor.prompt=Change the plush toy's color to pink",
+                // "data.lens_edit_prompt=Change the plush toy's color to pink",
+                // "system.seg_prompt=plush toy",
+                // "data.mmr_seg_prompt=plush toy",
+                // "data.lens_seg_prompt=plush toy",
+                // "system.target_prompt=pink plush toy",
+                // "system.mask_view_population=colmap_views",
+                // "system.mask_num_views=20",
+                // "system.mask_update_view_num=20",
+                // "--gpu", "4",
+                // "data.max_view_num=10",
+                // "data.max_edit_view_num=10",
+                // "data.lens_cone_half_angle_deg=40",
+                
+
+                // blue_sofa: Change the perfume liquid color to blue
+                // "system.prompt_processor.prompt=Change the color of the cap of the perfume bottle into white",
+                // "data.lens_edit_prompt=Change the color of the cap of the perfume bottle into white",
+                // "system.seg_prompt=black cap of the perfume bottle",
+                // "data.mmr_seg_prompt=black cap of the perfume bottle",
+                // "data.lens_seg_prompt=black cap of the perfume bottle",
+                // "system.target_prompt=white cap of the perfume bottle",
+                
+                // Change the sunglasses to red frames
+                // "system.prompt_processor.prompt=Change the sunglasses to red frames",
+                // "data.lens_edit_prompt=Change the sunglasses to red frames",
+                // "system.seg_prompt=black frames of the sunglasses",
+                // "data.mmr_seg_prompt=black frames of the sunglasses",
+                // "data.lens_seg_prompt=sunglasses",
+                // "system.target_prompt=bright red frames of the sunglasses",
+
+                // Change the speaker to a shiny gold texture
+                // "system.prompt_processor.prompt=Change the speaker to a shiny gold texture",
+                // "data.lens_edit_prompt=Change the speaker to a shiny gold texture",
+                // "system.seg_prompt=grey speaker body",
+                // "data.mmr_seg_prompt=grey speaker body",
+                // "data.lens_seg_prompt=grey speaker body",
+                // "system.target_prompt=shiny metallic gold speaker body",
+
+                // remtoe controller stripe pattern
+                // 1) Add a stripe pattern to the remote controller
+                // "system.prompt_processor.prompt=Add a stripe pattern to the remote controller",
+                // "data.lens_edit_prompt=Add a stripe pattern to the remote controller",
+                // "system.seg_prompt=remote controller",
+                // "data.mmr_seg_prompt=remote controller",
+                // "data.lens_seg_prompt=remote controller",
+                // "system.target_prompt=stripe patterned remote controller",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "4",
+                // "data.lens_cone_half_angle_deg=60",
+
+                // 2) Change the remote controller color to metallic silver
+                // "system.prompt_processor.prompt=Change the remote controller color to yellow",
+                // "data.lens_edit_prompt=Change the remote controller color to yellow",
+                // "system.seg_prompt=remote controller",
+                // "data.mmr_seg_prompt=remote controller",
+                // "data.lens_seg_prompt=remote controller",
+                // "system.target_prompt=remote controller",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "4",
+                // "data.lens_cone_half_angle_deg=60",
+
+                // 3) Turn the remote controller buttons into glowing neon blue
+                // "system.prompt_processor.prompt=Turn the remote controller buttons into glowing neon blue",
+                // "data.lens_edit_prompt=Turn the remote controller buttons into glowing neon blue",
+                // "system.seg_prompt=buttons of the remote controller",
+                // "data.mmr_seg_prompt=buttons of the remote controller",
+                // "data.lens_seg_prompt=buttons of the remote controller",
+                // "system.target_prompt=remote controller with glowing neon blue buttons",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "6",
+                // "data.lens_cone_half_angle_deg=60",
+
+                // 4) Add a digital clock to the remote controller display
+                // "system.prompt_processor.prompt=Add a digital clock to the remote controller display",
+                // "data.lens_edit_prompt=Add a digital clock to the remote controller display",
+                // "system.seg_prompt=display of the remote controller",
+                // "data.mmr_seg_prompt=display of the remote controller",
+                // "data.lens_seg_prompt=display of the remote controller",
+                // "system.target_prompt=remote controller with a glowing digital clock display",
+                // "data.lens_distance_multipliers=5.0, 6.0, 7.0, 8.0",
+                // "--gpu", "5",
+                // "data.lens_cone_half_angle_deg=60",
+
 
             ],
             "cwd": "${workspaceFolder}",

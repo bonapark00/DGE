@@ -2523,11 +2523,22 @@ class DGE(BaseLift3DSystem):
             self.render_all_view(cache_name="origin_render")
         
         # 원본이미지 저장
+        # Prefer to use the same view ordering as multiview editing (edit_view_index)
+        # so that origin_images.png matches edited_images_multiview.png.
         save_list = []
-        for index, image in sorted(
-                self.origin_frames.items(), key=lambda item: item[0]
-        ):
-            # 이미지에 인덱스 번호 추가
+        dm = getattr(self.trainer, "datamodule", None)
+        edit_indices = None
+        if dm is not None and hasattr(dm, "train_dataset"):
+            edit_indices = getattr(dm.train_dataset, "edit_view_index", None)
+        if isinstance(edit_indices, list) and len(edit_indices) > 0:
+            indices_to_use = sorted(edit_indices)
+        else:
+            indices_to_use = [idx for idx, _ in sorted(self.origin_frames.items(), key=lambda item: item[0])]
+
+        for index in indices_to_use:
+            image = self.origin_frames.get(index, None)
+            if image is None:
+                continue
             img_with_index = self._add_index_to_image(image[0], index)
             save_list.append(
                 {

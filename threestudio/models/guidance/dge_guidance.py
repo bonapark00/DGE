@@ -697,13 +697,26 @@ class DGEGuidance(BaseObject):
 
                         with latency_logger.timeit(f"{_p}.diffusion_loop.pivotal_setup") if latency_logger else nullcontext():
                             if self.cfg.edit_view_selection_strategy == "manual-20":
-                                pivotal_idx = torch.tensor([2, 7, 12, 17])
+                                pivotal_idx = torch.tensor([2, 7, 12, 17], device=latents.device)
                             elif self.cfg.edit_view_selection_strategy == "manual-15":
-                                pivotal_idx = torch.tensor([2, 7, 12])
+                                pivotal_idx = torch.tensor([2, 7, 12], device=latents.device)
                             else:
-                                pivotal_idx = torch.randint(
-                                    camera_batch_size, (len(latents) // camera_batch_size,)
-                                ) + torch.arange(0, len(latents), camera_batch_size)
+                                # Random pivotal index per camera batch.
+                                # Handle the case where len(latents) is not divisible by camera_batch_size.
+                                batch_starts = list(range(0, len(latents), camera_batch_size))
+                                pivots = []
+                                for b in batch_starts:
+                                    batch_size = min(camera_batch_size, len(latents) - b)
+                                    if batch_size <= 0:
+                                        continue
+                                    local_idx = torch.randint(
+                                        batch_size, (1,), device=latents.device
+                                    )
+                                    pivots.append(b + local_idx)
+                                if len(pivots) == 0:
+                                    pivotal_idx = torch.arange(len(latents), device=latents.device)
+                                else:
+                                    pivotal_idx = torch.cat(pivots, dim=0)
                             register_pivotal(self.unet, True)
 
                             key_cams = [cams[cam_pivotal_idx] for cam_pivotal_idx in pivotal_idx.tolist()]
